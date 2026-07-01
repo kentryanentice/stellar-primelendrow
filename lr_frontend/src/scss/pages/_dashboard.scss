@@ -1,0 +1,21 @@
+@use '../core/globals';
+@use '../core/styles';
+
+.dashboard {
+    display: flex;
+    min-height: 100vh;
+    background: var(--color-bg);
+}
+
+.dashboard-content {
+    flex: 1;
+    min-width: 0;
+    margin-left: 264px;
+    padding: 32px;
+    color: var(--color-text);
+    transition: margin-left .25s ease;
+
+    &.is-collapsed {
+        margin-left: 80px;
+    }
+}

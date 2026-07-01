@@ -1,0 +1,52 @@
+/* ---------------- otp entry (verify + reset) ---------------- */
+.auth-mail {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 22px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, #eef4ff, #dfeaff);
+    border: 1px solid #d3e1fb;
+    color: var(--auth-primary);
+    box-shadow: 0 10px 24px -12px rgba(37, 99, 235, .5);
+}
+
+.auth-otp {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.auth-otp-box {
+    width: 52px;
+    height: 60px;
+    text-align: center;
+    font-family: var(--auth-font-display);
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--auth-ink);
+    background: var(--auth-field-bg);
+    border: 1.5px solid var(--auth-field-border);
+    border-radius: var(--auth-radius-field);
+    outline: none;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+
+    &:focus {
+        border-color: var(--auth-primary);
+        background: #fff;
+        box-shadow: var(--auth-primary-ring);
+    }
+}
+
+.auth-resend {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 24px 2px 26px;
+
+    span { font-size: 13.5px; color: var(--auth-muted-faint); }
+    .auth-link:disabled { color: var(--auth-muted-faint); cursor: not-allowed; }
+}

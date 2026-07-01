@@ -1,0 +1,182 @@
+@keyframes auth-form-in {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.auth {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background: var(--auth-page-bg);
+    color: var(--auth-ink);
+    font-family: var(--auth-font-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+.auth-card {
+    position: relative;
+    width: 940px;
+    max-width: 100%;
+    height: 720px;
+    max-height: 94vh;
+    display: flex;
+    border-radius: var(--auth-radius-card);
+    overflow: hidden;
+    background: var(--auth-card-bg);
+    box-shadow: 0 40px 120px -30px rgba(4, 12, 28, .75), 0 0 0 1px rgba(255, 255, 255, .06);
+}
+
+/* ---------------- form side ---------------- */
+.auth-panel {
+    flex: 1.04;
+    position: relative;
+    padding: 48px 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.auth-view {
+    width: 100%;
+    max-width: 392px;
+    margin: 0 auto;
+    animation: auth-form-in .5s cubic-bezier(.2, .7, .2, 1) both;
+
+    &.is-verify { text-align: center; }
+
+    // reset screen has no terms row before the submit button, so add the gap here
+    &.is-reset .auth-btn { margin-top: 22px; }
+}
+
+.auth-title {
+    font-family: var(--auth-font-display);
+    font-weight: 600;
+    font-size: 30px;
+    line-height: 1.05;
+    letter-spacing: -.02em;
+    color: var(--auth-ink);
+    margin: 0 0 8px;
+}
+
+.auth-sub {
+    font-size: 15px;
+    color: var(--auth-muted);
+    margin: 0 0 26px;
+
+    b, strong { color: var(--auth-ink); font-weight: 700; }
+}
+
+.auth-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--auth-label);
+    margin-bottom: 8px;
+}
+
+.auth-input {
+    width: 100%;
+    padding: 14px 16px;
+    font-family: var(--auth-font-body);
+    font-size: 15px;
+    color: var(--auth-ink);
+    background: var(--auth-field-bg);
+    border: 1.5px solid var(--auth-field-border);
+    border-radius: var(--auth-radius-field);
+    outline: none;
+    transition: border-color .18s, box-shadow .18s, background .18s;
+
+    &::placeholder { color: var(--auth-placeholder); }
+    &:focus {
+        border-color: var(--auth-primary);
+        background: #fff;
+        box-shadow: var(--auth-primary-ring);
+    }
+}
+
+.auth-row-gap { margin-bottom: 18px; }
+.auth-row-gap-sm { margin-bottom: 13px; }
+
+.auth-pw {
+    position: relative;
+
+    .auth-input { padding-right: 48px; }
+}
+
+.auth-eye {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: #7c8aa3;
+    cursor: pointer;
+    border-radius: 9px;
+    transition: color .15s, background .15s;
+
+    &:hover { color: var(--auth-primary); background: #eef3fd; }
+}
+
+.auth-meta {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin: 12px 0 22px;
+}
+
+.auth-link {
+    border: none;
+    background: none;
+    padding: 0;
+    font-family: var(--auth-font-body);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--auth-primary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.auth-btn {
+    width: 100%;
+    padding: 15px;
+    font-family: var(--auth-font-body);
+    font-size: 15.5px;
+    font-weight: 700;
+    color: #fff;
+    border: none;
+    border-radius: var(--auth-radius-field);
+    cursor: pointer;
+    background: var(--auth-primary-grad);
+    box-shadow: var(--auth-primary-shadow);
+    transition: transform .15s, box-shadow .15s, filter .15s;
+
+    &:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: var(--auth-primary-shadow-hover);
+    }
+    &:active:not(:disabled) { transform: translateY(0); }
+    &:disabled {
+        cursor: not-allowed;
+        background: var(--auth-disabled);
+        box-shadow: none;
+    }
+}
+
+.auth-switch {
+    text-align: center;
+    font-size: 14px;
+    color: var(--auth-muted);
+    margin: 20px 0 0;
+
+    .auth-link { font-weight: 700; }
+}

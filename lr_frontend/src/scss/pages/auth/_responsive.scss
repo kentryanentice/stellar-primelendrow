@@ -1,0 +1,21 @@
+/* ---------------- responsive ---------------- */
+@media (max-width: 880px) {
+    .auth { padding: 0; }
+    .auth-card {
+        flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+        max-height: none;
+        border-radius: 0;
+    }
+    .auth-brand { order: -1; min-height: 220px; flex: none; }
+    .auth-panel { padding: 40px 24px; }
+    .auth-brand-head, .auth-quote, .auth-brand-foot { display: none; }
+    .auth-brand-inner { justify-content: center; padding: 28px; }
+}
+
+@media (max-width: 420px) {
+    .auth-otp { gap: 7px; }
+    .auth-otp-box { width: 100%; height: 54px; font-size: 20px; }
+    .auth-panel { padding: 32px 18px; }
+}
