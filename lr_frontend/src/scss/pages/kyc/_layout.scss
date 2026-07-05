@@ -1,0 +1,92 @@
+.kyc {
+    position: relative;
+    min-height: 100vh;
+    padding: 30px 48px 80px;
+    color: #cfd7e6;
+
+    /* fixed instead of sized to .kyc's own box so the sidebar's collapse/expand
+       transition — which resizes this column every frame — never has to
+       repaint this (expensive, multi-layer) background along with it */
+    &::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background:
+            radial-gradient(900px 500px at 15% -10%, rgba(var(--auth-glow-rgb), .16), transparent 60%),
+            repeating-linear-gradient(0deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+            repeating-linear-gradient(60deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+            repeating-linear-gradient(120deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+            var(--auth-brand-grad);
+    }
+}
+
+.kyc-wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+}
+
+.kyc-title {
+    margin: 0 0 6px;
+    font-family: var(--auth-font-display);
+    font-size: 24px;
+    font-weight: 600;
+    color: #f4f7fb;
+}
+
+.kyc-lede {
+    margin: 0 0 40px;
+    font-size: 14px;
+    color: #8b98b3;
+}
+
+.kyc-layout {
+    display: flex;
+    gap: 48px;
+    align-items: flex-start;
+}
+
+/* ---------------- main content ---------------- */
+.kyc-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.kyc-step-count {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-accent-400);
+    letter-spacing: .02em;
+}
+
+.kyc-step-title {
+    margin: 0 0 8px;
+    font-family: var(--auth-font-display);
+    font-size: 25px;
+    font-weight: 600;
+    color: #f4f7fb;
+}
+
+.kyc-step-subtitle {
+    margin: 0 0 28px;
+    font-size: 14px;
+    color: #8b98b3;
+    max-width: 520px;
+}
+
+.kyc-card {
+    background: var(--auth-panel-bg);
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: 16px;
+    padding: 28px;
+    min-height: 300px;
+}
+
+.kyc-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 12px;
+    margin-top: 24px;
+}

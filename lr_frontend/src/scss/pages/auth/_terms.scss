@@ -27,7 +27,7 @@
 }
 
 .auth-modal {
-    position: absolute;
+    position: fixed;
     inset: 0;
     z-index: 40;
     display: flex;
@@ -123,12 +123,12 @@
     border-radius: 11px;
     cursor: pointer;
     background: var(--auth-primary-grad);
-    box-shadow: 0 10px 20px -8px rgba(29, 81, 216, .6);
+    box-shadow: 0 10px 20px -8px rgba(var(--auth-primary-dark-rgb), .6);
     transition: transform .15s, box-shadow .15s;
 
     &:hover:not(:disabled) {
         transform: translateY(-1px);
-        box-shadow: 0 14px 26px -8px rgba(29, 81, 216, .7);
+        box-shadow: 0 14px 26px -8px rgba(var(--auth-primary-dark-rgb), .7);
     }
     &:disabled { cursor: not-allowed; background: var(--auth-disabled); box-shadow: none; }
 }

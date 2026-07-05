@@ -8,6 +8,11 @@ use dashmap::DashMap;
 use std::{net::IpAddr, sync::Arc};
 use tokio::sync::Semaphore;
 
+/// Bound-then-sweep cap, same pattern as the rate limiter and login guard —
+/// without it, one semaphore per unique client IP is retained forever, and an
+/// IPv6 rotation flood grows the map without limit.
+const MAX_KEYS: usize = 100_000;
+
 #[derive(Clone)]
 pub struct ConcurrencyLimiter {
     inner: Arc<DashMap<IpAddr, Arc<Semaphore>>>,
@@ -23,6 +28,12 @@ impl ConcurrencyLimiter {
     }
 
     fn get_semaphore(&self, ip: IpAddr) -> Arc<Semaphore> {
+        if self.inner.len() >= MAX_KEYS {
+            // an idle IP's semaphore has every permit free; in-flight requests
+            // hold their Arc regardless, so dropping idle entries is safe
+            let max = self.max_per_ip;
+            self.inner.retain(|_, sem| sem.available_permits() < max);
+        }
         self.inner
             .entry(ip)
             .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_ip)))
@@ -35,10 +46,14 @@ pub async fn enforce_concurrency(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let ip = req
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|ci| ci.0.ip());
+    // Same proxy-aware client IP as the rate limiter — keyed on the raw peer
+    // address this would collapse into a single shared semaphore behind
+    // Cloud Run's front end.
+    let ip = super::rate::extract_ip(
+        req.headers(),
+        req.extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>(),
+    );
 
     if let Some(ip) = ip {
         let semaphore = limiter.get_semaphore(ip);

@@ -42,7 +42,7 @@ export default function ResetScreen({
             <label className='auth-label'>New password</label>
             <div className='auth-pw'>
                 <input className='auth-input' value={reset.password} onChange={e => setReset({ ...reset, password: e.target.value })} type={showResetPw ? 'text' : 'password'} placeholder='Create a new password' required />
-                <button className='auth-eye' type='button' onClick={toggleResetPw} aria-label='Toggle password'><EyeIcon off={showResetPw} /></button>
+                <button className='auth-eye' type='button' onClick={toggleResetPw} disabled={busy} aria-label='Toggle password'><EyeIcon off={showResetPw} /></button>
             </div>
             <div className='auth-strength' data-level={resetScore}>
                 <div className='auth-strength-track'><div className='auth-strength-fill' /></div>
@@ -52,7 +52,7 @@ export default function ResetScreen({
             <label className='auth-label'>Confirm new password</label>
             <div className='auth-pw'>
                 <input className='auth-input' value={reset.confirm} onChange={e => setReset({ ...reset, confirm: e.target.value })} type={showResetConfirm ? 'text' : 'password'} placeholder='Re-enter your new password' required />
-                <button className='auth-eye' type='button' onClick={toggleResetConfirm} aria-label='Toggle password'><EyeIcon off={showResetConfirm} /></button>
+                <button className='auth-eye' type='button' onClick={toggleResetConfirm} disabled={busy} aria-label='Toggle password'><EyeIcon off={showResetConfirm} /></button>
             </div>
             {resetMatch && (
                 <div className={`auth-match ${resetMatch === 'ok' ? 'is-ok' : 'is-bad'}`}>
@@ -63,7 +63,7 @@ export default function ResetScreen({
 
             <button className='auth-btn' type='submit' disabled={busy || !canReset}>{busy ? 'Please wait…' : 'Reset Password'}</button>
 
-            <p className='auth-switch'>Wrong email? <button className='auth-link' type='button' onClick={goForgot}>Start over</button></p>
+            <p className='auth-switch'>Wrong email? <button className='auth-link' type='button' onClick={goForgot} disabled={busy}>Start over</button></p>
         </div>
     )
 }

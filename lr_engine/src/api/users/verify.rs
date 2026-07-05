@@ -8,7 +8,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::shared::{
-    E, SESSION_MAX_AGE, UserResponse, csrf_cookie, new_csrf_token, session_cookie, verify_code,
+    E, SESSION_MAX_AGE, UserResponse, clear_legacy_domain_csrf_cookie, csrf_cookie,
+    new_csrf_token, session_cookie, verify_code,
 };
 use crate::api::verified::Verified;
 
@@ -58,9 +59,11 @@ pub async fn verify(
         tracing::error!("DB: {e}");
         (StatusCode::INTERNAL_SERVER_ERROR, "Verification failed")
     })?
+    // same message as a wrong code — "no pending verification" would tell a
+    // prober that register silently skipped an already-registered email
     .ok_or((
         StatusCode::UNPROCESSABLE_ENTITY,
-        "No pending verification for this email",
+        "Incorrect verification code",
     ))?;
 
     if vc.expires_at <= now {
@@ -110,11 +113,31 @@ pub async fn verify(
         ));
     }
 
-    let role = if vc.access_token.as_deref().is_some_and(|t| !t.is_empty()) {
-        "User"
-    } else {
-        "Pending"
+    // Re-check the access token now rather than trusting the register-time
+    // validation: up to 10 minutes pass between the two, and a token revoked
+    // (or expired, or redeemed by someone else) in that window must not still
+    // buy the elevated role. Falls back to Pending, never fails the signup.
+    let token_still_valid = match vc.access_token.as_deref().filter(|t| !t.is_empty()) {
+        None => false,
+        Some(token) => sqlx::query!(
+            "SELECT token FROM public.access_tokens
+              WHERE token = $1
+                AND revoked_at IS NULL
+                AND redeemed_at IS NULL
+                AND (expires_at IS NULL OR expires_at > $2)
+              FOR UPDATE",
+            token,
+            now
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Verification failed")
+        })?
+        .is_some(),
     };
+    let role = if token_still_valid { "User" } else { "Pending" };
 
     let user_id = Uuid::new_v4();
     sqlx::query!(
@@ -129,7 +152,7 @@ pub async fn verify(
         (StatusCode::INTERNAL_SERVER_ERROR, "Account creation failed")
     })?;
 
-    if let Some(ref token) = vc.access_token {
+    if token_still_valid && let Some(ref token) = vc.access_token {
         sqlx::query!(
             "UPDATE public.access_tokens SET redeemed_by = $1, redeemed_at = $2 WHERE token = $3",
             user_id,
@@ -138,7 +161,10 @@ pub async fn verify(
         )
         .execute(&mut *tx)
         .await
-        .ok();
+        .map_err(|e| {
+            tracing::error!("DB: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Verification failed")
+        })?;
     }
 
     sqlx::query!(
@@ -191,6 +217,9 @@ pub async fn verify(
     let csrf_token = new_csrf_token();
     headers.append(SET_COOKIE, session_cookie(session_id));
     headers.append(SET_COOKIE, csrf_cookie(&csrf_token));
+    if let Some(clear) = clear_legacy_domain_csrf_cookie() {
+        headers.append(SET_COOKIE, clear);
+    }
     headers.insert(
         axum::http::header::HeaderName::from_static("x-csrf-token"),
         HeaderValue::from_str(&csrf_token).expect("valid csrf token"),

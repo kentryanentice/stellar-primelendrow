@@ -4,20 +4,27 @@ use argon2::{
 };
 use axum::{
     Extension, Json,
+    extract::ConnectInfo,
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
 };
 use chrono::Utc;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::net::SocketAddr;
 
 use super::shared::{
-    E, MAX_PASSWORD_LEN, SESSION_MAX_AGE, UserResponse, csrf_cookie, is_valid_email,
-    new_csrf_token, session_cookie,
+    E, MAX_PASSWORD_LEN, SESSION_MAX_AGE, UserResponse, clear_legacy_domain_csrf_cookie,
+    csrf_cookie, hash_permit, is_valid_email, new_csrf_token, session_cookie,
 };
 use crate::api::verified::Verified;
+use crate::infra::{login_guard, rate};
 
-// Per-email lockout tuning: 5 bad attempts → 15-minute lockout.
-const MAX_FAILED_ATTEMPTS: i32 = 5;
+// Account-wide lockout is only a backstop against *distributed* brute force
+// (many IPs, one account) — the primary defense is the per-(IP, email) guard
+// in `infra::login_guard`, which an attacker can't use to lock out the real
+// account owner. Keeping this threshold low would reintroduce exactly that
+// lockout-DoS: 5 remote failures used to freeze the account for everyone.
+const MAX_FAILED_ATTEMPTS: i32 = 30;
 const LOCKOUT_SECONDS: i64 = 15 * 60;
 
 #[derive(Deserialize)]
@@ -28,6 +35,8 @@ struct LoginInput {
 
 pub async fn login(
     Extension(pool): Extension<PgPool>,
+    connect_info: ConnectInfo<SocketAddr>,
+    request_headers: HeaderMap,
     Verified(msg, _): Verified,
 ) -> Result<(StatusCode, HeaderMap, Json<UserResponse>), E> {
     let mut p: LoginInput =
@@ -39,6 +48,17 @@ pub async fn login(
     }
 
     let now = Utc::now().timestamp();
+
+    // Checked before touching the DB, and for unknown emails too — a probing
+    // client sees the same 429 whether or not the account exists.
+    let client_ip = rate::extract_ip(&request_headers, Some(&connect_info))
+        .ok_or((StatusCode::FORBIDDEN, "Unable to determine client"))?;
+    if login_guard::is_locked(client_ip, &p.email, now) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many failed attempts. Please try again later.",
+        ));
+    }
 
     let row = match sqlx::query!(
         "SELECT id, username, email, password_hash, role, failed_login_attempts, lockout_until
@@ -60,7 +80,10 @@ pub async fn login(
                 Version::V0x13,
                 Params::new(65536, 3, 4, None).expect("valid Argon2 params"),
             );
+            let permit = hash_permit().await;
             let _ = argon2.hash_password(p.password.as_bytes(), &SaltString::generate(&mut OsRng));
+            drop(permit);
+            login_guard::record_failure(client_ip, &p.email, now);
             return Err((StatusCode::UNAUTHORIZED, "Invalid email or password"));
         }
     };
@@ -75,10 +98,14 @@ pub async fn login(
     let parsed = PasswordHash::new(&row.password_hash)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Login failed"))?;
 
-    if Argon2::default()
+    let permit = hash_permit().await;
+    let password_ok = Argon2::default()
         .verify_password(p.password.as_bytes(), &parsed)
-        .is_err()
-    {
+        .is_ok();
+    drop(permit);
+
+    if !password_ok {
+        login_guard::record_failure(client_ip, &p.email, now);
         let new_count = row.failed_login_attempts + 1;
         if new_count >= MAX_FAILED_ATTEMPTS {
             let _ = sqlx::query!(
@@ -102,6 +129,8 @@ pub async fn login(
         }
         return Err((StatusCode::UNAUTHORIZED, "Invalid email or password"));
     }
+
+    login_guard::clear(client_ip, &p.email);
 
     if row.failed_login_attempts != 0 || row.lockout_until != 0 {
         let _ = sqlx::query!(
@@ -141,6 +170,9 @@ pub async fn login(
     let csrf_token = new_csrf_token();
     headers.append(SET_COOKIE, session_cookie(session_id));
     headers.append(SET_COOKIE, csrf_cookie(&csrf_token));
+    if let Some(clear) = clear_legacy_domain_csrf_cookie() {
+        headers.append(SET_COOKIE, clear);
+    }
     headers.insert(
         axum::http::header::HeaderName::from_static("x-csrf-token"),
         HeaderValue::from_str(&csrf_token).expect("valid csrf token"),

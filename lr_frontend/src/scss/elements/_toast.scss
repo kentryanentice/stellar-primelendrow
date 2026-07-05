@@ -29,16 +29,18 @@
     border: 1px solid var(--surface-border);
     border-left: 4px solid var(--color-accent-600);
     border-radius: 8px;
-    background: linear-gradient(150deg, rgba(12, 33, 72, .8) 0%, rgba(10, 23, 48, .8) 55%, rgba(8, 18, 38, .8) 100%);
+    background: linear-gradient(150deg, rgba(var(--auth-brand-grad-rgb-1), .8) 0%, rgba(var(--auth-brand-grad-rgb-2), .8) 55%, rgba(var(--auth-brand-grad-rgb-3), .8) 100%);
     backdrop-filter: blur(5px);
     color: #fff;
     pointer-events: auto;
     animation: toast-in 220ms ease-out both;
 
-    > i {
+    > svg {
         margin-top: 1px;
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
         color: var(--color-accent-700);
-        font-size: 20px;
     }
 
     p {
@@ -62,6 +64,11 @@
         opacity: 0.72;
         transition: var(--transition);
 
+        svg {
+            width: 16px;
+            height: 16px;
+        }
+
         &:hover {
             opacity: 1;
             background: var(--surface-inset);
@@ -72,7 +79,7 @@
 .toast--success {
     border-left-color: var(--color-success);
 
-    > i {
+    > svg {
         color: var(--color-success);
     }
 }
@@ -80,7 +87,7 @@
 .toast--error {
     border-left-color: var(--color-danger);
 
-    > i {
+    > svg {
         color: var(--color-danger);
     }
 }

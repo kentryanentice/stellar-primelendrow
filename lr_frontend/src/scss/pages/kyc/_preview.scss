@@ -1,0 +1,47 @@
+/* ---------------- preview rows (id / scan / selfie) ---------------- */
+.kyc-preview-row {
+    display: flex;
+    gap: 22px;
+    align-items: center;
+}
+
+.kyc-preview-thumb {
+    width: 220px;
+    height: 140px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, .1);
+    background: var(--auth-surface-bg);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    position: relative;
+
+    img { width: 100%; height: 100%; object-fit: cover; }
+
+    &--scan { position: relative; }
+    &--sm { width: 110px; height: 110px; }
+    /* selfies are stored as 3:4 portrait crops — the thumb matches so nothing gets cut */
+    &--portrait { width: 165px; height: 220px; }
+}
+
+.kyc-preview-title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #f4f7fb;
+}
+
+.kyc-preview-sub {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: #8b98b3;
+
+    &--wide { max-width: 300px; }
+    &--warn { color: var(--auth-warn); }
+}
+
+.kyc-btn-row {
+    display: flex;
+    gap: 10px;
+}

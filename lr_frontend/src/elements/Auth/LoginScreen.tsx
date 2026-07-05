@@ -17,16 +17,16 @@ export default function LoginScreen({ login, setLogin, showLoginPw, toggleLoginP
             <label className='auth-label'>Password</label>
             <div className='auth-pw'>
                 <input className='auth-input' value={login.password} onChange={e => setLogin({ ...login, password: e.target.value })} type={showLoginPw ? 'text' : 'password'} placeholder='Enter your password' required />
-                <button className='auth-eye' type='button' onClick={toggleLoginPw} aria-label='Toggle password'><EyeIcon off={showLoginPw} /></button>
+                <button className='auth-eye' type='button' onClick={toggleLoginPw} disabled={busy} aria-label='Toggle password'><EyeIcon off={showLoginPw} /></button>
             </div>
 
             <div className='auth-meta'>
-                <button className='auth-link' type='button' onClick={goForgot}>Forgot password?</button>
+                <button className='auth-link' type='button' onClick={goForgot} disabled={busy}>Forgot password?</button>
             </div>
 
             <button className='auth-btn' type='submit' disabled={busy}>{busy ? 'Please wait…' : 'Log In'}</button>
 
-            <p className='auth-switch'>Don't have an account? <button className='auth-link' type='button' onClick={goRegister}>Create one</button></p>
+            <p className='auth-switch'>Don't have an account? <button className='auth-link' type='button' onClick={goRegister} disabled={busy}>Create one</button></p>
         </div>
     )
 }

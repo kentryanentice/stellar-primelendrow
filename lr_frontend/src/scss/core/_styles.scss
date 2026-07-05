@@ -65,10 +65,6 @@ body {
 	transition: background 0.4s ease, color 0.4s ease;
 }
 
-[data-theme='dark'] body {
-	background: var(--color-bg);
-}
-
 #primelendrow {
 	width: 100%;
 	min-height: 100vh;

@@ -1,0 +1,44 @@
+/* ---------------- shared buttons ---------------- */
+.kyc-btn-primary {
+    padding: 11px 26px;
+    border-radius: 9px;
+    border: 0;
+    background: var(--auth-primary-grad);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 8px 20px rgba(var(--auth-primary-rgb), .32);
+    transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+
+    &:hover:not(:disabled) { transform: translateY(-1px); }
+    &:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+}
+
+.kyc-btn-outline {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .16);
+    background: transparent;
+    color: #cfd7e6;
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .15s ease;
+
+    &:hover { background: rgba(255, 255, 255, .06); }
+}
+
+.kyc-btn-ghost {
+    padding: 11px 22px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, .16);
+    background: transparent;
+    color: #cfd7e6;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s ease;
+
+    &:hover { background: rgba(255, 255, 255, .06); }
+}

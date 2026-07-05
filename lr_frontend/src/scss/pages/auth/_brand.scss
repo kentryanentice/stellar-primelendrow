@@ -20,7 +20,7 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(90% 60% at 75% 18%, rgba(47, 116, 245, .32) 0%, rgba(47, 116, 245, 0) 60%);
+    background: radial-gradient(90% 60% at 75% 18%, rgba(var(--auth-primary-rgb), .32) 0%, rgba(var(--auth-primary-rgb), 0) 60%);
 }
 
 .auth-brand-inner {
@@ -35,7 +35,7 @@
 .auth-brand-top {
     display: flex;
     align-items: center;
-    gap: 11px;
+    gap: 10px;
 
     .auth-brand-mark {
         width: 40px;
@@ -46,6 +46,12 @@
         align-items: center;
         justify-content: center;
         box-shadow: 0 8px 22px -10px rgba(0, 0, 0, .5);
+        transition: opacity .15s ease;
+
+        &.is-disabled {
+            opacity: .6;
+            pointer-events: none;
+        }
 
         img { width: 40px; height: 40px; object-fit: contain; }
     }

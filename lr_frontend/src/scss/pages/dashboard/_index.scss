@@ -1,0 +1,7 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+.dashboard-page {
+    padding: 32px;
+    color: var(--color-text);
+}

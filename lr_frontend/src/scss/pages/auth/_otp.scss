@@ -7,10 +7,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(180deg, #eef4ff, #dfeaff);
-    border: 1px solid #d3e1fb;
+    background: var(--auth-badge-grad);
+    border: 1px solid var(--auth-badge-border);
     color: var(--auth-primary);
-    box-shadow: 0 10px 24px -12px rgba(37, 99, 235, .5);
+    box-shadow: 0 10px 24px -12px rgba(var(--auth-primary-rgb), .5);
 }
 
 .auth-otp {

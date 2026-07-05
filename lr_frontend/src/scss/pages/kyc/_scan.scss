@@ -1,0 +1,67 @@
+@keyframes kyc-scan-sweep {
+    from { top: 2%; }
+    to { top: 96%; }
+}
+
+.kyc-scan-sweep {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 2%;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--color-accent-400), transparent);
+    opacity: 0;
+
+    &.is-active {
+        opacity: 1;
+        animation: kyc-scan-sweep 1.4s linear infinite;
+    }
+}
+
+/* ---------------- id scan form ---------------- */
+.kyc-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px 24px;
+    max-width: 520px;
+}
+
+.kyc-detected-type {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(var(--auth-primary-rgb), .12);
+    border: 1px solid rgba(var(--auth-primary-rgb), .25);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-accent-400);
+
+    svg { width: 16px; height: 16px; flex-shrink: 0; }
+}
+
+.kyc-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12.5px;
+    color: #8b98b3;
+
+    &--wide { grid-column: 1 / -1; }
+
+    input {
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, .14);
+        background: var(--auth-surface-bg);
+        color: #f4f7fb;
+        font-size: 14px;
+        font-family: var(--font-family);
+        outline: none;
+        transition: border-color .15s ease;
+
+        &:focus { border-color: var(--auth-primary); }
+    }
+}

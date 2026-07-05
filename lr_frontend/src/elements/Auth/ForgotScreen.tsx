@@ -15,7 +15,7 @@ export default function ForgotScreen({ reset, setReset, validResetEmail, busy, g
 
             <button className='auth-btn' type='submit' disabled={busy || !validResetEmail}>{busy ? 'Please wait…' : 'Send Reset Code'}</button>
 
-            <p className='auth-switch'>Remembered it? <button className='auth-link' type='button' onClick={goLogin}>Log In</button></p>
+            <p className='auth-switch'>Remembered it? <button className='auth-link' type='button' onClick={goLogin} disabled={busy}>Log In</button></p>
         </div>
     )
 }

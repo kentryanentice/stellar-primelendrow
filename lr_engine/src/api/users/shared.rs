@@ -12,6 +12,24 @@ type HmacSha256 = Hmac<Sha256>;
 
 pub type E = (StatusCode, &'static str);
 
+/// Global cap on concurrent Argon2 work. Each hash/verify pins ~64MB
+/// (m=65536), and the rate limiters only bound request *rate*, not how many
+/// hashes are in flight at once — a synchronized burst across many IPs could
+/// stack enough 64MB allocations to OOM the instance. Excess requests queue
+/// here for the ~100–300ms a hash takes instead. 4 permits ≈ 256MB worst
+/// case; raise if the instance has memory to spare.
+static HASH_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+/// Acquire a slot for one Argon2 hash/verify. Drop the permit as soon as the
+/// hashing is done — never hold it across DB calls, so a task waiting here
+/// can never be waited on by a permit holder (no deadlock).
+pub async fn hash_permit() -> tokio::sync::SemaphorePermit<'static> {
+    HASH_PERMITS
+        .acquire()
+        .await
+        .expect("hash semaphore is never closed")
+}
+
 pub const SESSION_MAX_AGE: i64 = 24 * 3600; // 1 day
 pub const MAX_PASSWORD_LEN: usize = 128;
 
@@ -30,7 +48,7 @@ pub struct MessageResponse {
 }
 
 pub fn extract_session_id(headers: &HeaderMap) -> Option<Uuid> {
-    extract_cookie_value(headers, "session")?
+    extract_cookie_value(headers, session_cookie_name())?
         .parse::<Uuid>()
         .ok()
 }
@@ -116,24 +134,43 @@ pub fn extract_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-fn cookie_security_attrs() -> &'static str {
-    if std::env::var("COOKIE_SECURE").is_ok() {
-        "SameSite=None; Secure"
-    } else {
-        "SameSite=Lax"
-    }
+/// Secure is the *default*; COOKIE_INSECURE_DEV=1 opts out for plain-http
+/// local/LAN dev, where browsers refuse Secure (and __Host-) cookies. This
+/// replaces the old opt-in COOKIE_SECURE, which failed open when forgotten
+/// in a production environment.
+fn insecure_dev() -> bool {
+    static DEV: OnceLock<bool> = OnceLock::new();
+    *DEV.get_or_init(|| std::env::var("COOKIE_INSECURE_DEV").is_ok())
 }
 
-fn cookie_domain_attr() -> String {
-    match std::env::var("COOKIE_DOMAIN") {
-        Ok(domain) if !domain.trim().is_empty() => format!("; Domain={}", domain.trim()),
-        _ => String::new(),
+/// __Host- prefixed in secure mode: the browser itself then rejects the
+/// cookie unless it is Secure, host-only (no Domain), and Path=/ — subdomain
+/// cookie-tossing and downgrade tricks stop at the cookie jar. The prefix is
+/// illegal without Secure, so plain-http dev keeps the bare names.
+pub fn session_cookie_name() -> &'static str {
+    if insecure_dev() { "session" } else { "__Host-session" }
+}
+
+pub fn csrf_cookie_name() -> &'static str {
+    if insecure_dev() { "csrf" } else { "__Host-csrf" }
+}
+
+/// The app and API share a registrable domain (COOKIE_DOMAIN in prod), so
+/// SameSite=Lax works in both environments and keeps the browser's built-in
+/// cross-site protection as a second line of defense next to the CSRF check —
+/// None would hand that entirely to the double-submit guard.
+fn cookie_security_attrs() -> &'static str {
+    if insecure_dev() {
+        "SameSite=Lax"
+    } else {
+        "SameSite=Lax; Secure"
     }
 }
 
 pub fn session_cookie(session_id: Uuid) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "session={session_id}; HttpOnly; {}; Path=/; Max-Age={SESSION_MAX_AGE}",
+        "{}={session_id}; HttpOnly; {}; Path=/; Max-Age={SESSION_MAX_AGE}",
+        session_cookie_name(),
         cookie_security_attrs()
     ))
     .expect("valid cookie value")
@@ -143,18 +180,23 @@ pub fn new_csrf_token() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Host-only (no Domain attribute — a Domain cookie is exposed to every
+/// subdomain, e.g. the CDN) and HttpOnly: the frontend never reads this
+/// cookie, it takes the token from the x-csrf-token response header, so
+/// there's no reason to leave it readable to scripts.
 pub fn csrf_cookie(token: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "csrf={token}; {}{}; Path=/; Max-Age={SESSION_MAX_AGE}",
+        "{}={token}; HttpOnly; {}; Path=/; Max-Age={SESSION_MAX_AGE}",
+        csrf_cookie_name(),
         cookie_security_attrs(),
-        cookie_domain_attr(),
     ))
     .expect("valid cookie value")
 }
 
 pub fn clear_session_cookie() -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "session=; HttpOnly; {}; Path=/; Max-Age=0",
+        "{}=; HttpOnly; {}; Path=/; Max-Age=0",
+        session_cookie_name(),
         cookie_security_attrs()
     ))
     .expect("valid cookie value")
@@ -162,11 +204,31 @@ pub fn clear_session_cookie() -> HeaderValue {
 
 pub fn clear_csrf_cookie() -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "csrf=; {}{}; Path=/; Max-Age=0",
+        "{}=; HttpOnly; {}; Path=/; Max-Age=0",
+        csrf_cookie_name(),
         cookie_security_attrs(),
-        cookie_domain_attr(),
     ))
     .expect("valid cookie value")
+}
+
+/// Earlier builds issued the csrf cookie with `Domain=<COOKIE_DOMAIN>`. Those
+/// cookies coexist with the new host-only one under the same name, and which
+/// of the two the browser sends first is unspecified — so wherever a fresh
+/// csrf cookie is set, the legacy domain-scoped one must be explicitly
+/// deleted. Returns None when no COOKIE_DOMAIN is configured (nothing to
+/// clean up). Delete this once prod sessions from before the change have aged
+/// out (session lifetime is 24h).
+pub fn clear_legacy_domain_csrf_cookie() -> Option<HeaderValue> {
+    let domain = std::env::var("COOKIE_DOMAIN").ok()?;
+    let domain = domain.trim();
+    if domain.is_empty() {
+        return None;
+    }
+    HeaderValue::from_str(&format!(
+        "csrf=; {}; Domain={domain}; Path=/; Max-Age=0",
+        cookie_security_attrs(),
+    ))
+    .ok()
 }
 
 pub fn is_valid_email(email: &str) -> bool {

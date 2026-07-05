@@ -6,16 +6,15 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use dashmap::DashMap;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
-use std::sync::Arc;
-
-pub type NonceStore = Arc<DashMap<String, i64>>;
+use sqlx::PgPool;
 
 const MAX_WINDOW_MS: i64 = 2 * 60 * 1000;
 const CLOCK_SKEW_MS: i64 = 5 * 1000;
-const MAX_NONCE_STORE: usize = 100_000;
+/// Honest clients send a UUID (36 chars); anything much longer is junk that
+/// would only bloat the used_nonces table.
+const MAX_NONCE_LEN: usize = 128;
 
 /// Accepts any valid Ed25519 signature. Used for /register, /verify, /login.
 pub struct Verified(pub Vec<u8>, pub Vec<u8>);
@@ -39,11 +38,11 @@ async fn extract_verified<S: Send + Sync>(
     req: Request<Body>,
     state: &S,
 ) -> Result<(Vec<u8>, Vec<u8>), (StatusCode, &'static str)> {
-    let nonces = req
+    let pool = req
         .extensions()
-        .get::<NonceStore>()
+        .get::<PgPool>()
         .cloned()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Missing nonce store"))?;
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Missing database"))?;
 
     let Json(env): Json<Envelope> = Json::from_request(req, state)
         .await
@@ -91,22 +90,30 @@ async fn extract_verified<S: Send + Sync>(
         return Err((StatusCode::BAD_REQUEST, "Expiry too far in future"));
     }
 
-    if nonces.len() >= MAX_NONCE_STORE {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            "Server busy, try again later",
-        ));
+    if meta.nonce.is_empty() || meta.nonce.len() > MAX_NONCE_LEN {
+        return Err((StatusCode::BAD_REQUEST, "Invalid nonce"));
     }
 
-    match nonces.entry(meta.nonce) {
-        dashmap::mapref::entry::Entry::Occupied(_) => {
-            return Err((StatusCode::BAD_REQUEST, "Nonce already used"));
-        }
-        dashmap::mapref::entry::Entry::Vacant(e) => {
-            e.insert(meta.ingress_expiry);
-        }
+    // DB-backed so replay protection holds across instances and restarts —
+    // the old in-memory map only ever saw one Cloud Run instance's traffic.
+    // The insert is the check: a conflict means the nonce was already spent.
+    // Expired rows are swept by infra::gc (expires_at is in *milliseconds*,
+    // straight from the signed envelope).
+    let inserted = sqlx::query(
+        "INSERT INTO public.used_nonces (nonce, expires_at)
+         VALUES ($1, $2) ON CONFLICT (nonce) DO NOTHING",
+    )
+    .bind(&meta.nonce)
+    .bind(meta.ingress_expiry)
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB nonce: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Verification failed")
+    })?;
+    if inserted.rows_affected() == 0 {
+        return Err((StatusCode::BAD_REQUEST, "Nonce already used"));
     }
-    nonces.retain(|_, exp| *exp > now_ms);
 
     Ok((msg, pubkey_bytes))
 }

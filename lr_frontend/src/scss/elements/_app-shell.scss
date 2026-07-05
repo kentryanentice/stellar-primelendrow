@@ -1,0 +1,29 @@
+@use '../core/globals';
+@use '../core/styles';
+
+.app-shell {
+    display: flex;
+    min-height: 100vh;
+    background: var(--color-bg);
+}
+
+.app-shell-main {
+    flex: 1;
+    min-width: 0;
+    margin-left: 264px;
+    transition: margin-left .25s ease;
+
+    &.is-collapsed {
+        margin-left: 80px;
+    }
+
+    // on a phone the sidebar is either hidden or a full overlay drawer (see
+    // _sidebar.scss) — content should never be pushed over for it
+    @include styles.respond-to(phone) {
+        margin-left: 0;
+
+        &.is-collapsed {
+            margin-left: 0;
+        }
+    }
+}

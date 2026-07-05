@@ -1,0 +1,80 @@
+@keyframes kyc-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ---------------- wallet ---------------- */
+.kyc-wallet-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 480px;
+}
+
+.kyc-wallet-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, .08);
+    background: var(--auth-surface-bg);
+}
+
+.kyc-wallet-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    background: var(--color-accent-400);
+    display: grid;
+    place-items: center;
+    color: #0a1526;
+    font-weight: 700;
+    font-size: 15px;
+    flex-shrink: 0;
+}
+
+.kyc-wallet-name {
+    margin: 0;
+    flex: 1;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #f4f7fb;
+}
+
+.kyc-wallet-connected {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--auth-success);
+    font-weight: 600;
+
+    svg { width: 15px; height: 15px; }
+}
+
+.kyc-wallet-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, .25);
+    border-top-color: var(--color-accent-400);
+    border-radius: 50%;
+    animation: kyc-spin .7s linear infinite;
+}
+
+.kyc-wallet-address {
+    margin: 4px 2px 0;
+    font-size: 12.5px;
+    color: #8b98b3;
+
+    span { color: #cfd7e6; font-family: monospace; }
+
+    button {
+        border: 0;
+        background: none;
+        padding: 0;
+        color: var(--color-accent-400);
+        cursor: pointer;
+        font-size: inherit;
+    }
+}

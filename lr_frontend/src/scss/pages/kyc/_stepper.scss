@@ -1,0 +1,88 @@
+/* ---------------- stepper ---------------- */
+.kyc-stepper {
+    width: 220px;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.kyc-stepper-line {
+    position: absolute;
+    left: 25px;
+    top: 20px;
+    bottom: 20px;
+    width: 2px;
+    background: rgba(255, 255, 255, .1);
+}
+
+.kyc-stepper-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+}
+
+.kyc-step {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 6px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+
+    &:disabled { cursor: default; }
+}
+
+.kyc-step-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid rgba(255, 255, 255, .16);
+    backdrop-filter: blur(10px);
+    color: #5f6c85;
+    z-index: 1;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
+
+    svg { width: 20px; height: 20px; }
+
+    .kyc-step.is-active & {
+        background: var(--auth-primary-grad);
+        border-color: transparent;
+        color: #fff;
+    }
+
+    .kyc-step.is-done & {
+        background: var(--auth-primary);
+        border-color: transparent;
+        color: #fff;
+    }
+}
+
+.kyc-step-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.kyc-step-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5f6c85;
+    white-space: nowrap;
+
+    .kyc-step.is-active & { color: #f4f7fb; }
+    .kyc-step.is-done & { color: #cfd7e6; }
+}
+
+.kyc-step-sub {
+    margin-top: 2px;
+    font-size: 12px;
+    color: #5f6c85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

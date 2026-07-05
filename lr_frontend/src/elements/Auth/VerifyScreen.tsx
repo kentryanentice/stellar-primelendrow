@@ -38,7 +38,7 @@ export default function VerifyScreen({ reg, otp, otpRefs, onOtpChange, onOtpKey,
 
             <button className='auth-btn' type='submit' disabled={busy || !canVerify}>{busy ? 'Please wait…' : 'Verify & Continue'}</button>
 
-            <p className='auth-switch'>Wrong address? <button className='auth-link' type='button' onClick={goRegister}>Change email</button></p>
+            <p className='auth-switch'>Wrong address? <button className='auth-link' type='button' onClick={goRegister} disabled={busy}>Change email</button></p>
         </div>
     )
 }

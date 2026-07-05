@@ -1,6 +1,6 @@
 use argon2::{
-    Algorithm, Argon2, Params, PasswordHasher, Version,
-    password_hash::{SaltString, rand_core::OsRng},
+    Algorithm, Argon2, Params, PasswordHasher, PasswordVerifier, Version,
+    password_hash::{PasswordHash, SaltString, rand_core::OsRng},
 };
 use axum::{Extension, Json, http::StatusCode};
 use chrono::Utc;
@@ -8,7 +8,7 @@ use rand::RngExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
-use super::shared::{E, MessageResponse, hash_code, is_strong_password, is_valid_email};
+use super::shared::{E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email};
 use crate::api::mailer;
 use crate::api::verified::Verified;
 
@@ -52,10 +52,12 @@ pub async fn register(
         Version::V0x13,
         Params::new(65536, 3, 4, None).expect("valid Argon2 params"),
     );
+    let permit = hash_permit().await;
     let hash = argon2
         .hash_password(p.password.as_bytes(), &salt)
         .unwrap()
         .to_string();
+    drop(permit);
     let code = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
     let expires_at = now + 600;
 
@@ -73,8 +75,18 @@ pub async fn register(
         })?
         .is_some()
     {
-        tracing::warn!(email = %p.email, "register failed: email already exists");
-        return Err((StatusCode::CONFLICT, "Registration failed"));
+        // Indistinguishable from success so the register endpoint can't be
+        // used to test which emails have accounts (409 here was an oracle).
+        // No code is stored or emailed; a later /auth/verify just fails like
+        // any wrong code. The password was already hashed above, so timing
+        // stays comparable to the real path minus the mailer call.
+        tracing::warn!(email = %p.email, "register attempt for existing email");
+        return Ok((
+            StatusCode::CREATED,
+            Json(MessageResponse {
+                message: "Verification code sent",
+            }),
+        ));
     }
 
     let access_token_opt: Option<String> = if access_token.is_empty() {
@@ -135,21 +147,57 @@ pub async fn register(
         .map_err(|e| { tracing::error!("DB: {e}"); (StatusCode::INTERNAL_SERVER_ERROR, "Registration failed") })?;
     }
 
-    if let Some(existing) = sqlx::query!(
-        "SELECT expires_at, created_at FROM public.verification_codes WHERE email = $1 FOR UPDATE",
-        p.email
-    )
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Registration failed")
-    })? {
-        if existing.expires_at > now && existing.created_at > now - 60 {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                "Please wait 1 minute before requesting another code",
+    if let Some((pending_hash, pending_expires, pending_created)) =
+        sqlx::query_as::<_, (String, i64, i64)>(
+            "SELECT password_hash, expires_at, created_at
+             FROM public.verification_codes WHERE email = $1 FOR UPDATE",
+        )
+        .bind(&p.email)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Registration failed")
+        })?
+    {
+        if pending_expires > now && pending_created > now - 60 {
+            // Silently accept: same generic success as the existing-account
+            // path, no new code, no email. A 429 here only ever fired while a
+            // pending (i.e. *unregistered*) signup existed — the mirror image
+            // of the existing-email fake success — so together they formed an
+            // account-existence oracle. The earlier code is still valid.
+            tracing::info!(email = %p.email, "register attempt within resend cooldown");
+            return Ok((
+                StatusCode::CREATED,
+                Json(MessageResponse {
+                    message: "Verification code sent",
+                }),
             ));
+        }
+        // While a pending registration is still live, only the original
+        // registrant (proven by knowing its password — the resend button
+        // re-posts the identical payload) may replace it. Otherwise anyone
+        // could swap in their own password after the 60s cooldown and hijack
+        // the account the moment the victim enters the fresher emailed code.
+        // Answered with the same generic success as the existing-account
+        // path so it can't be used to probe for pending registrations.
+        if pending_expires > now {
+            let permit = hash_permit().await;
+            let same_password = PasswordHash::new(&pending_hash).is_ok_and(|parsed| {
+                argon2
+                    .verify_password(p.password.as_bytes(), &parsed)
+                    .is_ok()
+            });
+            drop(permit);
+            if !same_password {
+                tracing::warn!(email = %p.email, "register attempt while a different pending registration exists");
+                return Ok((
+                    StatusCode::CREATED,
+                    Json(MessageResponse {
+                        message: "Verification code sent",
+                    }),
+                ));
+            }
         }
         sqlx::query!(
             "DELETE FROM public.verification_codes WHERE email = $1",
@@ -184,10 +232,16 @@ pub async fn register(
         (StatusCode::INTERNAL_SERVER_ERROR, "Registration failed")
     })?;
 
-    mailer::send_code(&p.email, &code).await.map_err(|e| {
-        tracing::error!("mailer: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send email")
-    })?;
+    // Sent off-task: the mailer's network round-trip was a timing oracle —
+    // the existing-email path above (which sends nothing) answered measurably
+    // faster than this one. Failures are logged, and the user recovers with
+    // the resend button.
+    let email = p.email.clone();
+    tokio::spawn(async move {
+        if let Err(e) = mailer::send_code(&email, &code).await {
+            tracing::error!("mailer: {e}");
+        }
+    });
 
     tracing::info!(email = %p.email, "verification code sent");
     Ok((

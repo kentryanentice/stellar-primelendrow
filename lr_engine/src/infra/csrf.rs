@@ -6,6 +6,8 @@ use axum::{
 };
 use subtle::ConstantTimeEq;
 
+use crate::api::users::shared::{csrf_cookie_name, session_cookie_name};
+
 /// Double-submit CSRF guard.
 ///
 /// Safe (non-mutating) methods always pass. For mutating methods we only
@@ -26,11 +28,11 @@ pub async fn enforce_csrf(req: Request<Body>, next: Next) -> Result<Response, St
     let headers = req.headers();
 
     // No session cookie -> unauthenticated request, nothing for CSRF to abuse.
-    if cookie_value(headers, "session").is_none() {
+    if cookie_value(headers, session_cookie_name()).is_none() {
         return Ok(next.run(req).await);
     }
 
-    let cookie_token = cookie_value(headers, "csrf");
+    let cookie_token = cookie_value(headers, csrf_cookie_name());
     let header_token = headers
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())

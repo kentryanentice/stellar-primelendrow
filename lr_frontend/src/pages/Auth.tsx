@@ -5,7 +5,7 @@ import RegisterScreen from '../elements/Auth/RegisterScreen'
 import ResetScreen from '../elements/Auth/ResetScreen'
 import TermsModal from '../elements/Auth/TermsModal'
 import VerifyScreen from '../elements/Auth/VerifyScreen'
-import useAuthFunctions from '../functions/AuthFunctions'
+import useAuthFunctions from '../functions/Auth/AuthFunctions'
 
 function Auth() {
     const auth = useAuthFunctions()
@@ -24,7 +24,7 @@ function Auth() {
                     </form>
                 </div>
 
-                <BrandPanel />
+                <BrandPanel busy={auth.busy} />
 
                 {termsOpen && <TermsModal {...auth} />}
             </section>

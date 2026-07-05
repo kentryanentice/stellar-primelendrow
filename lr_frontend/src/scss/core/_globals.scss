@@ -1,3 +1,18 @@
+/* Registered so the primary gradient's color stops can interpolate on accent
+   change — background-image itself is not animatable, so swapping the whole
+   gradient snaps. Browsers without @property support fall back to the snap. */
+@property --auth-primary-grad-1 {
+	syntax: '<color>';
+	inherits: true;
+	initial-value: #2f74f5;
+}
+
+@property --auth-primary-grad-2 {
+	syntax: '<color>';
+	inherits: true;
+	initial-value: #1d51d8;
+}
+
 :root {
 	--font-family: 'Nunito Sans', 'Inter', sans-serif;
 	--font-family-serif: 'Roboto Serif', serif;
@@ -40,8 +55,8 @@
 	--font-weight-800: 800;
 	--font-weight-900: 900;
 
-	--color-bg: #f5efe3;
-	--color-text: #04264a;
+	--color-bg: var(--auth-page-bg);
+	--color-text: #ebf9ff;
 
 	--color-accent-100: #e9fbff;
 	--color-accent-200: #d4f7ff;
@@ -55,52 +70,52 @@
 	--color-accent-1000: #06457b;
 	--color-accent: var(--color-accent-1000);
 
-	// --color-accent-100: #e9ffef;
-	// --color-accent-200: #d4ffd9;
-	// --color-accent-300: #b8fbc8;
-	// --color-accent-400: #91f5ab;
-	// --color-accent-500: #68ef85;
-	// --color-accent-600: #39e96a;
-	// --color-accent-700: #20d160;
-	// --color-accent-800: #0fc257;
-	// --color-accent-900: #0aa04a;
-	// --color-accent-1000: #067b3a;
-	// --color-accent: var(--color-accent-1000);
-
-	--color-highlight: #15803d;
+	--color-highlight: #91e6f5;
 	--color-success: #10b981;
 	--color-danger: #ef4444;
-	--surface-glass: rgba(255, 255, 255, 0.22);
-	--surface-glass-strong: rgba(255, 255, 255, 0.34);
-	--surface-inset: rgba(255, 255, 255, 0.14);
-	--surface-border: rgba(120, 100, 70, 0.16);
-	--surface-border-soft: rgba(120, 100, 70, 0.1);
-	--shadow-raised: 8px 8px 18px rgba(120, 100, 70, 0.22), -8px -8px 18px rgba(255, 255, 255, 0.72);
-	--shadow-soft: 4px 4px 10px rgba(120, 100, 70, 0.2), -4px -4px 10px rgba(255, 255, 255, 0.68);
-	--shadow-pressed: inset 4px 4px 10px rgba(120, 100, 70, 0.24), inset -4px -4px 10px rgba(255, 255, 255, 0.68);
-	--button-shadow-default: var(--shadow-soft);
-	--button-shadow-hover: var(--shadow-raised);
-	--button-shadow-active: var(--shadow-pressed);
-	--text-shadow-light: 0px 2px 4px rgba(0,0,0,0.3);
-	--box-shadow-light: 0px 2px 4px rgba(0,0,0,0.2);
-    --transition: all .3s ease-in-out;
+	--surface-glass: rgba(2, 33, 49, 0.42);
+	--surface-glass-strong: rgba(2, 33, 49, 0.56);
+	--surface-inset: rgba(2, 18, 40, 0.38);
+	--surface-border: rgba(104, 217, 239, 0.16);
+	--surface-border-soft: rgba(104, 217, 239, 0.1);
+	--shadow-raised: 10px 10px 24px rgba(0, 5, 16, 0.72), -8px -8px 20px rgba(104, 217, 239, 0.08);
+	--shadow-soft: 6px 6px 16px rgba(0, 5, 16, 0.64), -5px -5px 14px rgba(104, 217, 239, 0.07);
+	--shadow-pressed: inset 5px 5px 12px rgba(0, 5, 16, 0.76), inset -4px -4px 10px rgba(104, 217, 239, 0.08);
+	--button-shadow-default: 6px 6px 14px rgba(0, 5, 16, 0.7), -4px -4px 12px rgba(104, 217, 239, 0.09), 0 0 0 1px rgba(104, 217, 239, 0.08);
+	--button-shadow-hover: 9px 9px 20px rgba(0, 5, 16, 0.82), -6px -6px 16px rgba(104, 217, 239, 0.13), 0 0 0 1px rgba(104, 217, 239, 0.14);
+	--button-shadow-active: inset 5px 5px 12px rgba(0, 5, 16, 0.8), inset -4px -4px 10px rgba(104, 217, 239, 0.1), 0 0 0 1px rgba(104, 217, 239, 0.1);
+	--text-shadow-light: 0px 2px 6px rgba(255,255,255,0.15);
+	--box-shadow-light: 0px 1px 1px rgba(255,255,255,0.15);
+    /* `all` never matches custom properties, so the gradient stops are listed explicitly */
+    --transition: all .3s ease-in-out, --auth-primary-grad-1 .3s ease-in-out, --auth-primary-grad-2 .3s ease-in-out;
 	--animation: all .3s ease-in-out forwards;
 
 	/* ---- Auth page design tokens (from the auth mockup) ---- */
 	--auth-font-display: 'Clash Display', 'Poppins', sans-serif;
 	--auth-font-body: 'Satoshi', 'Nunito Sans', system-ui, sans-serif;
 
-	--auth-page-bg: radial-gradient(120% 90% at 80% 10%, #112c54 0%, #0a1830 45%, #07101f 100%);
+	--auth-glow-rgb: 63, 111, 238;
+	--auth-page-bg:
+		radial-gradient(900px 600px at 80% -10%, rgba(var(--auth-glow-rgb), .16), transparent 60%),
+		repeating-linear-gradient(0deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+		repeating-linear-gradient(60deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+		repeating-linear-gradient(120deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+		radial-gradient(120% 90% at 80% 10%, #112c54 0%, #0a1830 45%, #07101f 100%);
 	--auth-brand-grad: linear-gradient(150deg, #0c2148 0%, #0a1730 55%, #081226 100%);
+	--auth-brand-grad-rgb-1: 12, 33, 72;
+	--auth-brand-grad-rgb-2: 10, 23, 48;
+	--auth-brand-grad-rgb-3: 8, 18, 38;
+	--auth-surface-bg: #0c1830;
+	--auth-panel-bg: #111f3a;
 	--auth-card-bg: #ffffff;
 
 	--auth-ink: #0a1b36;
 	--auth-ink-strong: #0a1730;
-	--auth-label: #33415c;
-	--auth-muted: #64748b;
-	--auth-muted-soft: #54627a;
-	--auth-muted-faint: #8a97ac;
-	--auth-placeholder: #9aa7bc;
+	--auth-label: #222a3b;
+	--auth-muted: #444e5c;
+	--auth-muted-soft: #38404f;
+	--auth-muted-faint: #606875;
+	--auth-placeholder: #6e7784;
 
 	--auth-field-bg: #fbfcfe;
 	--auth-field-border: #e3e8f0;
@@ -108,10 +123,17 @@
 	--auth-divider: #e7ecf3;
 
 	--auth-primary: #2563eb;
-	--auth-primary-grad: linear-gradient(180deg, #2f74f5, #1d51d8);
-	--auth-primary-ring: 0 0 0 4px rgba(37, 99, 235, 0.13);
-	--auth-primary-shadow: 0 12px 26px -10px rgba(29, 81, 216, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-	--auth-primary-shadow-hover: 0 18px 34px -10px rgba(29, 81, 216, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+	--auth-primary-rgb: 37, 99, 235;
+	--auth-primary-dark-rgb: 29, 81, 216;
+	--auth-primary-grad-1: #2f74f5;
+	--auth-primary-grad-2: #1d51d8;
+	--auth-primary-grad: linear-gradient(180deg, var(--auth-primary-grad-1), var(--auth-primary-grad-2));
+	--auth-primary-ring: 0 0 0 4px rgba(var(--auth-primary-rgb), 0.13);
+	--auth-primary-shadow: 0 12px 26px -10px rgba(var(--auth-primary-dark-rgb), 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+	--auth-primary-shadow-hover: 0 18px 34px -10px rgba(var(--auth-primary-dark-rgb), 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+	--auth-badge-grad: linear-gradient(180deg, #eef4ff, #dfeaff);
+	--auth-badge-border: #d3e1fb;
+	--auth-primary-tint: #eef3fd;
 	--auth-disabled: #aebbcf;
 
 	--auth-pill-bg: #f1f5fc;
@@ -129,46 +151,39 @@
 	--auth-radius-pill: 999px;
 }
 
-[data-theme='dark'] {
-	--color-bg: var(--auth-page-bg);
-	--color-text: #ebf9ff;
-
-	--color-accent-100: #e9fbff;
-	--color-accent-200: #d4f7ff;
-	--color-accent-300: #b8f0fb;
-	--color-accent-400: #9eb9f6;
-	--color-accent-500: #68d9ef;
-	--color-accent-600: #2f74f5;
-	--color-accent-700: #2563eb;
-	--color-accent-800: #1d51d8;
-	--color-accent-900: #0a66a0;
-	--color-accent-1000: #06457b;
+/* Alternate accent palette, layered on top of the base dark look, toggled via AccentProvider */
+[data-accent='green'] {
+	--color-accent-100: #e9ffef;
+	--color-accent-200: #d4ffd9;
+	--color-accent-300: #b8fbc8;
+	--color-accent-400: #91f5ab;
+	--color-accent-500: #68ef85;
+	--color-accent-600: #39e96a;
+	--color-accent-700: #20d160;
+	--color-accent-800: #0fc257;
+	--color-accent-900: #0aa04a;
+	--color-accent-1000: #067b3a;
 	--color-accent: var(--color-accent-1000);
 
-	// --color-accent-100: #e9ffef;
-	// --color-accent-200: #d4ffd9;
-	// --color-accent-300: #b8fbc8;
-	// --color-accent-400: #91f5ab;
-	// --color-accent-500: #68ef85;
-	// --color-accent-600: #39e96a;
-	// --color-accent-700: #20d160;
-	// --color-accent-800: #0fc257;
-	// --color-accent-900: #0aa04a;
-	// --color-accent-1000: #067b3a;
-	// --color-accent: var(--color-accent-1000);
-
-	--color-highlight: #91e6f5;
-	--surface-glass: rgba(2, 33, 49, 0.42);
-	--surface-glass-strong: rgba(2, 33, 49, 0.56);
-	--surface-inset: rgba(2, 18, 40, 0.38);
-	--surface-border: rgba(104, 217, 239, 0.16);
-	--surface-border-soft: rgba(104, 217, 239, 0.1);
-	--shadow-raised: 10px 10px 24px rgba(0, 5, 16, 0.72), -8px -8px 20px rgba(104, 217, 239, 0.08);
-	--shadow-soft: 6px 6px 16px rgba(0, 5, 16, 0.64), -5px -5px 14px rgba(104, 217, 239, 0.07);
-	--shadow-pressed: inset 5px 5px 12px rgba(0, 5, 16, 0.76), inset -4px -4px 10px rgba(104, 217, 239, 0.08);
-	--button-shadow-default: 6px 6px 14px rgba(0, 5, 16, 0.7), -4px -4px 12px rgba(104, 217, 239, 0.09), 0 0 0 1px rgba(104, 217, 239, 0.08);
-	--button-shadow-hover: 9px 9px 20px rgba(0, 5, 16, 0.82), -6px -6px 16px rgba(104, 217, 239, 0.13), 0 0 0 1px rgba(104, 217, 239, 0.14);
-	--button-shadow-active: inset 5px 5px 12px rgba(0, 5, 16, 0.8), inset -4px -4px 10px rgba(104, 217, 239, 0.1), 0 0 0 1px rgba(104, 217, 239, 0.1);
-	--text-shadow-light: 0px 2px 6px rgba(255,255,255,0.15);
-	--box-shadow-light: 0px 1px 1px rgba(255,255,255,0.15);
+	--auth-primary: #20d160;
+	--auth-primary-rgb: 32, 209, 96;
+	--auth-primary-dark-rgb: 15, 194, 87;
+	--auth-primary-grad-1: #39e96a;
+	--auth-primary-grad-2: #0fc257;
+	--auth-badge-grad: linear-gradient(180deg, #eafcf0, #d7f5e0);
+	--auth-badge-border: #c3ecd2;
+	--auth-primary-tint: #e8faee;
+	// --auth-glow-rgb: 57, 233, 106;
+	// --auth-page-bg:
+	// 	radial-gradient(900px 600px at 80% -10%, rgba(var(--auth-glow-rgb), .16), transparent 60%),
+	// 	repeating-linear-gradient(0deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+	// 	repeating-linear-gradient(60deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+	// 	repeating-linear-gradient(120deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 42px),
+	// 	radial-gradient(120% 90% at 80% 10%, #0f3d28 0%, #0a1f14 45%, #070f0a 100%);
+	// --auth-brand-grad: linear-gradient(150deg, #0c3524 0%, #0a1f14 55%, #08150e 100%);
+	// --auth-brand-grad-rgb-1: 12, 53, 36;
+	// --auth-brand-grad-rgb-2: 10, 31, 20;
+	// --auth-brand-grad-rgb-3: 8, 21, 14;
+	--auth-surface-bg: #0c2418;
+	// --auth-panel-bg: #123522;
 }

@@ -7,6 +7,7 @@ import {
     useState,
     type ReactNode,
 } from 'react'
+import { CheckCircle, AlertCircle, Info, X } from 'lucide-react'
 import { ToastContext, type ToastApi } from './useToast'
 
 type ToastKind = 'success' | 'error' | 'info'
@@ -114,19 +115,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                         style={{ transform: `translateY(${offsets.get(toast.id) ?? 0}px)` }}
                     >
                         <div className={`toast toast--${toast.kind}`}>
-                            <i
-                                className={`bx ${
-                                    toast.kind === 'success'
-                                        ? 'bx-check-circle'
-                                        : toast.kind === 'error'
-                                            ? 'bx-error-circle'
-                                            : 'bx-info-circle'
-                                }`}
-                                aria-hidden='true'
-                            />
+                            {toast.kind === 'success' ? <CheckCircle aria-hidden='true' />
+                                : toast.kind === 'error' ? <AlertCircle aria-hidden='true' />
+                                    : <Info aria-hidden='true' />}
                             <p>{toast.message}</p>
                             <button type='button' aria-label='Dismiss notification' onClick={() => dismiss(toast.id)}>
-                                <i className='bx bx-x' aria-hidden='true' />
+                                <X aria-hidden='true' />
                             </button>
                         </div>
                     </div>

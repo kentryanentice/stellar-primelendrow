@@ -8,7 +8,9 @@ use rand::RngExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
-use super::shared::{E, MessageResponse, hash_code, is_strong_password, is_valid_email, verify_code};
+use super::shared::{
+    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email, verify_code,
+};
 use crate::api::mailer;
 use crate::api::verified::Verified;
 
@@ -76,9 +78,16 @@ pub async fn request(
         (StatusCode::INTERNAL_SERVER_ERROR, "Reset failed")
     })? {
         if existing.created_at > now - 60 {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                "Please wait 1 minute before requesting another code",
+            // Silently accept: same generic 200 as every other outcome, no
+            // new code, no email. A 429 here only ever fired for registered
+            // emails (reset rows exist only for real accounts), which made
+            // the cooldown an account-existence oracle. The earlier code is
+            // still valid, so a fast resend loses nothing.
+            return Ok((
+                StatusCode::OK,
+                Json(MessageResponse {
+                    message: "If that email is registered, a code has been sent",
+                }),
             ));
         }
         sqlx::query!(
@@ -113,10 +122,16 @@ pub async fn request(
         (StatusCode::INTERNAL_SERVER_ERROR, "Reset failed")
     })?;
 
-    mailer::send_code(&p.email, &code).await.map_err(|e| {
-        tracing::error!("mailer: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send email")
-    })?;
+    // Sent off-task, mirroring register: the mailer round-trip only happens
+    // for real accounts, so awaiting it here was a response-latency oracle
+    // for which emails are registered. Failures are logged; the user
+    // recovers with the resend button.
+    let email = p.email.clone();
+    tokio::spawn(async move {
+        if let Err(e) = mailer::send_code(&email, &code).await {
+            tracing::error!("mailer: {e}");
+        }
+    });
 
     tracing::info!(email = %p.email, "password reset code sent");
     Ok((
@@ -171,10 +186,10 @@ pub async fn confirm(
         tracing::error!("DB: {e}");
         (StatusCode::INTERNAL_SERVER_ERROR, "Reset failed")
     })?
-    .ok_or((
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "No pending reset for this email",
-    ))?;
+    // same message as a wrong code: reset rows only exist for real accounts,
+    // so "no pending reset" after a generic /request response was an
+    // account-enumeration oracle
+    .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "Incorrect reset code"))?;
 
     if prc.expires_at <= now {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Reset code has expired"));
@@ -214,10 +229,12 @@ pub async fn confirm(
         Version::V0x13,
         Params::new(65536, 3, 4, None).expect("valid Argon2 params"),
     );
+    let permit = hash_permit().await;
     let hash = argon2
         .hash_password(p.password.as_bytes(), &salt)
         .unwrap()
         .to_string();
+    drop(permit);
 
     let updated = sqlx::query!(
         "UPDATE public.users
@@ -238,10 +255,8 @@ pub async fn confirm(
     })?;
 
     if updated.rows_affected() == 0 {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "No account for this email",
-        ));
+        // only reachable if the account vanished mid-flow; keep it generic
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, "Reset failed"));
     }
 
     sqlx::query!(

@@ -6,7 +6,10 @@ use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::shared::{E, UserResponse, csrf_cookie, extract_session_id, new_csrf_token};
+use super::shared::{
+    E, UserResponse, clear_legacy_domain_csrf_cookie, csrf_cookie, csrf_cookie_name,
+    extract_cookie_value, extract_session_id, new_csrf_token,
+};
 
 pub async fn session_handler(
     Extension(pool): Extension<PgPool>,
@@ -33,8 +36,21 @@ pub async fn session_handler(
     .ok_or((StatusCode::UNAUTHORIZED, "Session expired or not found"))?;
 
     let mut response_headers = HeaderMap::new();
-    let csrf_token = new_csrf_token();
-    response_headers.append(SET_COOKIE, csrf_cookie(&csrf_token));
+    // Reuse the caller's existing csrf token rather than minting a fresh one
+    // per call: rotating here silently invalidated the in-memory token of
+    // every other open tab, 403ing its next mutation. Login/verify still
+    // rotate — new session, new token.
+    let csrf_token = match extract_cookie_value(&headers, csrf_cookie_name()) {
+        Some(existing) => existing,
+        None => {
+            let fresh = new_csrf_token();
+            response_headers.append(SET_COOKIE, csrf_cookie(&fresh));
+            fresh
+        }
+    };
+    if let Some(clear) = clear_legacy_domain_csrf_cookie() {
+        response_headers.append(SET_COOKIE, clear);
+    }
     response_headers.insert(
         axum::http::header::HeaderName::from_static("x-csrf-token"),
         HeaderValue::from_str(&csrf_token).expect("valid csrf token"),

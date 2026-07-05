@@ -28,7 +28,7 @@ export default function RegisterScreen({
             <label className='auth-label'>Password</label>
             <div className='auth-pw'>
                 <input className='auth-input' value={reg.password} onChange={e => setReg({ ...reg, password: e.target.value })} type={showRegPw ? 'text' : 'password'} placeholder='Create a password' required />
-                <button className='auth-eye' type='button' onClick={toggleRegPw} aria-label='Toggle password'><EyeIcon off={showRegPw} /></button>
+                <button className='auth-eye' type='button' onClick={toggleRegPw} disabled={busy} aria-label='Toggle password'><EyeIcon off={showRegPw} /></button>
             </div>
             <div className='auth-strength' data-level={score}>
                 <div className='auth-strength-track'><div className='auth-strength-fill' /></div>
@@ -38,7 +38,7 @@ export default function RegisterScreen({
             <label className='auth-label'>Confirm password</label>
             <div className='auth-pw'>
                 <input className='auth-input' value={reg.confirm} onChange={e => setReg({ ...reg, confirm: e.target.value })} type={showConfirmPw ? 'text' : 'password'} placeholder='Re-enter your password' required />
-                <button className='auth-eye' type='button' onClick={toggleConfirmPw} aria-label='Toggle password'><EyeIcon off={showConfirmPw} /></button>
+                <button className='auth-eye' type='button' onClick={toggleConfirmPw} disabled={busy} aria-label='Toggle password'><EyeIcon off={showConfirmPw} /></button>
             </div>
             {match && (
                 <div className={`auth-match ${match === 'ok' ? 'is-ok' : 'is-bad'}`}>
@@ -48,13 +48,13 @@ export default function RegisterScreen({
             )}
 
             <label className='auth-terms-check'>
-                <input type='checkbox' checked={terms} onChange={toggleTerms} />
-                <span>I agree to the <button className='auth-link' type='button' onClick={openTerms}>Terms &amp; Conditions</button></span>
+                <input type='checkbox' checked={terms} onChange={toggleTerms} disabled={busy} />
+                <span>I agree to the <button className='auth-link' type='button' onClick={openTerms} disabled={busy}>Terms &amp; Conditions</button></span>
             </label>
 
             <button className='auth-btn' type='submit' disabled={busy || !canRegister}>{busy ? 'Please wait…' : 'Create Account'}</button>
 
-            <p className='auth-switch'>Already have an account? <button className='auth-link' type='button' onClick={goLogin}>Log In</button></p>
+            <p className='auth-switch'>Already have an account? <button className='auth-link' type='button' onClick={goLogin} disabled={busy}>Log In</button></p>
         </div>
     )
 }

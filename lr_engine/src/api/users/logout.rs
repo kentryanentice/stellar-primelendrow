@@ -2,7 +2,9 @@ use axum::Extension;
 use axum::http::{HeaderMap, StatusCode, header::SET_COOKIE};
 use sqlx::PgPool;
 
-use super::shared::{clear_csrf_cookie, clear_session_cookie, extract_session_id};
+use super::shared::{
+    clear_csrf_cookie, clear_legacy_domain_csrf_cookie, clear_session_cookie, extract_session_id,
+};
 
 pub async fn logout(
     Extension(pool): Extension<PgPool>,
@@ -16,5 +18,8 @@ pub async fn logout(
     let mut h = HeaderMap::new();
     h.append(SET_COOKIE, clear_session_cookie());
     h.append(SET_COOKIE, clear_csrf_cookie());
+    if let Some(clear) = clear_legacy_domain_csrf_cookie() {
+        h.append(SET_COOKIE, clear);
+    }
     (StatusCode::NO_CONTENT, h)
 }

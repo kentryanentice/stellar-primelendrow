@@ -1,0 +1,116 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+.hero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+    background: transparent;
+}
+
+.hero-content {
+    position: relative;
+    z-index: 2;
+    max-width: 1000px;
+    padding: 90px clamp(24px, 8vw, 120px) 0;
+
+    &__title {
+        font-family: var(--auth-font-display);
+        font-size: clamp(var(--font-size-35), 5.4vw, var(--font-size-70));
+        font-weight: var(--font-weight-400);
+        line-height: 1.08;
+        color: var(--color-text);
+        transition: var(--transition);
+
+        span {
+            font-family: var(--auth-font-display);
+            font-weight: var(--font-weight-500);
+            color: var(--color-accent-400);
+            transition: var(--transition);
+        }
+    }
+
+    &__subtitle {
+        max-width: 520px;
+        margin-top: 18px;
+        font-family: var(--auth-font-body);
+        font-size: var(--font-size-15);
+        line-height: 1.6;
+        color: rgba(235, 249, 255, .72);
+    }
+
+    &__cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 32px;
+        padding: 12px 28px;
+        border: 0;
+        border-radius: var(--auth-radius-pill);
+        background: var(--auth-primary-grad);
+        color: #fff;
+        box-shadow: var(--auth-primary-shadow);
+        font-size: var(--font-size-15);
+        font-weight: var(--font-weight-600);
+        text-decoration: none;
+        transition: var(--transition);
+
+        &:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--auth-primary-shadow-hover);
+        }
+
+        &:active {
+            transform: translateY(0);
+        }
+    }
+}
+
+.hero-scroll {
+    position: absolute;
+    bottom: 26px;
+    left: 50%;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform: translateX(-50%);
+    color: rgba(235, 249, 255, .6);
+    font-size: var(--font-size-12);
+    letter-spacing: .04em;
+    transition: var(--transition);
+
+    svg {
+        animation: hero-scroll-cue 1.8s ease-in-out infinite;
+    }
+
+    &--hidden {
+        opacity: 0;
+        transform: translate(-50%, 8px);
+        pointer-events: none;
+    }
+}
+
+@keyframes hero-scroll-cue {
+
+    0%,
+    100% {
+        transform: translateY(-2px);
+    }
+
+    50% {
+        transform: translateY(3px);
+    }
+}
+
+@include styles.respond-to(phone) {
+    .hero-content {
+        padding-top: 110px;
+
+        &__subtitle {
+            font-size: var(--font-size-12);
+        }
+    }
+}

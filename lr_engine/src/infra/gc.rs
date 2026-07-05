@@ -6,7 +6,8 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Spawns a background task that periodically deletes expired rows from the
 /// auth tables so they don't accumulate: sessions, verification codes, password
-/// reset codes, and unredeemed access-token reservations past their expiry.
+/// reset codes, unredeemed access-token reservations past their expiry, and
+/// spent envelope nonces.
 pub fn spawn(pool: PgPool) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(SWEEP_INTERVAL);
@@ -46,6 +47,13 @@ async fn sweep(pool: &PgPool, now: i64) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // used_nonces stores the envelope's ingress_expiry, which is in
+    // *milliseconds* — every other expires_at in this sweep is seconds.
+    sqlx::query("DELETE FROM public.used_nonces WHERE expires_at <= $1")
+        .bind(Utc::now().timestamp_millis())
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

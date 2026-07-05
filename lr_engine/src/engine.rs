@@ -2,7 +2,7 @@ pub mod api;
 pub mod infra;
 mod routes;
 
-use std::{env, sync::Arc, time::Duration};
+use std::{env, time::Duration};
 
 use axum::http::HeaderValue;
 use axum::{
@@ -10,7 +10,6 @@ use axum::{
     http::Method,
     middleware::{self},
 };
-use dashmap::DashMap;
 use dotenvy::dotenv;
 use infra::csrf::enforce_csrf;
 use infra::db::init_db_pool;
@@ -36,7 +35,17 @@ async fn main() {
             "DEVICE_SECRET is not set; device-id rate-limit signatures cannot be trusted"
         );
     }
-    let rate_limiter = RateLimiter::new(1000, Duration::from_secs(60), device_secret);
+    // Global capacity must dwarf the per-IP capacity: with the two equal, one
+    // IP could drain the global bucket and 429 every other client.
+    let rate_limiter = RateLimiter::new(10_000, 1000, Duration::from_secs(60), device_secret.clone());
+
+    // Second, much tighter limiter for the two endpoints that trigger emails
+    // (/auth/register, /auth/password-reset/request). The 60s per-address
+    // cooldown caps sends per *victim*; this caps how many *distinct* victim
+    // addresses one IP can target — under the general 1000/min limit a single
+    // IP could burn mail quota on ~1000 strangers a minute. Same invariant as
+    // above: global (300) dwarfs per-IP (5).
+    let mail_rate_limiter = RateLimiter::new(300, 5, Duration::from_secs(60), device_secret);
 
     if env::var("OTP_HASH_SECRET").map(|v| v.is_empty()).unwrap_or(true) {
         tracing::warn!(
@@ -44,13 +53,65 @@ async fn main() {
         );
     }
 
+    if env::var("WORKER_SECRET").map(|v| v.is_empty()).unwrap_or(true) {
+        tracing::warn!("WORKER_SECRET is not set; the mailer worker will reject all email sends");
+    }
+
+    // KYC fails closed rather than degrading: without the encryption key or a
+    // storage target, /kyc/submit returns 503 instead of storing PII in the
+    // clear or documents nowhere.
+    if !infra::crypto::is_configured() {
+        tracing::warn!(
+            "KYC_ENC_KEY is not set or invalid (expects 64 hex chars); KYC submissions will be refused"
+        );
+    }
+    if env::var("KYC_HASH_SECRET").map(|v| v.is_empty()).unwrap_or(true) {
+        tracing::warn!(
+            "KYC_HASH_SECRET is not set; ID-number blind indexes are keyed with an empty secret"
+        );
+    }
+    let kyc_storage = infra::storage::SupabaseStorage::new(
+        env::var("SUPABASE_URL").unwrap_or_default(),
+        env::var("SUPABASE_SECRET_KEY").unwrap_or_default(),
+        env::var("KYC_BUCKET").unwrap_or_else(|_| "kyc".to_string()),
+    );
+    if !kyc_storage.is_configured() {
+        tracing::warn!(
+            "SUPABASE_URL / SUPABASE_SECRET_KEY not set; KYC document uploads will be refused"
+        );
+    }
+
+    // Cloud Run always sets K_SERVICE, and there the TCP peer is the platform
+    // front end — without the proxy-hop config every per-IP protection keys on
+    // that one shared address (rate limits collapse, and the per-(IP, email)
+    // login guard turns back into an account-lockout DoS). Refuse to start
+    // rather than run looking protected while not being so.
+    if env::var("K_SERVICE").is_ok() && env::var("TRUST_PROXY_HOPS").is_err() {
+        panic!(
+            "Running on Cloud Run without TRUST_PROXY_HOPS — per-IP rate limits and the login guard would key on the load balancer's address. Set TRUST_PROXY_HOPS=1."
+        );
+    }
+
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
-    let client_url = env::var("CLIENT_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let origin = HeaderValue::from_str(&client_url).expect("Invalid CLIENT_URL");
+    let client_url_raw =
+        env::var("CLIENT_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let origins: Vec<HeaderValue> = client_url_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            HeaderValue::from_str(s).unwrap_or_else(|_| panic!("Invalid CLIENT_URL entry: {s}"))
+        })
+        .collect();
+
+    if origins.is_empty() {
+        panic!("CLIENT_URL must contain at least one origin");
+    }
 
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list([origin]))
+        .allow_origin(AllowOrigin::list(origins))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -69,15 +130,13 @@ async fn main() {
         .expose_headers([axum::http::header::HeaderName::from_static("x-csrf-token")])
         .allow_credentials(true);
 
-    let nonce_store: api::verified::NonceStore = Arc::new(DashMap::new());
-
     let db_pool = init_db_pool().await;
 
     infra::gc::spawn(db_pool.clone());
 
-    let app = api_routes::routes()
-        .layer(Extension(nonce_store))
+    let app = api_routes::routes(mail_rate_limiter)
         .layer(Extension(db_pool))
+        .layer(Extension(kyc_storage))
         .layer(middleware::from_fn(move |req, next| {
             enforce_rate_limit(rate_limiter.clone(), req, next)
         }))

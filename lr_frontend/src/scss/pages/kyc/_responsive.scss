@@ -1,0 +1,11 @@
+/* ---------------- responsive ---------------- */
+@media (max-width: 880px) {
+    .kyc { padding: 35px 20px 60px; }
+    .kyc-layout { flex-direction: column; gap: 28px; }
+    .kyc-stepper { width: 100%; }
+    .kyc-stepper-line { display: none; }
+    .kyc-stepper-list { flex-direction: row; flex-wrap: wrap; gap: 12px; }
+    .kyc-dropzone-grid { grid-template-columns: 1fr; }
+    .kyc-form-grid { grid-template-columns: 1fr; }
+    .kyc-preview-row { flex-direction: column; align-items: flex-start; }
+}
