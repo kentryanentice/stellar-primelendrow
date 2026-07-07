@@ -8,7 +8,10 @@ use rand::RngExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
-use super::shared::{E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email};
+use super::shared::{
+    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email,
+    normalize_mail_theme,
+};
 use crate::api::mailer;
 use crate::api::verified::Verified;
 
@@ -18,6 +21,11 @@ struct RegisterInput {
     email: String,
     password: String,
     access_token: Option<String>,
+    /// Mirrors the frontend's current AccentProvider selection so the OTP
+    /// email matches whatever theme the user has active; see
+    /// `normalize_mail_theme` for how out-of-range values are handled.
+    #[serde(default)]
+    theme: Option<String>,
 }
 
 pub async fn register(
@@ -44,6 +52,7 @@ pub async fn register(
     if access_token.len() > 100 {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid access token"));
     }
+    let theme = normalize_mail_theme(p.theme.as_deref());
 
     let now = Utc::now().timestamp();
     let salt = SaltString::generate(&mut OsRng);
@@ -238,7 +247,7 @@ pub async fn register(
     // the resend button.
     let email = p.email.clone();
     tokio::spawn(async move {
-        if let Err(e) = mailer::send_code(&email, &code).await {
+        if let Err(e) = mailer::send_code(&email, &code, theme).await {
             tracing::error!("mailer: {e}");
         }
     });

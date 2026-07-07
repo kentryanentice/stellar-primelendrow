@@ -55,6 +55,16 @@ textarea {
 	user-select: text;
 }
 
+// Mobile rubber-band/overscroll bounce paints whatever is behind the
+// document once you scroll past its real content — that's `html`'s own
+// background, not `body`'s. `body` was styled but `html` never was, so
+// bounce scrolling flashed the browser's default white past every page's
+// dark theme. Kept in sync with `body` rather than a hardcoded fallback so
+// it always matches the current page/theme.
+html {
+	background: var(--color-bg);
+}
+
 body {
 	background: var(--color-bg);
 	color: var(--color-text);

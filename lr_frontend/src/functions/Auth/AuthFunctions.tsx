@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type UIEvent } from 'react'
 import { useToast } from '../../providers/useToast'
 import { useSession } from '../../providers/useSession'
+import { useAccent } from '../../providers/AccentProvider'
 import { loginRequest, registerRequest, verifyRequest, resetRequest, resetConfirmRequest } from './requests'
 
 export type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset'
@@ -22,6 +23,7 @@ const pwChecksOf = (pw: string) => [pw.length >= 8, /[A-Z]/.test(pw), /[^A-Za-z0
 export default function useAuthFunctions() {
     const toast = useToast()
     const { setUser, setCsrfToken } = useSession()
+    const { accent } = useAccent()
 
     const [screen, setScreen] = useState<Screen>('login')
     const [showLoginPw, setShowLoginPw] = useState(false)
@@ -122,7 +124,7 @@ export default function useAuthFunctions() {
     const handleRegister = async () => {
         setBusy(true)
         try {
-            await registerRequest(reg.name, reg.email, reg.password)
+            await registerRequest(reg.name, reg.email, reg.password, accent)
             setScreen('verify')
             setResendIn(RESEND_WAIT)
             setOtp(emptyOtp())
@@ -152,7 +154,7 @@ export default function useAuthFunctions() {
         if (resendIn || busy) return
         setBusy(true)
         try {
-            await registerRequest(reg.name, reg.email, reg.password)
+            await registerRequest(reg.name, reg.email, reg.password, accent)
             setOtp(emptyOtp())
             setResendIn(RESEND_WAIT)
             toast.success('OTP resent')
@@ -166,7 +168,7 @@ export default function useAuthFunctions() {
     const handleForgot = async () => {
         setBusy(true)
         try {
-            await resetRequest(reset.email)
+            await resetRequest(reset.email, accent)
             setScreen('reset')
             setResendIn(RESEND_WAIT)
             setOtp(emptyOtp())
@@ -197,7 +199,7 @@ export default function useAuthFunctions() {
         if (resendIn || busy) return
         setBusy(true)
         try {
-            await resetRequest(reset.email)
+            await resetRequest(reset.email, accent)
             setOtp(emptyOtp())
             setResendIn(RESEND_WAIT)
             toast.success('Code resent')

@@ -2,9 +2,39 @@
 @media (max-width: 880px) {
     .kyc { padding: 35px 20px 60px; }
     .kyc-layout { flex-direction: column; gap: 28px; }
+
+    // A vertical, labeled list doesn't fit a narrow column — collapse to a
+    // single row of icon-only circles (no label/sub text) so all five steps
+    // always fit on one line instead of wrapping into a ragged grid.
     .kyc-stepper { width: 100%; }
-    .kyc-stepper-line { display: none; }
-    .kyc-stepper-list { flex-direction: row; flex-wrap: wrap; gap: 12px; }
+    // Same connector, rotated: the base rule is vertical (left:25px;
+    // top/bottom:20px; width:2px) for the stacked desktop list. Here five
+    // equal flex:1 steps mean the first/last circles sit at exactly 10%/90%
+    // of the row's width, so the line can span between them without
+    // depending on the container's actual pixel width.
+    .kyc-stepper-line {
+        left: 10%;
+        right: 10%;
+        top: 26px;
+        bottom: auto;
+        width: auto;
+        height: 2px;
+    }
+    .kyc-stepper-list {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        gap: 6px;
+    }
+    .kyc-step {
+        flex: 1;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0;
+        padding: 6px 2px;
+    }
+    .kyc-step-text { display: none; }
+
     .kyc-dropzone-grid { grid-template-columns: 1fr; }
     .kyc-form-grid { grid-template-columns: 1fr; }
     .kyc-preview-row { flex-direction: column; align-items: flex-start; }

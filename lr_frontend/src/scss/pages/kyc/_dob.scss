@@ -1,0 +1,140 @@
+/* ---------------- date-of-birth input + picker trigger ---------------- */
+.kyc-dob-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    input { flex: 1; min-width: 0; }
+}
+
+.kyc-dob-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: var(--auth-surface-bg);
+    color: #8b98b3;
+    cursor: pointer;
+    transition: border-color .15s ease, color .15s ease, background .15s ease;
+
+    svg { width: 17px; height: 17px; }
+
+    &:hover {
+        border-color: var(--auth-primary);
+        color: var(--color-accent-400);
+        background: rgba(255, 255, 255, .04);
+    }
+}
+
+/* ---------------- dob picker modal ---------------- */
+@keyframes kyc-overlay-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@keyframes kyc-modal-in {
+    from { opacity: 0; transform: translateY(18px) scale(.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.kyc-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background: rgba(5, 10, 22, .68);
+    backdrop-filter: blur(4px);
+    animation: kyc-overlay-in .2s ease both;
+}
+
+.kyc-modal-card {
+    width: 420px;
+    max-width: 100%;
+    background: var(--auth-panel-bg);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .6);
+    animation: kyc-modal-in .28s cubic-bezier(.2, .7, .2, 1) both;
+}
+
+.kyc-modal-head {
+    padding: 22px 24px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+
+    h3 {
+        font-family: var(--auth-font-display);
+        font-weight: 600;
+        font-size: 19px;
+        color: #f4f7fb;
+        margin: 0 0 4px;
+    }
+    p { font-size: 13px; color: #8b98b3; margin: 0; }
+}
+
+.kyc-modal-close {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border: none;
+    background: rgba(255, 255, 255, .06);
+    border-radius: 9px;
+    color: #cfd7e6;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s;
+
+    &:hover { background: rgba(255, 255, 255, .12); }
+}
+
+.kyc-dob-body {
+    padding: 22px 24px;
+}
+
+.kyc-dob-columns {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr 1fr;
+    gap: 10px;
+
+    label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 12px;
+        color: #8b98b3;
+    }
+
+    select {
+        padding: 9px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, .14);
+        background: var(--auth-surface-bg);
+        color: #f4f7fb;
+        font-size: 14px;
+        font-family: var(--font-family);
+        outline: none;
+        transition: border-color .15s ease;
+
+        &:focus { border-color: var(--auth-primary); }
+    }
+}
+
+.kyc-modal-foot {
+    padding: 16px 24px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}

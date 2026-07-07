@@ -9,7 +9,8 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use super::shared::{
-    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email, verify_code,
+    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email,
+    normalize_mail_theme, verify_code,
 };
 use crate::api::mailer;
 use crate::api::verified::Verified;
@@ -17,6 +18,10 @@ use crate::api::verified::Verified;
 #[derive(Deserialize)]
 struct RequestInput {
     email: String,
+    /// Mirrors the frontend's current AccentProvider selection so the reset
+    /// code email matches whatever theme the user has active.
+    #[serde(default)]
+    theme: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +47,7 @@ pub async fn request(
     if !is_valid_email(&p.email) || p.email.len() > 255 {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid email"));
     }
+    let theme = normalize_mail_theme(p.theme.as_deref());
 
     let now = Utc::now().timestamp();
 
@@ -128,7 +134,7 @@ pub async fn request(
     // recovers with the resend button.
     let email = p.email.clone();
     tokio::spawn(async move {
-        if let Err(e) = mailer::send_code(&email, &code).await {
+        if let Err(e) = mailer::send_code(&email, &code, theme).await {
             tracing::error!("mailer: {e}");
         }
     });

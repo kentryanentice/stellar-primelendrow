@@ -1,5 +1,6 @@
 import { IdCard } from 'lucide-react'
 import { ID_TYPE_LABELS } from '../../functions/KYC/idParsing'
+import DobPicker from './DobPicker'
 import type { KYCState } from './types'
 
 type IdScanStepProps = Pick<KYCState,
@@ -56,7 +57,10 @@ export default function IdScanStep({
             </label>
             <label className='kyc-field'>
                 <span>Date of birth</span>
-                <input value={dob} onChange={e => setDob(e.target.value)} placeholder='DD/MM/YYYY' />
+                <div className='kyc-dob-input-row'>
+                    <input value={dob} onChange={e => setDob(e.target.value)} placeholder='DD/MM/YYYY' />
+                    <DobPicker value={dob} onChange={setDob} />
+                </div>
             </label>
         </div>
     )

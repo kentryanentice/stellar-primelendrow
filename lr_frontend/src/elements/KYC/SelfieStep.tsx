@@ -10,6 +10,7 @@ const LIVENESS_COPY: Record<Exclude<LivenessStatus, 'idle'>, string> = {
     'spoof-warning': 'We can’t confirm a live camera feed — make sure you’re not holding up a photo or screen',
     passed: 'Liveness confirmed — hold still…',
     bypassed: 'Liveness check unavailable — frame your face and capture manually',
+    timeout: 'We couldn’t auto-confirm liveness — frame your face and capture manually. Your submission will be reviewed.',
 }
 
 type SelfieStepProps = Pick<KYCState,
@@ -36,7 +37,7 @@ export default function SelfieStep({
                         + (livenessStatus === 'spoof-warning' ? ' kyc-camera-guide--warn' : '')
                     } />
                 </div>
-                {livenessStatus !== 'bypassed' && (
+                {livenessStatus !== 'bypassed' && livenessStatus !== 'timeout' && (
                     <div className='kyc-live-meter'>
                         <div className='kyc-live-meter-label'>
                             <span>Live face</span>
@@ -63,7 +64,7 @@ export default function SelfieStep({
                 )}
                 <div className='kyc-camera-actions'>
                     <button type='button' className='kyc-btn-ghost' onClick={closeCamera}>Cancel</button>
-                    {livenessStatus === 'bypassed' && (
+                    {(livenessStatus === 'bypassed' || livenessStatus === 'timeout') && (
                         <button type='button' className='kyc-btn-primary' disabled={!livenessPassed} onClick={captureSelfie}>Capture</button>
                     )}
                 </div>

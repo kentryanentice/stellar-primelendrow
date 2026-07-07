@@ -91,6 +91,64 @@
     min-width: 0;
 }
 
+/* ---------------- credit score (compact meter) ---------------- */
+.sidebar-score {
+    width: 228px;
+    flex-shrink: 0;
+    margin: 12px 0 0;
+}
+
+.sidebar-score-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: #c7d1e3;
+
+    svg {
+        width: 14px;
+        height: 14px;
+        color: var(--color-accent-400);
+        flex-shrink: 0;
+    }
+
+    span:not(.sidebar-score-value) {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+.sidebar-score-value {
+    flex-shrink: 0;
+    font-weight: 600;
+    color: #eef1f6;
+
+    i {
+        font-style: normal;
+        font-weight: 500;
+        color: #8b98b3;
+    }
+}
+
+.sidebar-score-track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+    overflow: hidden;
+}
+
+.sidebar-score-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--auth-primary-grad);
+    transition: width .25s ease;
+}
+
 @keyframes sidebar-status-in {
     to { opacity: 1; }
 }
@@ -243,6 +301,7 @@
     position: relative;
     display: flex;
     align-items: center;
+    bottom: 0;
     gap: 10px;
     border-top: 1px solid rgba(255, 255, 255, .08);
     padding-top: 16px;
@@ -251,6 +310,7 @@
 }
 
 .sidebar-avatar {
+    position: relative;
     width: 36px;
     height: 36px;
     border-radius: 50%;
@@ -261,6 +321,33 @@
     font-size: 13px;
     font-weight: 700;
     flex-shrink: 0;
+}
+
+/* status pip on the avatar — same surface fill + hairline ring as the nav lock pip
+   (.sidebar-item-lock), so the two read as one family. Colours are theme tokens, so
+   admin tracks the accent. */
+.sidebar-avatar-badge {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    width: 20px;
+    height: 20px;
+    padding: 2px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--auth-surface-bg);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .14);
+
+    svg {
+        width: 15px;
+        height: 15px;
+        stroke-width: 2.5;
+    }
+
+    &.is-pending { color: var(--auth-warn); }
+    &.is-verified { color: var(--auth-success); }
+    &.is-admin { color: var(--auth-primary); }
 }
 
 .sidebar-user-info {
@@ -510,6 +597,15 @@
         .sidebar-logout {
             display: none;
         }
+
+        // .sidebar-user is fixed (see the tablet breakpoint above) and
+        // otherwise inherits its 264px "full panel" width from there —
+        // hiding the name/role/logout above didn't shrink the bar itself,
+        // just its content, so the border-top divider line kept stretching
+        // out past the narrow icon rail.
+        .sidebar-user {
+            width: 85px;
+        }
     }
 
     // "closed" on a phone means fully hidden, not the icon rail — there's no
@@ -521,6 +617,24 @@
         overflow: hidden;
     }
 
+    // .sidebar-user is position:fixed (see the tablet breakpoint above),
+    // anchored to the viewport rather than to .sidebar — so the width:0 +
+    // overflow:hidden above never reaches it; without this the avatar keeps
+    // floating over the page even while "closed". Faded via opacity/
+    // visibility rather than display:none, which can't transition and made
+    // the avatar pop in/out instantly instead of animating with the rest of
+    // the .2s open/close motion.
+    .sidebar .sidebar-user {
+        transition: opacity .4s ease, visibility .4s ease;
+    }
+
+    .sidebar.is-collapsed .sidebar-user {
+        left: -80px;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
+
     // one toggle for both states: fixed to the viewport (which also escapes
     // the closed rail's zero-width overflow clip — only transform/filter on
     // an ancestor would re-anchor a fixed element, overflow doesn't) and
@@ -530,12 +644,12 @@
     .sidebar .sidebar-toggle {
         position: fixed;
         top: 28px;
-        left: 69px; // = rail width 85px - toggle 30px + overhang 14px
+        left: 70px; // = rail width 85px - toggle 30px + overhang 14px
         right: auto;
         transition: left .2s ease, background .2s ease, color .2s ease;
     }
 
     .sidebar.is-collapsed .sidebar-toggle {
-        left: 0;
+        left: -5px;
     }
 }

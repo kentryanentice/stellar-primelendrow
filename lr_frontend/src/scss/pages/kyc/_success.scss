@@ -5,16 +5,17 @@
     text-align: center;
 }
 
+/* amber, not green — the submission is under review, not yet approved */
 .kyc-success-icon {
     width: 76px;
     height: 76px;
     border-radius: 50%;
-    background: rgba(60, 196, 90, .15);
+    background: rgba(240, 169, 59, .15);
     display: grid;
     place-items: center;
     margin: 0 auto 24px;
 
-    svg { width: 40px; height: 40px; color: var(--auth-success); }
+    svg { width: 40px; height: 40px; color: var(--auth-warn); }
 }
 
 .kyc-success h2 {

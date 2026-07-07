@@ -1,4 +1,5 @@
 import type { KYCState } from './types'
+import { truncateAddress } from '../../functions/KYC/wallet'
 
 type ReviewStepProps = Pick<KYCState,
     'firstName' | 'middleName' | 'lastName' | 'idNumber' | 'dob' | 'matched' | 'matchScore' | 'walletAddress' | 'goToStep'
@@ -12,7 +13,7 @@ export default function ReviewStep({ firstName, middleName, lastName, idNumber, 
         ['ID number', idNumber],
         ['Date of birth', dob],
         ['Selfie verification', matched ? `Matched ${matchScore}%` : 'Not yet verified'],
-        ['Stellar wallet', walletAddress ? `Connected — ${walletAddress}` : 'Not connected'],
+        ['Stellar wallet', walletAddress ? `Connected — ${truncateAddress(walletAddress)}` : 'Not connected'],
     ]
 
     return (

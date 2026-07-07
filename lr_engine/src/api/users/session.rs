@@ -7,17 +7,26 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::shared::{
-    E, UserResponse, clear_legacy_domain_csrf_cookie, csrf_cookie, csrf_cookie_name,
-    extract_cookie_value, extract_session_id, new_csrf_token,
+    UserResponse, clear_csrf_cookie, clear_legacy_domain_csrf_cookie, clear_session_cookie,
+    csrf_cookie, csrf_cookie_name, extract_cookie_value, extract_session_id, new_csrf_token,
 };
+
+/// A 401 from here means the browser's cookies no longer match a live
+/// session row; clear both auth cookies so the stale pair doesn't ride along
+/// (tripping the CSRF guard into 403s) for the rest of its Max-Age.
+fn unauthenticated(msg: &'static str) -> (StatusCode, HeaderMap, &'static str) {
+    let mut headers = HeaderMap::new();
+    headers.append(SET_COOKIE, clear_session_cookie());
+    headers.append(SET_COOKIE, clear_csrf_cookie());
+    (StatusCode::UNAUTHORIZED, headers, msg)
+}
 
 pub async fn session_handler(
     Extension(pool): Extension<PgPool>,
     headers: HeaderMap,
-) -> Result<(HeaderMap, Json<UserResponse>), E> {
+) -> Result<(HeaderMap, Json<UserResponse>), (StatusCode, HeaderMap, &'static str)> {
     let now = Utc::now().timestamp();
-    let sid =
-        extract_session_id(&headers).ok_or((StatusCode::UNAUTHORIZED, "Not authenticated"))?;
+    let sid = extract_session_id(&headers).ok_or_else(|| unauthenticated("Not authenticated"))?;
 
     let row = sqlx::query!(
         "SELECT u.id AS \"id: Uuid\", u.username, u.email, u.role, s.expires_at
@@ -31,9 +40,9 @@ pub async fn session_handler(
     .await
     .map_err(|e| {
         tracing::error!("DB: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "DB error")
+        (StatusCode::INTERNAL_SERVER_ERROR, HeaderMap::new(), "DB error")
     })?
-    .ok_or((StatusCode::UNAUTHORIZED, "Session expired or not found"))?;
+    .ok_or_else(|| unauthenticated("Session expired or not found"))?;
 
     let mut response_headers = HeaderMap::new();
     // Reuse the caller's existing csrf token rather than minting a fresh one

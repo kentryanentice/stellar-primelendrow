@@ -39,7 +39,7 @@ async function signedSession(path: string, data: object) {
 }
 
 export const loginRequest = (email: string, password: string) => signedSession('/auth/login', { email, password })
-export const registerRequest = (name: string, email: string, password: string) => signed('/auth/register', { name, email, password })
+export const registerRequest = (name: string, email: string, password: string, theme: string) => signed('/auth/register', { name, email, password, theme })
 export const verifyRequest = (email: string, code: string) => signedSession('/auth/verify', { email, code })
-export const resetRequest = (email: string) => signed('/auth/password-reset/request', { email })
+export const resetRequest = (email: string, theme: string) => signed('/auth/password-reset/request', { email, theme })
 export const resetConfirmRequest = (email: string, code: string, password: string) => signed('/auth/password-reset/confirm', { email, code, password })

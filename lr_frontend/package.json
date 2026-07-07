@@ -12,6 +12,7 @@
     "deploy": "npm run build && wrangler pages deploy dist --project-name=primelendrow"
   },
   "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "^2.5.0",
     "@stellar/freighter-api": "^6.0.1",
     "@vladmandic/face-api": "^1.7.15",
     "@vladmandic/human": "^3.3.6",

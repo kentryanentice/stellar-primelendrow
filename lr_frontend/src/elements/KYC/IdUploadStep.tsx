@@ -41,13 +41,13 @@ export default function IdUploadStep({
         <div className='kyc-dropzone-grid'>
             <label className='kyc-dropzone'>
                 <CloudUpload />
-                <span className='kyc-dropzone-title'>Upload a photo</span>
+                <span className='kyc-dropzone-title'>Upload an ID</span>
                 <span className='kyc-dropzone-sub'>Drag &amp; drop or click to browse</span>
                 <input type='file' accept='image/*' onChange={handleIdFile} hidden />
             </label>
             <button type='button' className='kyc-dropzone' onClick={() => openCamera('id')}>
                 <Camera />
-                <span className='kyc-dropzone-title'>Take a photo</span>
+                <span className='kyc-dropzone-title'>Take a photo of an ID</span>
                 <span className='kyc-dropzone-sub'>Use your camera to capture your ID</span>
             </button>
         </div>

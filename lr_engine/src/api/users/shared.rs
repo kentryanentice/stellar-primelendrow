@@ -270,3 +270,15 @@ pub fn is_strong_password(pw: &str) -> bool {
         && pw.chars().any(|c| c.is_uppercase())
         && pw.chars().any(|c| !c.is_alphanumeric())
 }
+
+/// Collapse whatever the client sent (mirroring `AccentProvider`'s `Accent`
+/// type) to one of the two themes the mailer actually has palettes for.
+/// Anything unrecognized — including absent, an older client, or tampering —
+/// falls back to "blue" rather than erroring, since a wrong-but-valid email
+/// theme is cosmetic, not a security boundary.
+pub fn normalize_mail_theme(theme: Option<&str>) -> &'static str {
+    match theme {
+        Some("green") => "green",
+        _ => "blue",
+    }
+}

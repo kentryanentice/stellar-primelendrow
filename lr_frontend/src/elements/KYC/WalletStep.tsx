@@ -1,5 +1,6 @@
 import { CheckCircle } from 'lucide-react'
 import type { KYCState } from './types'
+import { truncateAddress } from '../../functions/KYC/wallet'
 
 type WalletStepProps = Pick<KYCState, 'walletAddress' | 'walletConnecting' | 'connectWallet' | 'disconnectWallet'>
 
@@ -19,7 +20,7 @@ export default function WalletStep({ walletAddress, walletConnecting, connectWal
             </div>
             {walletAddress && (
                 <p className='kyc-wallet-address'>
-                    Address: <span>{walletAddress}</span> · <button type='button' onClick={disconnectWallet}>disconnect</button>
+                    Address: <span title={walletAddress}>{truncateAddress(walletAddress)}</span> · <button type='button' onClick={disconnectWallet}>disconnect</button>
                 </p>
             )}
         </div>

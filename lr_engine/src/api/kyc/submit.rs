@@ -184,15 +184,22 @@ pub async fn submit(
     }
 
     let now = Utc::now().timestamp();
+    // insert the submission and flip the account into review atomically, so an
+    // account can never end up "Verifying" without a row (or vice versa)
+    let mut tx = pool.begin().await.map_err(|e| {
+        tracing::error!("DB begin (kyc submit): {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Submission failed")
+    })?;
+
     let inserted = sqlx::query(
         "INSERT INTO public.kyc_submissions
-            (id, user_id, id_type,
+            (id, user_id, status, id_type,
              first_name_enc, middle_name_enc, last_name_enc, dob_enc,
              id_number_enc, id_number_hash,
              wallet_address, face_match_score, liveness_passed,
              id_image_path, selfie_image_path,
              created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)",
+         VALUES ($1, $2, 'verifying', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)",
     )
     .bind(submission_id)
     .bind(user_id)
@@ -209,7 +216,7 @@ pub async fn submit(
     .bind(&id_image_path)
     .bind(&selfie_image_path)
     .bind(now)
-    .execute(&pool)
+    .execute(&mut *tx)
     .await;
 
     if let Err(e) = inserted {
@@ -226,6 +233,30 @@ pub async fn submit(
             ));
         }
         tracing::error!("DB kyc insert: {e}");
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Submission failed"));
+    }
+
+    // Pending -> Verifying: still locked out of member features, but can't
+    // re-submit until an admin rejects. Guarded so it never demotes User/Admin.
+    if let Err(e) = sqlx::query(
+        "UPDATE public.users SET role = 'Verifying', updated_at = $1
+          WHERE id = $2 AND role = 'Pending'",
+    )
+    .bind(now)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    {
+        let _ = storage.delete(&id_image_path).await;
+        let _ = storage.delete(&selfie_image_path).await;
+        tracing::error!("DB kyc role->Verifying: {e}");
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Submission failed"));
+    }
+
+    if let Err(e) = tx.commit().await {
+        let _ = storage.delete(&id_image_path).await;
+        let _ = storage.delete(&selfie_image_path).await;
+        tracing::error!("DB commit (kyc submit): {e}");
         return Err((StatusCode::INTERNAL_SERVER_ERROR, "Submission failed"));
     }
 

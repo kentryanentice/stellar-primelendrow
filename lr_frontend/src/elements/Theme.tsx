@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Droplet, Leaf } from 'lucide-react'
+import { Bubbles, Leaf } from 'lucide-react'
 import { useAccent } from '../providers/AccentProvider'
 
 function Header() {
@@ -8,7 +8,7 @@ function Header() {
     const logoSrc = '/pictures/primelendrow.webp'
     const accentButton = (
         <button className="theme-icon" type="button" aria-label="Toggle accent color" onClick={toggleAccent}>
-            {accent === 'blue' ? <Droplet /> : <Leaf />}
+            {accent === 'blue' ? <Bubbles /> : <Leaf />}
         </button>
     )
 

@@ -40,7 +40,7 @@ pub async fn pending(
     let rows: Vec<(Uuid, Uuid, String, Option<i16>, bool, i64)> = sqlx::query_as(
         "SELECT id, user_id, id_type, face_match_score, liveness_passed, created_at
            FROM public.kyc_submissions
-          WHERE status = 'pending'
+          WHERE status = 'verifying'
           ORDER BY created_at ASC
           LIMIT 100",
     )
@@ -249,7 +249,7 @@ pub async fn review(
         "UPDATE public.kyc_submissions
             SET status = $1, reviewed_by = $2, reviewed_at = $3,
                 rejection_reason = $4, updated_at = $3
-          WHERE id = $5 AND status = 'pending'
+          WHERE id = $5 AND status = 'verifying'
           RETURNING user_id, id_image_path, selfie_image_path",
     )
     .bind(status)

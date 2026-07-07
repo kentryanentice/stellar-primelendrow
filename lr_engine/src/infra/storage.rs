@@ -1,5 +1,13 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 
+/// Every request sends the key in BOTH the `apikey` header and
+/// `Authorization: Bearer …` with the exact same value. The new-style
+/// `sb_secret_*` keys are not JWTs — sent as a bearer token alone,
+/// storage-api tries to parse them as one and rejects the request with
+/// 403 "Invalid Compact JWS". Supabase's documented pattern is `apikey`
+/// plus a matching Authorization header; the gateway then swaps the
+/// Authorization for its internal pre-signed JWT. A legacy service-role
+/// JWT keeps working through the same shape.
 #[derive(Clone)]
 pub struct SupabaseStorage {
     client: reqwest::Client,
@@ -41,6 +49,7 @@ impl SupabaseStorage {
         let res = self
             .client
             .post(&url)
+            .header("apikey", &self.secret_key)
             .header("Authorization", format!("Bearer {}", self.secret_key))
             .header("Content-Type", content_type)
             .header("Content-Disposition", "attachment")
@@ -70,6 +79,7 @@ impl SupabaseStorage {
         let res = self
             .client
             .post(&url)
+            .header("apikey", &self.secret_key)
             .header("Authorization", format!("Bearer {}", self.secret_key))
             .json(&serde_json::json!({ "expiresIn": expires_in_secs }))
             .send()
@@ -111,6 +121,7 @@ impl SupabaseStorage {
         let res = self
             .client
             .post(&url)
+            .header("apikey", &self.secret_key)
             .header("Authorization", format!("Bearer {}", self.secret_key))
             .header("Content-Type", content_type)
             .header("Content-Disposition", "attachment")
@@ -143,6 +154,7 @@ impl SupabaseStorage {
         let res = self
             .client
             .delete(&url)
+            .header("apikey", &self.secret_key)
             .header("Authorization", format!("Bearer {}", self.secret_key))
             .send()
             .await
