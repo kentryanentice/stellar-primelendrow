@@ -92,10 +92,11 @@
 }
 
 /* ---------------- credit score (compact meter) ---------------- */
+// lives inside .sidebar-user now — width follows that container instead of a
+// magic number that only happened to match its old sibling position
 .sidebar-score {
-    width: 228px;
+    width: 100%;
     flex-shrink: 0;
-    margin: 12px 0 0;
 }
 
 .sidebar-score-head {
@@ -159,6 +160,12 @@
     100% { box-shadow: 0 0 0 0 rgba(240, 169, 59, 0); }
 }
 
+@keyframes sidebar-status-pulse-info {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--auth-primary-rgb), .55); }
+    70%  { box-shadow: 0 0 0 10px rgba(var(--auth-primary-rgb), 0); }
+    100% { box-shadow: 0 0 0 0 rgba(var(--auth-primary-rgb), 0); }
+}
+
 .sidebar-status {
     width: 228px;
     flex-shrink: 0;
@@ -173,6 +180,21 @@
     &.is-pulsing {
         animation: sidebar-status-in .10s ease .13s forwards, sidebar-status-pulse .9s ease;
         border-color: rgba(240, 169, 59, .55);
+    }
+
+    /* still under review, not a problem to fix — blue rather than the amber
+       "action needed" tone Pending uses */
+    &.is-verifying {
+        background: rgba(var(--auth-primary-rgb), .12);
+        border-color: rgba(var(--auth-primary-rgb), .25);
+
+        .sidebar-status-head svg { color: var(--auth-primary); box-shadow: 0 0 2px var(--auth-primary); }
+        .sidebar-status-value { color: var(--auth-primary); }
+
+        &.is-pulsing {
+            animation: sidebar-status-in .10s ease .13s forwards, sidebar-status-pulse-info .9s ease;
+            border-color: rgba(var(--auth-primary-rgb), .55);
+        }
     }
 }
 
@@ -300,13 +322,23 @@
 .sidebar-user {
     position: relative;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 12px;
     bottom: 0;
-    gap: 10px;
-    border-top: 1px solid rgba(255, 255, 255, .08);
-    padding-top: 16px;
     margin-top: 12px;
     min-width: 0;
+}
+
+// the line separator: sits directly above the avatar row, so it reads as
+// "credit score, then a line, then who you are" whether or not the score
+// block above it is even present (Pending/Verifying accounts have no score)
+.sidebar-user-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
 }
 
 .sidebar-avatar {
@@ -346,8 +378,9 @@
     }
 
     &.is-pending { color: var(--auth-warn); }
-    &.is-verified { color: var(--auth-success); }
+    &.is-verified { color: var(--auth-primary); }
     &.is-admin { color: var(--auth-primary); }
+    &.is-verifying { color: var(--auth-primary); }
 }
 
 .sidebar-user-info {
@@ -593,6 +626,7 @@
         .sidebar-brand span,
         .sidebar-item span:not(.sidebar-item-icon),
         .sidebar-status,
+        .sidebar-score,
         .sidebar-user-info,
         .sidebar-logout {
             display: none;

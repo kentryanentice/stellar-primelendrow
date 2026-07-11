@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSession } from '../providers/useSession'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -12,13 +13,25 @@ export type CreditScore = {
 }
 
 /** Read-only for now — nothing in the codebase yet computes or adjusts the
- *  score, so there's no shared context to keep in sync, just a fetch per mount. */
+ *  score, so there's no shared context to keep in sync, just a fetch per mount.
+ *  Not fetched for Pending/Verifying accounts: they're still gated out of
+ *  member features, so a score is premature — every caller (Settings, Sidebar)
+ *  gets this for free instead of each having to remember to check the role. */
 export function useCreditScore() {
+    const { user } = useSession()
+    const eligible = user?.role !== 'Pending' && user?.role !== 'Verifying'
+
     const [score, setScore] = useState<CreditScore | null>(null)
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(eligible)
     const [error, setError] = useState(false)
 
     useEffect(() => {
+        if (!eligible) {
+            setScore(null)
+            setLoading(false)
+            setError(false)
+            return
+        }
         let aborted = false
         setLoading(true)
         setError(false)
@@ -31,7 +44,7 @@ export function useCreditScore() {
             .catch(() => { if (!aborted) setError(true) })
             .finally(() => { if (!aborted) setLoading(false) })
         return () => { aborted = true }
-    }, [])
+    }, [eligible])
 
     return { score, loading, error }
 }

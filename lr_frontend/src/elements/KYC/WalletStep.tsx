@@ -1,6 +1,6 @@
 import { CheckCircle } from 'lucide-react'
 import type { KYCState } from './types'
-import { truncateAddress } from '../../functions/KYC/wallet'
+import { truncateAddress } from '../../functions/Wallet/wallet'
 
 type WalletStepProps = Pick<KYCState, 'walletAddress' | 'walletConnecting' | 'connectWallet' | 'disconnectWallet'>
 

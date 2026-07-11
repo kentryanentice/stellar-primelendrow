@@ -53,3 +53,42 @@
         svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--auth-success); }
     }
 }
+
+/* ---------------- re-entry guard (already verifying / already verified) ----------------
+   Same centered layout as .kyc-success, minus the badge row — shown instead of the
+   wizard when there's nothing left to submit. */
+.kyc-guard {
+    max-width: 560px;
+    margin: 100px auto 0;
+    text-align: center;
+}
+
+.kyc-guard-icon {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    margin: 0 auto 24px;
+
+    svg { width: 40px; height: 40px; }
+
+    /* still under review — tracks the accent theme, matching the Verifying pip/status elsewhere */
+    &.is-verifying { background: rgba(var(--auth-primary-rgb), .15); svg { color: var(--auth-primary); } }
+    /* fully approved — tracks the accent theme, matching the Verified pip/chip elsewhere */
+    &.is-verified { background: rgba(var(--auth-primary-rgb), .15); svg { color: var(--auth-primary); } }
+}
+
+.kyc-guard h2 {
+    margin: 0 0 10px;
+    font-family: var(--auth-font-display);
+    font-size: 28px;
+    font-weight: 500;
+    color: #f4f7fb;
+}
+
+.kyc-guard > p {
+    margin: 0 0 32px;
+    font-size: 14.5px;
+    color: #8b98b3;
+}

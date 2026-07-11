@@ -166,6 +166,17 @@ pub async fn login(
 
     tracing::info!(email = %p.email, user_id = %row.id, "user logged in");
 
+    // separate runtime-checked query (not folded into the query! above) so
+    // this needs no offline sqlx-data regeneration — display-only field
+    let created_at: i64 = sqlx::query_scalar("SELECT created_at FROM public.users WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB user created_at: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Login failed")
+        })?;
+
     let mut headers = HeaderMap::new();
     let csrf_token = new_csrf_token();
     headers.append(SET_COOKIE, session_cookie(session_id));
@@ -185,6 +196,7 @@ pub async fn login(
             username: row.username,
             email: row.email,
             role: row.role,
+            created_at,
             expires_at: now + SESSION_MAX_AGE,
         }),
     ))

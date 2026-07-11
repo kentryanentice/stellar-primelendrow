@@ -1,0 +1,310 @@
+.admin-carousel {
+    /* single source of truth for card width — the track's 3-card viewport
+       and each card's own size both read from this, so the two breakpoint
+       overrides below stay in sync automatically */
+    --admin-card-w: 320px;
+
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 10px;
+    /* .admin-stage centers its content by shrink-wrapping, which left the
+       arrows hugging whatever width the cards happened to take up — stretch
+       to the full available width so the arrows sit at the true edges */
+    align-self: stretch;
+    width: 100%;
+}
+
+.admin-carousel-arrow {
+    flex-shrink: 0;
+    width: 44px;
+    align-self: center;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    aspect-ratio: 1;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: var(--auth-panel-bg);
+    color: #cfd7e6;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, opacity .15s ease;
+
+    svg { width: 19px; height: 19px; }
+
+    &:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: var(--color-accent-500); }
+    &:disabled { opacity: .3; cursor: default; }
+}
+
+.admin-carousel-track {
+    /* capped to exactly 3 cards — extra cards in the loaded page overflow
+       and are reached by scrolling (chevrons step one card at a time), not
+       by stretching the viewport to show a sliver of the next one */
+    flex: 0 1 auto;
+    max-width: calc(var(--admin-card-w) * 3 + 40px);
+    min-width: 0;
+    display: flex;
+    /* no justify-content: center — with fewer than 3 cards the track already
+       shrinks to fit its content (flex-grow: 0), so there's no leftover
+       space to center; but when content DOES overflow, centering an
+       overflowing flex line pushes its start into unreachable negative
+       scroll territory, permanently hiding the first card */
+    gap: 20px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding: 4px 2px 12px;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar { display: none; }
+}
+
+.admin-page-dots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.admin-page-dot {
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .16);
+    cursor: pointer;
+    transition: background .15s ease, transform .15s ease;
+
+    &:hover:not(.is-active) { background: rgba(255, 255, 255, .3); }
+
+    &.is-active {
+        background: var(--color-accent-500);
+        transform: scale(1.3);
+    }
+}
+
+/* ---- card ---- */
+.admin-card {
+    flex: 0 0 var(--admin-card-w);
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    border-radius: 20px;
+    overflow: hidden;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, .015));
+    border: 1px solid rgba(255, 255, 255, .09);
+    box-shadow: 0 20px 46px -30px rgba(0, 0, 0, .55);
+    transition: border-color .15s ease, transform .15s ease;
+
+    &:hover { border-color: rgba(255, 255, 255, .18); transform: translateY(-2px); }
+}
+
+.admin-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 14px 14px 0;
+}
+
+.admin-card-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-accent-400);
+    border: 1px solid color-mix(in srgb, var(--auth-primary), transparent 60%);
+    background: color-mix(in srgb, var(--auth-primary), transparent 88%);
+    max-width: 210px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.admin-card-flag {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    color: var(--auth-danger);
+}
+
+.admin-card-time {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: #7186ad;
+}
+
+.admin-card-photos {
+    display: flex;
+    gap: 11px;
+    padding: 13px 14px 0;
+}
+
+.admin-card-photo {
+    position: relative;
+    flex: 1;
+    height: 148px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #0a1630;
+    border: 1px solid rgba(255, 255, 255, .1);
+
+    img { width: 100%; height: 100%; object-fit: cover; }
+}
+
+.admin-card-photo-placeholder {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 40px;
+    height: 40px;
+    color: #2c3c60;
+}
+
+.admin-card-photo-tag {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(7, 13, 28, .72);
+    backdrop-filter: blur(6px);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: #eaf0ff;
+
+    &.is-live::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--auth-danger);
+    }
+
+    &:not(.is-live) {
+        left: auto;
+        right: 8px;
+        color: var(--color-accent-400);
+    }
+}
+
+.admin-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+}
+
+.admin-card-score-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.admin-card-score {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+}
+
+.admin-card-score-value {
+    font-family: var(--auth-font-display);
+    font-weight: 700;
+    font-size: 26px;
+    line-height: 1;
+
+    &.is-strong { color: var(--auth-success); }
+    &.is-review { color: var(--auth-warn); }
+    &.is-low { color: var(--auth-danger); }
+}
+
+.admin-card-score-label {
+    font-size: 10px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #7186ad;
+}
+
+.admin-card-verdict {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+
+    &.is-strong { color: var(--auth-success); background: rgba(60, 196, 90, .14); }
+    &.is-review { color: var(--auth-warn); background: rgba(240, 169, 59, .15); }
+    &.is-low { color: var(--auth-danger); background: rgba(239, 93, 93, .14); }
+}
+
+.admin-card-track {
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+    overflow: hidden;
+}
+
+.admin-card-fill {
+    height: 100%;
+    border-radius: inherit;
+    transition: width .25s ease;
+
+    &.is-strong { background: var(--auth-success); }
+    &.is-review { background: var(--auth-warn); }
+    &.is-low { background: var(--auth-danger); }
+}
+
+.admin-card-badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.admin-card-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .07);
+    font-size: 11px;
+    font-weight: 600;
+    color: #c9d6f0;
+
+    svg { width: 12px; height: 12px; }
+
+    &.is-passed svg { color: var(--auth-success); }
+    &.is-bypassed svg { color: var(--auth-warn); }
+}
+
+.admin-card-info {
+    margin-top: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--auth-primary-grad);
+    color: #fff;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .15s ease;
+
+    svg { width: 16px; height: 16px; }
+
+    &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 22px -10px rgba(var(--auth-primary-rgb), .6);
+    }
+}

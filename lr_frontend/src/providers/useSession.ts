@@ -5,7 +5,9 @@ export interface SessionPayload {
     id: string
     email: string
     username: string
-    role: 'Admin' | 'User' | 'Pending' | string
+    role: 'Admin' | 'User' | 'Pending' | 'Verifying' | string
+    /** Unix seconds — display only ("Member since"). */
+    created_at: number
     expires_at: number
 }
 

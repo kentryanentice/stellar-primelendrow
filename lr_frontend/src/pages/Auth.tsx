@@ -13,6 +13,7 @@ function Auth() {
 
     return (
         <main className='auth'>
+            <img className='auth-bg' src='/pictures/hero-bg.png' alt='' />
             <section className='auth-card'>
                 <div className='auth-panel'>
                     <form onSubmit={submit}>

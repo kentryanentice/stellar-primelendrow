@@ -16,10 +16,26 @@ use crate::infra::{crypto, storage::SupabaseStorage};
 /// short enough that a leaked URL from a screen-share is soon worthless.
 const SIGNED_URL_TTL_SECS: u32 = 5 * 60;
 
-// ---- pending list: metadata only, no PII ----
+// ---- pending list: paginated, includes signed thumbnail URLs ----
 //
-// Listing is cheap to poll, so it must not decrypt anything; PII access is a
-// deliberate, per-submission, audited act via `detail` below.
+// No PII text (names/DOB/ID number stay encrypted here — only `detail` below
+// decrypts and audits that). Images are a deliberate exception: the review
+// queue's UI shows selfie/ID thumbnails on every card, so every visible page
+// mints short-lived signed URLs for it up front rather than one at a time.
+
+fn default_page() -> i64 {
+    1
+}
+/// Fixed server-side — the client only ever picks *which* page, never *how
+/// large*, so there's no page_size for a caller to inflate into "dump the
+/// whole table".
+const PAGE_SIZE: i64 = 10;
+
+#[derive(Deserialize)]
+pub struct PendingRequest {
+    #[serde(default = "default_page")]
+    page: i64,
+}
 
 #[derive(Serialize)]
 pub struct PendingItem {
@@ -29,21 +45,55 @@ pub struct PendingItem {
     pub face_match_score: Option<i16>,
     pub liveness_passed: bool,
     pub created_at: i64,
+    /// Signed, short-lived (~5 min) thumbnail URLs; None if the path is
+    /// missing or signing failed (degrades to no thumbnail, not a page error).
+    pub id_image_url: Option<String>,
+    pub selfie_image_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PendingResponse {
+    pub items: Vec<PendingItem>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
+    pub total_pages: i64,
 }
 
 pub async fn pending(
     Extension(pool): Extension<PgPool>,
+    Extension(storage): Extension<SupabaseStorage>,
     headers: HeaderMap,
-) -> Result<Json<Vec<PendingItem>>, E> {
+    Json(q): Json<PendingRequest>,
+) -> Result<Json<PendingResponse>, E> {
     require_admin(&pool, &headers).await?;
 
-    let rows: Vec<(Uuid, Uuid, String, Option<i16>, bool, i64)> = sqlx::query_as(
-        "SELECT id, user_id, id_type, face_match_score, liveness_passed, created_at
+    // clamp rather than reject: a caller passing page=0 gets a sane response
+    // instead of a 4xx round-trip
+    let page = q.page.max(1);
+    let page_size = PAGE_SIZE;
+    let offset = (page - 1) * page_size;
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM public.kyc_submissions WHERE status = 'verifying'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB kyc pending count: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load queue")
+    })?;
+
+    let rows: Vec<(Uuid, Uuid, String, Option<i16>, bool, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, user_id, id_type, face_match_score, liveness_passed, created_at,
+                id_image_path, selfie_image_path
            FROM public.kyc_submissions
           WHERE status = 'verifying'
           ORDER BY created_at ASC
-          LIMIT 100",
+          LIMIT $1 OFFSET $2",
     )
+    .bind(page_size)
+    .bind(offset)
     .fetch_all(&pool)
     .await
     .map_err(|e| {
@@ -51,22 +101,66 @@ pub async fn pending(
         (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load queue")
     })?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(
-                |(id, user_id, id_type, face_match_score, liveness_passed, created_at)| {
-                    PendingItem {
-                        id,
-                        user_id,
-                        id_type,
-                        face_match_score,
-                        liveness_passed,
-                        created_at,
+    // sign both thumbnails for every row concurrently — sequentially awaiting
+    // up to page_size * 2 Supabase API calls would make a full page take
+    // seconds instead of the length of the single slowest call
+    let mut signing = tokio::task::JoinSet::new();
+    for (idx, row) in rows.iter().enumerate() {
+        let storage = storage.clone();
+        let id_path = row.6.clone();
+        let selfie_path = row.7.clone();
+        signing.spawn(async move {
+            let sign = |path: Option<String>| {
+                let storage = storage.clone();
+                async move {
+                    match path {
+                        None => None,
+                        Some(p) => storage.signed_url(&p, SIGNED_URL_TTL_SECS).await.ok(),
                     }
-                },
-            )
-            .collect(),
-    ))
+                }
+            };
+            let id_url = sign(id_path).await;
+            let selfie_url = sign(selfie_path).await;
+            (idx, id_url, selfie_url)
+        });
+    }
+    let mut urls: Vec<(Option<String>, Option<String>)> = vec![(None, None); rows.len()];
+    while let Some(res) = signing.join_next().await {
+        if let Ok((idx, id_url, selfie_url)) = res {
+            urls[idx] = (id_url, selfie_url);
+        }
+    }
+
+    let items = rows
+        .into_iter()
+        .zip(urls)
+        .map(
+            |((id, user_id, id_type, face_match_score, liveness_passed, created_at, _, _), (id_image_url, selfie_image_url))| PendingItem {
+                id,
+                user_id,
+                id_type,
+                face_match_score,
+                liveness_passed,
+                created_at,
+                id_image_url,
+                selfie_image_url,
+            },
+        )
+        .collect();
+
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + page_size - 1) / page_size
+    };
+
+    Ok(Json(PendingResponse {
+        items,
+        total,
+        page,
+        page_size,
+        total_pages,
+    }))
 }
 
 // ---- detail: decrypted PII + short-lived signed image URLs, audited ----
@@ -245,12 +339,12 @@ pub async fn review(
 
     // status guard in the WHERE clause makes the decision idempotent and
     // race-safe: two admins deciding at once — exactly one wins
-    let row: Option<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
+    let row: Option<(Uuid, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE public.kyc_submissions
             SET status = $1, reviewed_by = $2, reviewed_at = $3,
                 rejection_reason = $4, updated_at = $3
           WHERE id = $5 AND status = 'verifying'
-          RETURNING user_id, id_image_path, selfie_image_path",
+          RETURNING user_id, id_image_path, selfie_image_path, wallet_address",
     )
     .bind(status)
     .bind(admin_id)
@@ -264,15 +358,15 @@ pub async fn review(
         (StatusCode::INTERNAL_SERVER_ERROR, "Review failed")
     })?;
 
-    let (user_id, id_image_path, selfie_image_path) =
+    let (user_id, id_image_path, selfie_image_path, wallet_address) =
         row.ok_or((StatusCode::NOT_FOUND, "No pending submission with that id"))?;
 
     if approve {
-        // verified identity unlocks the account: Pending -> User. Admins keep
+        // verified identity unlocks the account: Verifying -> User. Admins keep
         // their role; the guard also stops a demotion if roles ever grow.
         sqlx::query(
             "UPDATE public.users SET role = 'User', updated_at = $1
-              WHERE id = $2 AND role = 'Pending'",
+              WHERE id = $2 AND role = 'Verifying'",
         )
         .bind(now)
         .bind(user_id)
@@ -283,6 +377,21 @@ pub async fn review(
             (StatusCode::INTERNAL_SERVER_ERROR, "Review failed")
         })?;
     } else {
+        // rejected: back to Verifying's peer state, Pending — free to resubmit.
+        // Guarded the same way so it never touches an already-promoted User/Admin.
+        sqlx::query(
+            "UPDATE public.users SET role = 'Pending', updated_at = $1
+              WHERE id = $2 AND role = 'Verifying'",
+        )
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB kyc demote: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Review failed")
+        })?;
+
         // data minimization: a rejected applicant's documents have no reason
         // to stay on file — clear the paths now, delete the objects after
         // commit (storage delete is best-effort/idempotent)
@@ -314,6 +423,36 @@ pub async fn review(
         reason,
     )
     .await;
+
+    // Best-effort: seed the reviewed wallet as this account's anchor row in
+    // the live `wallets` table (api::wallets). Deliberately outside the
+    // approval transaction and non-fatal on failure — the approval itself
+    // (status + role, already committed above) must never be blocked or
+    // rolled back by a hiccup in this side effect, same rationale as
+    // audit()'s own errors-are-logged-not-propagated policy. Failure here
+    // just means the account has no anchor wallet yet; it can still connect
+    // one from Settings once the underlying issue (e.g. a pending
+    // migration) is fixed. kyc_submissions.wallet_address itself is never
+    // touched here or anywhere else — this only ever copies it. ON CONFLICT
+    // DO NOTHING (no target) absorbs a conflict against either of that
+    // table's unique indexes: a resubmission reusing the same (user,
+    // address), or the address already being someone else's active wallet.
+    if approve && let Some(wallet_address) = &wallet_address {
+        if let Err(e) = sqlx::query(
+            "INSERT INTO public.wallets
+                (user_id, address, source, status, connected_at, created_at, updated_at)
+             VALUES ($1, $2, 'kyc_verified', 'active', $3, $3, $3)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(wallet_address)
+        .bind(now)
+        .execute(&pool)
+        .await
+        {
+            tracing::error!(%user_id, "kyc wallet seed failed: {e}");
+        }
+    }
 
     if !approve {
         for path in [id_image_path, selfie_image_path].into_iter().flatten() {

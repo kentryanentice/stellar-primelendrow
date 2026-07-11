@@ -1,0 +1,157 @@
+.admin-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    /* fills the viewport so .admin-stage below has real leftover space to
+       center browse mode's carousel into, instead of it sitting wherever its
+       own content height happens to end (i.e. pinned to the top) */
+    min-height: 100vh;
+}
+
+/* the area below the header: browse mode centers its carousel in the
+   remaining space; review mode's rail+panel already stretch to fill it
+   themselves, so no centering is applied there */
+.admin-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+
+    &.is-browse {
+        align-items: center;
+        justify-content: center;
+    }
+}
+
+.admin-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+
+    h1 {
+        margin: 0 0 4px;
+        font-family: var(--auth-font-display);
+        font-weight: 500;
+        font-size: 26px;
+        color: #eef1f6;
+    }
+
+    p {
+        margin: 0;
+        font-size: 13.5px;
+        color: #9fadc6;
+        max-width: 480px;
+    }
+}
+
+.admin-pending-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 14px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(var(--auth-primary-rgb), .14);
+    border: 1px solid rgba(var(--auth-primary-rgb), .32);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--color-accent-400);
+
+    svg { width: 15px; height: 15px; }
+}
+
+.admin-refresh {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .03);
+    color: #cfd7e6;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s ease;
+
+    &:hover:not(:disabled) { background: rgba(255, 255, 255, .07); }
+    &:disabled { opacity: .6; cursor: default; }
+
+    svg {
+        width: 15px;
+        height: 15px;
+
+        &.is-spinning { animation: admin-spin .8s linear infinite; }
+    }
+}
+
+@keyframes admin-spin {
+    to { transform: rotate(360deg); }
+}
+
+.admin-muted {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #9fadc6;
+}
+
+/* the big centered "loading…" / "couldn't load" states — a modifier on
+   .admin-muted rather than baked into it, since .admin-muted is also used
+   inline (reject-form helper text, etc.) where centering would look wrong */
+.admin-status-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 60px 0;
+    text-align: center;
+}
+
+/* same ring-spinner treatment as the sitewide .loader, sized to sit inline
+   inside a card/panel instead of taking over the full viewport */
+.admin-spinner {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 3px solid color-mix(in srgb, var(--color-accent-600), transparent 75%);
+    border-top-color: var(--color-accent-600);
+    animation: loader-spin .8s linear infinite;
+}
+
+.admin-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 70px 20px;
+    text-align: center;
+
+    .admin-muted { max-width: 320px; }
+}
+
+.admin-empty-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    background: rgba(60, 196, 90, .12);
+    color: var(--auth-success);
+
+    svg { width: 28px; height: 28px; }
+}
+
+.admin-empty-title {
+    margin: 0;
+    font-family: var(--auth-font-display);
+    font-size: 17px;
+    font-weight: 600;
+    color: #eef3ff;
+}

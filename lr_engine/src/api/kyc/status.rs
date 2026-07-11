@@ -6,7 +6,7 @@ use crate::api::users::shared::{E, require_user};
 
 #[derive(Serialize)]
 pub struct KycStatusResponse {
-    /// "none" | "pending" | "approved" | "rejected"
+    /// "none" | "verifying" | "approved" | "rejected"
     pub status: String,
     pub submitted_at: Option<i64>,
     pub reviewed_at: Option<i64>,

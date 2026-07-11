@@ -10,7 +10,7 @@ type KycStep = {
 
 const KYC_STEPS: KycStep[] = [
     { icon: IdCard, step: '01', title: 'Upload your ID', text: 'Submit a government ID and OCR extracts your details instantly.' },
-    { icon: Scan, step: '02', title: 'Live document scan', text: 'A quick camera scan cross-checks your document in real time.' },
+    { icon: Scan, step: '02', title: 'Live document scan', text: 'A quick id scan cross-checks your document in real time.' },
     { icon: Camera, step: '03', title: 'Selfie liveness', text: 'A simple blink check proves it’s really you behind the screen.' },
     { icon: Wallet, step: '04', title: 'Link your wallet', text: 'Connect your Stellar wallet for payouts and repayments.' },
     { icon: ListCheck, step: '05', title: 'Review & submit', text: 'Confirm everything in one summary and you’re verified.' },
@@ -25,7 +25,7 @@ function KycShowcase() {
                         Verified in <span>minutes,</span> not <span>days.</span>
                     </h2>
                     <p className='kyc-showcase-intro__subtitle'>
-                        Five guided steps pair OCR, live document scanning, and selfie liveness — so lenders trust exactly who they fund, without the paperwork.
+                        Five guided steps pair OCR, live document scanning, and selfie liveness, so lenders trust exactly who they fund, without the paperwork.
                     </p>
                     <Link className='kyc-showcase-intro__cta' to='/auth'>Start Verification</Link>
                 </div>

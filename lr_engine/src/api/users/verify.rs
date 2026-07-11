@@ -232,6 +232,7 @@ pub async fn verify(
             username: vc.username,
             email: p.email,
             role: role.into(),
+            created_at: now, // the row was just inserted with created_at = now above
             expires_at: now + SESSION_MAX_AGE,
         }),
     ))

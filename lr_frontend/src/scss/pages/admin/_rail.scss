@@ -1,0 +1,124 @@
+.admin-rail {
+    width: 300px;
+    flex: 0 0 300px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, .02);
+    border: 1px solid rgba(255, 255, 255, .07);
+    padding: 16px 12px;
+}
+
+.admin-rail-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--color-accent-400);
+
+    svg { width: 15px; height: 15px; }
+}
+
+.admin-rail-list {
+    flex: 1;
+    min-height: 0;
+    max-height: 600px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px;
+
+    /* themed scrollbar — --auth-primary-rgb tracks the Ocean/Forest accent
+       switch, same token the active-row highlight above already uses */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--auth-primary-rgb), .45) transparent;
+
+    &::-webkit-scrollbar { width: 6px; }
+    &::-webkit-scrollbar-track { background: transparent; }
+
+    &::-webkit-scrollbar-thumb {
+        background: rgba(var(--auth-primary-rgb), .45);
+        border-radius: 999px;
+
+        &:hover { background: rgba(var(--auth-primary-rgb), .7); }
+    }
+}
+
+.admin-rail-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 12px 10px 15px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, .06);
+    background: rgba(255, 255, 255, .02);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease;
+
+    &:hover { background: rgba(255, 255, 255, .045); }
+
+    &.is-active {
+        background: rgba(var(--auth-primary-rgb), .12);
+        border-color: rgba(var(--auth-primary-rgb), .4);
+
+        &::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 10px;
+            bottom: 10px;
+            width: 3px;
+            border-radius: 3px;
+            background: var(--auth-primary);
+        }
+    }
+}
+
+.admin-rail-avatar {
+    position: relative;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    overflow: hidden;
+    background: #0a1630;
+    display: grid;
+    place-items: center;
+
+    img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    svg { width: 18px; height: 18px; color: #2c3c60; }
+}
+
+.admin-rail-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-rail-type {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #eef3ff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.admin-rail-score {
+    flex-shrink: 0;
+    font-family: var(--auth-font-display);
+    font-weight: 700;
+    font-size: 13px;
+
+    &.is-strong { color: var(--auth-success); }
+    &.is-review { color: var(--auth-warn); }
+    &.is-low { color: var(--auth-danger); }
+}

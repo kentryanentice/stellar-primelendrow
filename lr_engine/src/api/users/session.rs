@@ -44,6 +44,17 @@ pub async fn session_handler(
     })?
     .ok_or_else(|| unauthenticated("Session expired or not found"))?;
 
+    // separate runtime-checked query (not folded into the query! above) so
+    // this needs no offline sqlx-data regeneration — display-only field
+    let created_at: i64 = sqlx::query_scalar("SELECT created_at FROM public.users WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB user created_at: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, HeaderMap::new(), "DB error")
+        })?;
+
     let mut response_headers = HeaderMap::new();
     // Reuse the caller's existing csrf token rather than minting a fresh one
     // per call: rotating here silently invalidated the in-memory token of
@@ -72,6 +83,7 @@ pub async fn session_handler(
             username: row.username,
             email: row.email,
             role: row.role,
+            created_at,
             expires_at: row.expires_at,
         }),
     ))

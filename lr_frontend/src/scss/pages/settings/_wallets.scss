@@ -1,0 +1,205 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+// A column flex container, capped, so the (active) wallet list can grow to
+// fill whatever's left after the header/add-row/etc., then scroll instead
+// of pushing the card — and by extension its grid row-partner (Identity
+// verification, via align-items: stretch) — taller without bound. Without
+// this max-height, "auto" has nothing bounded to scroll within: the list
+// would just grow to fit every wallet and drag the row taller with it.
+.settings-card-wallets {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 420px;
+}
+
+.settings-wallet-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 2px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    // fills whatever vertical space the stretched card actually has (driven
+    // by Identity verification's height); once wallets outgrow that, this
+    // scrolls internally rather than the card growing
+    flex: 1 1 auto;
+    min-height: 64px;
+
+    &.is-history {
+        flex: 0 0 auto;
+        margin-top: 10px;
+        gap: 8px;
+        // independent cap — inside a <details>, not part of the card's
+        // fill-and-scroll chain above
+        max-height: 180px;
+    }
+}
+
+.settings-wallet-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .07);
+
+    &.is-disconnected { opacity: .6; }
+}
+
+.settings-wallet-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.settings-wallet-info-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.settings-wallet-address {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e6edff;
+}
+
+.settings-wallet-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--auth-primary);
+    border: 1px solid rgba(var(--auth-primary-rgb), .35);
+    background: rgba(var(--auth-primary-rgb), .12);
+
+    svg { width: 11px; height: 11px; }
+}
+
+.settings-wallet-meta {
+    font-size: 11.5px;
+    color: #7186ad;
+}
+
+.settings-wallet-disconnect {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 9px;
+    border: 1px solid rgba(239, 93, 93, .3);
+    background: rgba(239, 93, 93, .08);
+    color: #f2a5a5;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+
+    svg { width: 13px; height: 13px; }
+
+    &:hover:not(:disabled) {
+        background: rgba(239, 93, 93, .16);
+        color: #ffc4c4;
+        border-color: rgba(239, 93, 93, .5);
+    }
+
+    &:disabled { opacity: .5; cursor: default; }
+}
+
+.settings-wallet-confirm {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #9fadc6;
+
+    button {
+        padding: 6px 11px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, .14);
+        background: rgba(255, 255, 255, .04);
+        color: #dbe4fa;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+
+        &:first-of-type {
+            border-color: rgba(239, 93, 93, .4);
+            background: rgba(239, 93, 93, .14);
+            color: #ffc4c4;
+        }
+
+        &:disabled { opacity: .5; cursor: default; }
+    }
+}
+
+.settings-wallet-add {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+
+    .settings-btn-primary { align-self: center; flex-shrink: 0; }
+}
+
+.settings-wallet-label-input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: rgba(255, 255, 255, .03);
+    color: #eef1f6;
+    font-size: 13px;
+
+    &::placeholder { color: #5f719a; }
+    &:disabled { opacity: .5; }
+}
+
+.settings-wallet-spin {
+    width: 14px;
+    height: 14px;
+    animation: settings-wallet-spin-anim 0.8s linear infinite;
+}
+
+@keyframes settings-wallet-spin-anim {
+    to { transform: rotate(360deg); }
+}
+
+.settings-wallet-limit {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--auth-warn);
+}
+
+.settings-wallet-history {
+    margin-top: 16px;
+
+    summary {
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: #7186ad;
+        list-style: none;
+
+        &::-webkit-details-marker { display: none; }
+    }
+}
+
+@include styles.respond-to(phone) {
+    .settings-wallet-row { flex-direction: column; align-items: flex-start; }
+    .settings-wallet-add { flex-direction: column; align-items: stretch; }
+}

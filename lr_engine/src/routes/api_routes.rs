@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 
-use crate::api::{credit, kyc, users};
+use crate::api::{credit, kyc, users, wallets};
 use crate::infra::rate::{RateLimiter, enforce_rate_limit};
 
 const AUTH_BODY_LIMIT: usize = 16 * 1024;
@@ -56,7 +56,23 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         )
         .route("/kyc/status", get(kyc::status))
         .route("/credit/score", get(credit::status))
-        .route("/kyc/admin/pending", get(kyc::admin_pending))
+        .route("/wallets", get(wallets::list))
+        .route(
+            "/wallets/challenge",
+            post(wallets::challenge).layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)),
+        )
+        .route(
+            "/wallets/connect",
+            post(wallets::connect).layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)),
+        )
+        .route(
+            "/wallets/disconnect",
+            post(wallets::disconnect).layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)),
+        )
+        .route(
+            "/kyc/admin/pending",
+            post(kyc::admin_pending).layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)),
+        )
         .route("/kyc/admin/submissions/{id}", get(kyc::admin_detail))
         .route(
             "/kyc/admin/review",

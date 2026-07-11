@@ -29,7 +29,7 @@ export default function BrandPanel({ busy }: BrandPanelProps) {
 
                 <div className='auth-brand-head'>
                     <h2>Capital that moves at your pace.</h2>
-                    <p>KYC, lending, borrowing, repayment, and portfolio insight — unified in one elegant workspace.</p>
+                    <p>KYC, lending, borrowing, repayment, and portfolio insight, unified in one elegant workspace.</p>
                 </div>
 
                 <div>

@@ -39,6 +39,8 @@ pub struct UserResponse {
     pub username: String,
     pub email: String,
     pub role: String,
+    /// Unix seconds — for display only ("Member since"), not used in any auth decision.
+    pub created_at: i64,
     pub expires_at: i64,
 }
 

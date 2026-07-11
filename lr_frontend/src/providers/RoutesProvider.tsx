@@ -13,6 +13,7 @@ import Landing from '../pages/Landing'
 import Auth from '../pages/Auth'
 import Dashboard from '../pages/Dashboard'
 import Settings from '../pages/Settings'
+import Admin from '../pages/Admin'
 
 // OCR/face-match SDKs are ~1.4MB — split out so only /kyc visitors pay for it
 const KYC = lazy(() => import('../pages/KYC'))
@@ -42,6 +43,7 @@ function RoutesProvider() {
                                 <Route element={<AppShellLayout />}>
                                     <Route path='/dashboard' element={<> <SEOProvider {...seoConfigTypes} /> <Dashboard /> </>} />
                                     <Route path='/settings' element={<> <SEOProvider {...seoConfigTypes} /> <Settings /> </>} />
+                                    <Route path='/admin' element={<> <SEOProvider {...seoConfigTypes} /> <Admin /> </>} />
                                     <Route path='/verification' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><KYC /></Suspense> </>} />
                                 </Route>
                                 <Route path='*' element={<Navigate to='/auth' replace />} />

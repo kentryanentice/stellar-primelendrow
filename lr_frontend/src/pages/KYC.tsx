@@ -1,4 +1,6 @@
 import { useNavigate } from 'react-router-dom'
+import { ShieldQuestion, BadgeCheck } from 'lucide-react'
+import { useSession } from '../providers/useSession'
 import useKYCFunctions from '../functions/KYC/KYCFunctions'
 import Stepper from '../elements/KYC/Stepper'
 import IdUploadStep from '../elements/KYC/IdUploadStep'
@@ -18,6 +20,7 @@ const STEP_COPY: Record<number, [string, string]> = {
 
 function KYC() {
     const navigate = useNavigate()
+    const { user } = useSession()
     const kyc = useKYCFunctions()
     const { step, canContinue, advance, back, finish, scanning, scanned, scanId, comparing, matched, compareFaces, submitting } = kyc
 
@@ -25,6 +28,35 @@ function KYC() {
         return (
             <main className='kyc'>
                 <SuccessScreen matchScore={kyc.matchScore} onDone={() => navigate('/dashboard')} />
+            </main>
+        )
+    }
+
+    // Nothing left to submit: a rejected submission is the only path back into
+    // this wizard (submit.rs blocks anything else with a 409 anyway) — this
+    // just avoids walking someone through five steps only to hit that wall.
+    if (user?.role === 'Verifying' || user?.role === 'User') {
+        const verifying = user.role === 'Verifying'
+        return (
+            <main className='kyc'>
+                <div className='kyc-guard'>
+                    <div className={`kyc-guard-icon${verifying ? ' is-verifying' : ' is-verified'}`}>
+                        {verifying ? <ShieldQuestion /> : <BadgeCheck />}
+                    </div>
+                    <h2>{verifying ? 'Verification already submitted' : 'You’re already verified'}</h2>
+                    <p>
+                        {verifying
+                            ? 'Your identity verification is under review. We’ll let you know once a decision is made — you can check the status anytime in Settings.'
+                            : 'Your identity has already been verified — there’s nothing more to do here.'}
+                    </p>
+                    <button
+                        type='button'
+                        className='kyc-btn-primary'
+                        onClick={() => navigate(verifying ? '/settings' : '/dashboard')}
+                    >
+                        {verifying ? 'Go to Settings' : 'Go to dashboard'}
+                    </button>
+                </div>
             </main>
         )
     }

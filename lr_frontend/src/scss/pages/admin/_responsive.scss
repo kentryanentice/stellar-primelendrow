@@ -1,0 +1,32 @@
+/* ---------------- responsive ---------------- */
+@media (max-width: 900px) {
+    .admin-review-layout { flex-direction: column; }
+    .admin-rail { width: 100%; flex: 0 0 auto; max-height: 220px; }
+    .admin-compare { grid-template-columns: 1fr; }
+    .admin-compare-ring-wrap { flex-direction: row; padding: 10px 0; }
+}
+
+@media (max-width: 768px) {
+    .admin-carousel { --admin-card-w: 280px; }
+    .admin-carousel-arrow { width: 38px; }
+}
+
+@media (max-width: 480px) {
+    .admin-page { padding: 20px 16px 56px; }
+    .admin-head { flex-direction: column; }
+    .admin-carousel { gap: 6px; --admin-card-w: 240px; }
+    .admin-carousel-arrow { width: 32px; }
+    .admin-card-photos { flex-direction: column; }
+    .admin-card-photo { height: 120px; }
+    .admin-signals { grid-template-columns: 1fr; }
+    .admin-detail-fields { grid-template-columns: 1fr; }
+    .admin-panel-scroll { padding: 16px; }
+    .admin-panel-head { padding: 16px 16px 0; }
+    .admin-panel-close { top: 16px; right: 16px; }
+    .admin-actions-row.is-decide .admin-btn-approve,
+    .admin-actions-row.is-decide .admin-btn-reject { flex: 1; }
+    .admin-lightbox-overlay { padding: 16px; }
+    .admin-lightbox-grid { grid-template-columns: 1fr; }
+    .admin-lightbox-figure img, .admin-lightbox-placeholder { height: 40vh; }
+    .admin-lightbox-close { top: -44px; }
+}

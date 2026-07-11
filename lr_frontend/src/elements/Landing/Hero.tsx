@@ -20,7 +20,7 @@ function Hero() {
                     <span>Capital</span> that moves at your <span>pace.</span>
                 </h1>
                 <p className='hero-content__subtitle'>
-                    KYC, lending, borrowing, repayment, and portfolio insight — unified in one elegant workspace for borrowers and lenders alike.
+                    KYC, lending, borrowing, repayment, and portfolio insight, unified in one elegant workspace for borrowers and lenders alike.
                 </p>
                 <a className='hero-content__cta' href={DOCS_URL} target='_blank' rel='noreferrer'>Read Docs</a>
             </div>

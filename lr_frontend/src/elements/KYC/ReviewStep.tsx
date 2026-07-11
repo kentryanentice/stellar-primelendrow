@@ -1,5 +1,5 @@
 import type { KYCState } from './types'
-import { truncateAddress } from '../../functions/KYC/wallet'
+import { truncateAddress } from '../../functions/Wallet/wallet'
 
 type ReviewStepProps = Pick<KYCState,
     'firstName' | 'middleName' | 'lastName' | 'idNumber' | 'dob' | 'matched' | 'matchScore' | 'walletAddress' | 'goToStep'

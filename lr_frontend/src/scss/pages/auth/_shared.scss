@@ -3,21 +3,52 @@
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* same brand backdrop as the landing page: gradient base + hero-bg texture +
+   radial glow (below), so both pages read as one continuous theme */
 .auth {
+    position: relative;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 32px;
-    background: var(--auth-page-bg);
+    background: var(--auth-brand-grad);
     color: var(--auth-ink);
     font-family: var(--auth-font-body);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
 }
 
+/* fixed to the viewport, sized to 100lvh (the *large* viewport, i.e. with the
+   mobile URL bar retracted) so the texture never gaps when the bar animates —
+   same treatment as .landing-bg, see that file for the full rationale */
+.auth-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100lvh;
+    object-fit: cover;
+    opacity: .10;
+    mix-blend-mode: screen;
+    pointer-events: none;
+}
+
+/* same glow treatment as .landing::before, above the texture and below the card */
+.auth::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(90% 60% at 75% 18%, rgba(var(--auth-primary-rgb), .32) 0%, rgba(var(--auth-primary-rgb), 0) 60%);
+}
+
 .auth-card {
     position: relative;
+    z-index: 2;
     width: 940px;
     max-width: 100%;
     height: 720px;

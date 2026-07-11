@@ -27,7 +27,7 @@ function AccessProvider({ children }: Props) {
         return <Navigate to='/dashboard' replace />
     }
 
-    if (user.role === 'User' || user.role === 'Pending') {
+    if (user.role === 'User' || user.role === 'Pending' || user.role === 'Verifying') {
         if (USER_ROUTES.some(r => pathname.startsWith(r))) return <>{children}</>
         return <Navigate to='/dashboard' replace />
     }
