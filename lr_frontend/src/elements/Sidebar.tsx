@@ -6,7 +6,7 @@ import { useSession } from '../providers/useSession'
 import { useToast } from '../providers/useToast'
 import { useCreditScore, CREDIT_SCORE_MAX } from '../functions/useCreditScore'
 
-const LOGO = '/pictures/lr.png'
+const LOGO = '/pictures/primelendrow.webp'
 /** How long the pending-status card glows after a locked nav item is clicked. */
 const STATUS_PULSE_MS = 900
 
@@ -22,9 +22,9 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutGrid, route: '/dashboard' },
-  { key: 'lend', label: 'Lend', icon: Landmark },
-  { key: 'borrow', label: 'Borrow', icon: ClipboardList },
-  { key: 'pay', label: 'Pay', icon: CreditCard },
+  { key: 'lend', label: 'Lend', icon: Landmark, route: '/lending' },
+  { key: 'borrow', label: 'Borrow', icon: ClipboardList, route: '/borrow' },
+  { key: 'pay', label: 'Pay', icon: CreditCard, route: '/pay' },
   { key: 'settings', label: 'Settings', icon: Settings, route: '/settings' },
 ]
 /** Only Admin accounts see this — spliced in right after Dashboard. */
@@ -137,8 +137,8 @@ function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
     const navItems = user?.role === 'Admin'
         ? [NAV_ITEMS[0], ADMIN_NAV_ITEM, ...NAV_ITEMS.slice(1)]
         : NAV_ITEMS
-    // the routed page drives the highlight; placeholder items (lend/borrow/pay) fall
-    // back to the last local selection since they don't navigate anywhere yet
+    // the routed page drives the highlight; `active` is only a fallback for any
+    // future placeholder item that doesn't navigate (every item routes today)
     const activeKey = navItems.find(item => item.route && pathname.startsWith(item.route))?.key ?? active
 
     useEffect(() => () => {

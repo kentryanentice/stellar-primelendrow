@@ -15,6 +15,19 @@ export default function Carousel({
     const [atStart, setAtStart] = useState(true)
     const [atEnd, setAtEnd] = useState(false)
     const [activeGroup, setActiveGroup] = useState(0)
+    // mirrors cardsPerView() into state so the dots' JSX (render) never reads
+    // trackRef directly — only updateEdges (an event/effect callback) does
+    const [perView, setPerView] = useState(3)
+
+    // how many cards the current breakpoint actually shows at once — reads
+    // `.admin-carousel`'s --admin-cards (inherited onto the track) so this
+    // stays in lockstep with `_carousel.scss`/`_responsive.scss` instead of
+    // duplicating the 3/2/1 counts as a second, driftable source of truth
+    const cardsPerView = useCallback(() => {
+        const track = trackRef.current
+        const raw = track && parseInt(getComputedStyle(track).getPropertyValue('--admin-cards'), 10)
+        return raw && raw > 0 ? raw : 3
+    }, [])
 
     // decides whether to pull in the next backend batch using the value it
     // just measured, not React state — reacting to the `atEnd` state in a
@@ -28,12 +41,14 @@ export default function Carousel({
         setAtStart(track.scrollLeft <= 1)
         setAtEnd(nowAtEnd)
 
+        const perViewNow = cardsPerView()
+        setPerView(perViewNow)
         const card = track.firstElementChild as HTMLElement | null
         const step = card ? card.offsetWidth + parseFloat(getComputedStyle(track).columnGap || '0') : 0
-        setActiveGroup(step > 0 ? Math.floor(Math.round(track.scrollLeft / step) / 3) : 0)
+        setActiveGroup(step > 0 ? Math.floor(Math.round(track.scrollLeft / step) / perViewNow) : 0)
 
         if (nowAtEnd && !queueLoadingMore && page < totalPages) loadMore()
-    }, [queueLoadingMore, page, totalPages, loadMore])
+    }, [queueLoadingMore, page, totalPages, loadMore, cardsPerView])
 
     // only snap back to the first card when the queue was actually replaced
     // (fresh load / refresh) — an appended batch (loadMore) keeps the same
@@ -56,7 +71,7 @@ export default function Carousel({
     }
 
     const goToGroup = (i: number) => {
-        const card = trackRef.current?.children[i * 3] as HTMLElement | undefined
+        const card = trackRef.current?.children[i * cardsPerView()] as HTMLElement | undefined
         card?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' })
     }
 
@@ -108,14 +123,14 @@ export default function Carousel({
                 </button>
             </div>
 
-            {queue.length > 3 && (
+            {queue.length > perView && (
                 <div className='admin-page-dots'>
-                    {Array.from({ length: Math.ceil(queue.length / 3) }, (_, i) => (
+                    {Array.from({ length: Math.ceil(queue.length / perView) }, (_, i) => (
                         <button
                             key={i}
                             type='button'
                             className={`admin-page-dot${activeGroup === i ? ' is-active' : ''}`}
-                            aria-label={`Go to cards ${i * 3 + 1}–${Math.min(i * 3 + 3, queue.length)}`}
+                            aria-label={`Go to cards ${i * perView + 1}–${Math.min(i * perView + perView, queue.length)}`}
                             aria-current={activeGroup === i}
                             onClick={() => goToGroup(i)}
                         />

@@ -3,6 +3,7 @@ type User = {
     username: string
     email: string
     role: string
+    created_at: number
     expires_at: number
 }
 

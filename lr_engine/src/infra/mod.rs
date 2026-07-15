@@ -4,5 +4,7 @@ pub mod db;
 pub mod gc;
 pub mod limiter;
 pub mod login_guard;
+pub mod paypal;
 pub mod rate;
+pub mod stellar;
 pub mod storage;

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-    ShieldCheck, ShieldQuestion, LogOut, Bubbles, Leaf,
+    ShieldCheck, ShieldQuestion, LogOut, Bubbles, Leaf, Monitor,
     BadgeCheck, CircleAlert, Gauge, Hourglass, Check, Clock, X, type LucideIcon,
 } from 'lucide-react'
 
@@ -16,7 +16,7 @@ import { useCreditScore, CREDIT_SCORE_MAX } from '../functions/useCreditScore'
 const WalletsCard = lazy(() => import('../elements/Settings/WalletsCard'))
 
 const API = import.meta.env.VITE_API_URL ?? ''
-const LOGO = '/pictures/lr.png'
+const LOGO = '/pictures/primelendrow.webp'
 /** Keeps the sign-out overlay on screen at least this long, so a fast response doesn't just flash. */
 const LOGOUT_MIN_DISPLAY_MS = 550
 
@@ -263,28 +263,66 @@ function Settings() {
             </section>
 
             {/*
-                Four cards, placed by CSS grid-area (not DOM order alone) so
-                Wallets — which only renders once scoreEligible — never
-                leaves a hole: `.has-wallets` swaps in a layout with a
-                "wallets" cell, its absence falls back to Credit spanning
-                the full left column. `align-items: stretch` (the grid
-                default) makes each row's shorter card match its partner's
-                height — Wallets/Identity in row 1, Credit/Account in row 2.
+                Four cards in DOM order — Credit, Identity, Wallets, Account —
+                laid out by `.settings-grid`'s auto-fit columns, same order the
+                mockup uses. Wallets only renders once scoreEligible; when it's
+                absent, Account simply auto-places into the row behind it
+                instead of leaving a hole. `align-items: stretch` (the grid
+                default) makes Credit/Identity/Wallets — the three cards that
+                land in row 1 — match the row's tallest card.
             */}
-            <div className={`settings-grid${scoreEligible ? ' has-wallets' : ''}`}>
-                {scoreEligible && (
-                    <Suspense fallback={
-                        <section className='settings-card settings-card-wallets'>
-                            <div className='settings-card-head'><ShieldCheck /><h2>Wallets</h2></div>
-                            <p className='settings-muted'>Loading wallets…</p>
-                        </section>
-                    }>
-                        <WalletsCard />
-                    </Suspense>
-                )}
+            <div className='settings-grid'>
+                <section className='settings-card settings-card-credit'>
+                    <div className='settings-card-head'>
+                        <span className='settings-card-icon is-accent'><Gauge /></span>
+                        <h2>Credit score</h2>
+                        {scoreEligible && creditScore && (
+                            <span className='settings-pill is-accent'>{creditTier(creditScore.score)}</span>
+                        )}
+                    </div>
+                    {!scoreEligible ? (
+                        <p className='settings-muted'>Your credit score becomes available once your identity is verified.</p>
+                    ) : creditLoading ? (
+                        <p className='settings-muted'>Loading credit score…</p>
+                    ) : creditError || !creditScore ? (
+                        <p className='settings-muted'>Couldn’t load your credit score. Please try again later.</p>
+                    ) : (
+                        <div className='settings-score'>
+                            <div className='settings-score-arc'>
+                                <svg viewBox='0 0 220 124' width='100%'>
+                                    <path d='M14,114 A96,96 0 0 1 206,114' fill='none' stroke='rgba(255,255,255,.08)' strokeWidth='15' strokeLinecap='round' />
+                                    <path
+                                        d='M14,114 A96,96 0 0 1 206,114'
+                                        fill='none'
+                                        stroke='var(--auth-primary)'
+                                        strokeWidth='15'
+                                        strokeLinecap='round'
+                                        pathLength={100}
+                                        strokeDasharray={`${(creditScore.score / CREDIT_SCORE_MAX) * 100} 100`}
+                                    />
+                                </svg>
+                                <div className='settings-score-arc-value'>
+                                    {creditScore.score}<span>/{CREDIT_SCORE_MAX}</span>
+                                    <p>{creditTier(creditScore.score).toUpperCase()}</p>
+                                </div>
+                            </div>
+                            <div className='settings-score-axis'>
+                                <span>0</span><span>Fair</span><span>Strong</span><span>{CREDIT_SCORE_MAX}</span>
+                            </div>
+                            <p className='settings-muted'>Every account starts at 50. This will move as your borrowing and repayment history grows.</p>
+                        </div>
+                    )}
+                </section>
 
                 <section className='settings-card settings-card-identity'>
-                    <div className='settings-card-head'><ShieldCheck /><h2>Identity verification</h2></div>
+                    <div className='settings-card-head'>
+                        <span className='settings-card-icon is-success'><ShieldCheck /></span>
+                        <h2>Identity verification</h2>
+                        {kyc && kyc.status !== 'none' && (() => {
+                            const meta = kycStatusMeta(kyc.status)
+                            return <span className={`settings-pill ${meta.cls}`}>{meta.label}</span>
+                        })()}
+                    </div>
                     {kycLoading ? (
                         <p className='settings-muted'>Loading verification status…</p>
                     ) : kycError || !kyc ? (
@@ -331,45 +369,36 @@ function Settings() {
                     )}
                 </section>
 
-                <section className='settings-card settings-card-credit'>
-                    <div className='settings-card-head'><Gauge /><h2>Credit score</h2></div>
-                    {!scoreEligible ? (
-                        <p className='settings-muted'>Your credit score becomes available once your identity is verified.</p>
-                    ) : creditLoading ? (
-                        <p className='settings-muted'>Loading credit score…</p>
-                    ) : creditError || !creditScore ? (
-                        <p className='settings-muted'>Couldn’t load your credit score. Please try again later.</p>
-                    ) : (
-                        <div className='settings-score'>
-                            <div className='settings-score-arc'>
-                                <svg viewBox='0 0 220 124' width='100%'>
-                                    <path d='M14,114 A96,96 0 0 1 206,114' fill='none' stroke='rgba(255,255,255,.08)' strokeWidth='15' strokeLinecap='round' />
-                                    <path
-                                        d='M14,114 A96,96 0 0 1 206,114'
-                                        fill='none'
-                                        stroke='var(--auth-primary)'
-                                        strokeWidth='15'
-                                        strokeLinecap='round'
-                                        pathLength={100}
-                                        strokeDasharray={`${(creditScore.score / CREDIT_SCORE_MAX) * 100} 100`}
-                                    />
-                                </svg>
-                                <div className='settings-score-arc-value'>
-                                    {creditScore.score}<span>/{CREDIT_SCORE_MAX}</span>
-                                    <p>{creditTier(creditScore.score).toUpperCase()}</p>
-                                </div>
+                {scoreEligible && (
+                    <Suspense fallback={
+                        <section className='settings-card settings-card-wallets'>
+                            <div className='settings-card-head'>
+                                <span className='settings-card-icon is-accent'><ShieldCheck /></span>
+                                <h2>Wallets</h2>
                             </div>
-                            <div className='settings-score-axis'>
-                                <span>0</span><span>Fair</span><span>Strong</span><span>{CREDIT_SCORE_MAX}</span>
-                            </div>
-                            <p className='settings-muted'>Every account starts at 50. This will move as your borrowing and repayment history grows.</p>
-                        </div>
-                    )}
-                </section>
+                            <p className='settings-muted'>Loading wallets…</p>
+                        </section>
+                    }>
+                        <WalletsCard />
+                    </Suspense>
+                )}
 
                 <section className='settings-card settings-card-account'>
-                    <div className='settings-card-head'><LogOut /><h2>Account</h2></div>
-                    <p className='settings-muted'>Sign out of PrimeLendRow on this device.</p>
+                    <div className='settings-card-head'>
+                        <span className='settings-card-icon is-muted'><LogOut /></span>
+                        <h2>Account</h2>
+                    </div>
+
+                    <div className='settings-device-row'>
+                        <span className='settings-device-icon'><Monitor /></span>
+                        <div className='settings-device-body'>
+                            <p className='settings-device-title'>This device</p>
+                            <p className='settings-device-meta'>Signed in · Active now</p>
+                        </div>
+                        <span className='settings-device-dot' aria-hidden='true' />
+                    </div>
+
+                    <p className='settings-muted'>Sign out of PrimeLendRow on this device. Your connected wallets stay linked.</p>
                     <button type='button' className='settings-signout' onClick={() => setConfirming(true)}>
                         <LogOut /> Sign out
                     </button>

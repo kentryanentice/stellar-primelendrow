@@ -6,10 +6,13 @@ use axum::{
     routing::{get, post},
 };
 
-use crate::api::{credit, kyc, users, wallets};
+use crate::api::{credit, kyc, lending, users, wallets};
 use crate::infra::rate::{RateLimiter, enforce_rate_limit};
 
 const AUTH_BODY_LIMIT: usize = 16 * 1024;
+/// Lending mutations are small JSON bodies (an order id, an amount, up to
+/// three guarantor asks) — same ceiling as the auth endpoints.
+const LENDING_BODY_LIMIT: usize = 16 * 1024;
 /// Two base64 images at up to 8MB decoded each (~11MB encoded), plus fields.
 const KYC_BODY_LIMIT: usize = 24 * 1024 * 1024;
 
@@ -56,6 +59,50 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         )
         .route("/kyc/status", get(kyc::status))
         .route("/credit/score", get(credit::status))
+        .route("/pool", get(lending::pool_summary))
+        .route(
+            "/pool/deposit",
+            post(lending::deposit).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/pool/withdraw",
+            post(lending::withdraw).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/pool/deposits",
+            post(lending::deposits_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route("/loans", get(lending::loans_list))
+        .route(
+            "/loans/history",
+            post(lending::loans_history).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/loans/payments",
+            post(lending::payments_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route("/loans/quote", get(lending::loan_quote))
+        .route(
+            "/loans/apply",
+            post(lending::apply).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/loans/repay",
+            post(lending::repay).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/collateral/confirm",
+            post(lending::collateral_confirm).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route("/guarantors/invites", get(lending::guarantor_invites))
+        .route(
+            "/guarantors/respond",
+            post(lending::guarantor_respond).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/fx-rate",
+            post(lending::set_fx_rate).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/wallets", get(wallets::list))
         .route(
             "/wallets/challenge",

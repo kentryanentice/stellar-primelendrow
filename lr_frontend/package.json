@@ -14,6 +14,7 @@
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.5.0",
     "@stellar/freighter-api": "^6.0.1",
+    "@stellar/stellar-sdk": "^16.0.1",
     "@vladmandic/face-api": "^1.7.15",
     "@vladmandic/human": "^3.3.6",
     "lucide-react": "^1.22.0",

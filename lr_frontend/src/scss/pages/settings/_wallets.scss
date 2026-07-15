@@ -3,10 +3,11 @@
 
 // A column flex container, capped, so the (active) wallet list can grow to
 // fill whatever's left after the header/add-row/etc., then scroll instead
-// of pushing the card — and by extension its grid row-partner (Identity
-// verification, via align-items: stretch) — taller without bound. Without
-// this max-height, "auto" has nothing bounded to scroll within: the list
-// would just grow to fit every wallet and drag the row taller with it.
+// of pushing the card — and by extension its grid row-partners (Credit
+// score / Identity verification, via align-items: stretch) — taller
+// without bound. Without this max-height, "auto" has nothing bounded to
+// scroll within: the list would just grow to fit every wallet and drag
+// the row taller with it.
 .settings-card-wallets {
     display: flex;
     flex-direction: column;
@@ -23,8 +24,8 @@
     gap: 10px;
     overflow-y: auto;
     // fills whatever vertical space the stretched card actually has (driven
-    // by Identity verification's height); once wallets outgrow that, this
-    // scrolls internally rather than the card growing
+    // by its row-partners' height); once wallets outgrow that, this scrolls
+    // internally rather than the card growing
     flex: 1 1 auto;
     min-height: 64px;
 
@@ -58,18 +59,32 @@
     min-width: 0;
 }
 
+// Address alone on its own line so it never has to share room with the
+// badge — that's what used to force a wrap and made this card taller than
+// its Credit score / Identity verification row-mates. The badge now lives
+// in `.settings-wallet-meta-row` below, where a wrap costs a few px of
+// small text instead of a whole extra address line.
 .settings-wallet-info-top {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .settings-wallet-address {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px;
     font-weight: 600;
     color: #e6edff;
+}
+
+.settings-wallet-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .settings-wallet-badge {

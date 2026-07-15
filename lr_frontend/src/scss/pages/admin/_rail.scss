@@ -122,3 +122,12 @@
     &.is-review { color: var(--auth-warn); }
     &.is-low { color: var(--auth-danger); }
 }
+
+.admin-rail-loading-more {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 4px;
+    flex-shrink: 0;
+
+    .admin-spinner { width: 18px; height: 18px; border-width: 2px; }
+}

@@ -39,7 +39,11 @@ export default function WalletsCard() {
 
     return (
         <section className='settings-card settings-card-wallets'>
-            <div className='settings-card-head'><WalletIcon /><h2>Wallets</h2></div>
+            <div className='settings-card-head'>
+                <span className='settings-card-icon is-accent'><WalletIcon /></span>
+                <h2>Wallets</h2>
+                <span className='settings-pill is-muted'>{active.length} connected</span>
+            </div>
 
             {loading ? (
                 <p className='settings-muted'>Loading wallets…</p>
@@ -56,13 +60,15 @@ export default function WalletsCard() {
                                     <div className='settings-wallet-info'>
                                         <div className='settings-wallet-info-top'>
                                             <span className='settings-wallet-address' title={w.address}>{truncateAddress(w.address)}</span>
+                                        </div>
+                                        <div className='settings-wallet-meta-row'>
                                             {w.source === 'kyc_verified' && (
                                                 <span className='settings-wallet-badge'><ShieldCheck /> KYC verified</span>
                                             )}
+                                            <span className='settings-wallet-meta'>
+                                                {w.label ? `${w.label} · ` : ''}Connected {formatConnected(w.connected_at)}
+                                            </span>
                                         </div>
-                                        <span className='settings-wallet-meta'>
-                                            {w.label ? `${w.label} · ` : ''}Connected {formatConnected(w.connected_at)}
-                                        </span>
                                     </div>
                                     {confirmingId === w.id ? (
                                         <div className='settings-wallet-confirm'>
@@ -115,13 +121,15 @@ export default function WalletsCard() {
                                         <div className='settings-wallet-info'>
                                             <div className='settings-wallet-info-top'>
                                                 <span className='settings-wallet-address' title={w.address}>{truncateAddress(w.address)}</span>
+                                            </div>
+                                            <div className='settings-wallet-meta-row'>
                                                 {w.source === 'kyc_verified' && (
                                                     <span className='settings-wallet-badge'><ShieldCheck /> KYC verified</span>
                                                 )}
+                                                <span className='settings-wallet-meta'>
+                                                    {w.label ? `${w.label} · ` : ''}Disconnected {w.disconnected_at ? formatConnected(w.disconnected_at) : ''}
+                                                </span>
                                             </div>
-                                            <span className='settings-wallet-meta'>
-                                                {w.label ? `${w.label} · ` : ''}Disconnected {w.disconnected_at ? formatConnected(w.disconnected_at) : ''}
-                                            </span>
                                         </div>
                                     </li>
                                 ))}

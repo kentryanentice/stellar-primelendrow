@@ -7,8 +7,8 @@ interface Props {
 }
 
 const PUBLIC_ROUTES = ['/', '/auth']
-const ADMIN_ROUTES = ['/dashboard', '/admin', '/settings']
-const USER_ROUTES = ['/dashboard', '/settings', '/verification']
+const ADMIN_ROUTES = ['/dashboard', '/admin', '/settings', '/lending', '/borrow', '/pay']
+const USER_ROUTES = ['/dashboard', '/settings', '/verification', '/lending', '/borrow', '/pay']
 
 function AccessProvider({ children }: Props) {
     const { loading, user } = useSession()

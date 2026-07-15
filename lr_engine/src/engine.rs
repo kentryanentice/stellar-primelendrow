@@ -81,6 +81,19 @@ async fn main() {
         );
     }
 
+    // Lending rails fail closed the same way KYC storage does: unconfigured
+    // means refused, not degraded — these warnings are the operator's heads-up.
+    if !infra::paypal::is_configured() {
+        tracing::warn!(
+            "PAYPAL_CLIENT_ID / PAYPAL_SECRET not set; pool deposits and loan repayments will be refused"
+        );
+    }
+    if infra::stellar::contract_id().is_none() {
+        tracing::warn!(
+            "COLLATERAL_CONTRACT_ID not set; XLM-collateral loans will be refused"
+        );
+    }
+
     // Cloud Run always sets K_SERVICE, and there the TCP peer is the platform
     // front end — without the proxy-hop config every per-IP protection keys on
     // that one shared address (rate limits collapse, and the per-(IP, email)

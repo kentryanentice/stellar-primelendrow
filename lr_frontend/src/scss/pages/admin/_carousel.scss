@@ -1,8 +1,10 @@
 .admin-carousel {
-    /* single source of truth for card width — the track's 3-card viewport
-       and each card's own size both read from this, so the two breakpoint
-       overrides below stay in sync automatically */
+    /* single source of truth for card width and how many fit on screen at
+       once — the track's viewport width and Carousel.tsx's pagination
+       (dots / goToGroup, read via getComputedStyle) both derive from these,
+       so the breakpoint overrides below stay in sync everywhere automatically */
     --admin-card-w: 320px;
+    --admin-cards: 3;
 
     display: flex;
     align-items: stretch;
@@ -36,11 +38,11 @@
 }
 
 .admin-carousel-track {
-    /* capped to exactly 3 cards — extra cards in the loaded page overflow
-       and are reached by scrolling (chevrons step one card at a time), not
-       by stretching the viewport to show a sliver of the next one */
+    /* capped to exactly --admin-cards cards — extra cards in the loaded page
+       overflow and are reached by scrolling (chevrons step one card at a
+       time), not by stretching the viewport to show a sliver of the next one */
     flex: 0 1 auto;
-    max-width: calc(var(--admin-card-w) * 3 + 40px);
+    max-width: calc(var(--admin-card-w) * var(--admin-cards) + (var(--admin-cards) - 1) * 20px);
     min-width: 0;
     display: flex;
     /* no justify-content: center — with fewer than 3 cards the track already

@@ -7,14 +7,14 @@
 }
 
 @media (max-width: 768px) {
-    .admin-carousel { --admin-card-w: 280px; }
+    .admin-carousel { --admin-card-w: 280px; --admin-cards: 2; }
     .admin-carousel-arrow { width: 38px; }
 }
 
 @media (max-width: 480px) {
     .admin-page { padding: 20px 16px 56px; }
     .admin-head { flex-direction: column; }
-    .admin-carousel { gap: 6px; --admin-card-w: 240px; }
+    .admin-carousel { gap: 6px; --admin-card-w: 240px; --admin-cards: 1; }
     .admin-carousel-arrow { width: 32px; }
     .admin-card-photos { flex-direction: column; }
     .admin-card-photo { height: 120px; }

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ShieldIcon, StarIcon } from './icons'
 
-const LOGO = '/pictures/lr.png'
+const LOGO = '/pictures/primelendrow.webp'
 const PROFILE = '/pictures/profile.png'
 
 interface BrandPanelProps {
@@ -35,7 +35,7 @@ export default function BrandPanel({ busy }: BrandPanelProps) {
                 <div>
                     <div className='auth-quote'>
                         <div className='auth-stars'>{Array.from({ length: 5 }, (_, i) => <StarIcon key={i} />)}</div>
-                        <p>"."</p>
+                        <p>"Invisible Effort"</p>
                         <div className='auth-quote-author'>
                             <img className='auth-avatar' src={PROFILE} alt='Kent' />
                             <div>

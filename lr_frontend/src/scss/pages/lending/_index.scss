@@ -1,0 +1,952 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+/* Lending page — same visual language as the Settings cards (panel bg, hairline
+   top sheen, muted secondary text), with lending-specific pieces: the
+   utilization bar, the rate table, lot badges, the schedule table. */
+
+.lending-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.lending-head {
+    margin-bottom: 4px;
+
+    h1 {
+        margin: 0 0 4px;
+        font-family: var(--auth-font-display);
+        font-weight: 500;
+        font-size: 26px;
+        color: #eef1f6;
+    }
+
+    p {
+        margin: 0;
+        font-size: 13.5px;
+        color: #9fadc6;
+    }
+}
+
+/* Lending page only: the header row also carries the active-loans pill on the
+   right, so title+subtitle need a wrapper div to stay one flex item — plain
+   .lending-head (Borrow/Pay) is unaffected since these rules only apply with
+   this modifier present. */
+.lending-head-with-pill {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+/* .lending-head p (0,1,1) would otherwise beat a bare .lending-eyebrow
+   (0,1,0) whenever the eyebrow is itself a <p> inside .lending-head */
+.lending-head .lending-eyebrow {
+    margin: 0 0 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--auth-primary);
+}
+
+.lending-active-pill {
+    flex-shrink: 0;
+}
+
+/* the two-card-stacks-side-by-side layout: Pool overview + Rate tiers on the
+   left, Manage funds + Your deposits on the right */
+.lending-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    align-items: start;
+}
+
+.lending-column {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+}
+
+.lending-muted {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #9fadc6;
+
+    b { color: #dfe6f2; font-weight: 600; }
+    svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+}
+
+.lending-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
+    align-items: start;
+}
+
+.lending-card {
+    position: relative;
+    padding: 20px;
+    border-radius: 20px;
+    background: var(--auth-panel-bg);
+    border: 1px solid rgba(255, 255, 255, .08);
+    box-shadow: 0 20px 50px -34px rgba(0, 0, 0, .6);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+
+    &::before {
+        content: '';
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .18), transparent);
+        pointer-events: none;
+    }
+}
+
+.lending-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    h2 {
+        margin: 0;
+        font-size: 15.5px;
+        font-weight: 600;
+        color: #eef1f6;
+        flex: 1;
+    }
+}
+
+.lending-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    flex-shrink: 0;
+
+    svg { width: 18px; height: 18px; }
+
+    &.is-accent {
+        background: color-mix(in srgb, var(--auth-primary) 16%, transparent);
+        color: var(--auth-primary);
+    }
+}
+
+.lending-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+
+    svg { width: 12px; height: 12px; }
+
+    &.is-accent {
+        background: color-mix(in srgb, var(--auth-primary) 14%, transparent);
+        color: var(--auth-primary);
+    }
+
+    &.is-warn {
+        background: rgba(245, 185, 66, .12);
+        color: #f5b942;
+    }
+}
+
+/* ---- inputs & buttons ---- */
+
+.lending-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #c3cede;
+
+    svg { width: 14px; height: 14px; color: var(--auth-primary); }
+    b { color: #eef1f6; }
+}
+
+.lending-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: rgba(255, 255, 255, .04);
+    color: #eef1f6;
+    font-size: 13.5px;
+
+    &:focus {
+        outline: none;
+        border-color: var(--auth-primary);
+    }
+
+    &::placeholder { color: #66748d; }
+}
+
+select.lending-input option {
+    background: #141a26;
+    color: #eef1f6;
+}
+
+.lending-btn,
+.lending-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+
+    svg { width: 15px; height: 15px; }
+
+    &:disabled {
+        opacity: .5;
+        cursor: not-allowed;
+    }
+}
+
+.lending-btn {
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .05);
+    color: #dfe6f2;
+
+    &:hover:not(:disabled) { background: rgba(255, 255, 255, .09); }
+}
+
+.lending-btn-primary {
+    border: 0;
+    background: var(--auth-primary-grad);
+    color: #fff;
+
+    &:hover:not(:disabled) { filter: brightness(1.08); }
+}
+
+.lending-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: transparent;
+    color: #9fadc6;
+    cursor: pointer;
+    flex-shrink: 0;
+
+    svg { width: 15px; height: 15px; }
+
+    &:hover { color: #ff7d7d; border-color: rgba(255, 125, 125, .4); }
+}
+
+.lending-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.lending-field-error {
+    margin: 0;
+    font-size: 12.5px;
+    color: #ff8f8f;
+}
+
+/* ---- pool card ---- */
+
+.lending-pool-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+}
+
+.lending-stat-label {
+    display: block;
+    font-size: 11.5px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #8492ac;
+    margin-bottom: 3px;
+}
+
+.lending-stat-value {
+    display: block;
+    font-size: 19px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+
+    &.is-good { color: #6fd99a; }
+}
+
+.lending-utilization {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.lending-utilization-track {
+    height: 9px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .07);
+    overflow: hidden;
+}
+
+.lending-utilization-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--auth-primary-grad);
+    transition: width .4s ease;
+}
+
+.lending-rates-title {
+    margin: 0 0 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #c3cede;
+
+    i { font-style: normal; color: var(--auth-primary); }
+}
+
+.lending-rates-scroll,
+.lending-schedule-scroll {
+    overflow-x: auto;
+}
+
+.lending-rates-table,
+.lending-schedule {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+
+    th {
+        text-align: left;
+        padding: 6px 10px;
+        font-size: 11px;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+        color: #8492ac;
+        border-bottom: 1px solid rgba(255, 255, 255, .08);
+        white-space: nowrap;
+    }
+
+    td {
+        padding: 7px 10px;
+        color: #dfe6f2;
+        border-bottom: 1px solid rgba(255, 255, 255, .05);
+        white-space: nowrap;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+}
+
+.lending-rates-table tr.is-mine td {
+    background: color-mix(in srgb, var(--auth-primary) 10%, transparent);
+    color: #eef1f6;
+    font-weight: 600;
+}
+
+.lending-you-badge {
+    margin-left: 8px;
+    padding: 2px 8px;
+    font-size: 10px;
+}
+
+.lending-schedule tr.is-paid td {
+    color: #6fd99a;
+}
+
+/* ---- my funds ---- */
+
+.lending-funds-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+}
+
+.lending-funds-tile {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .06);
+
+    &.is-good {
+        background: rgba(111, 217, 154, .08);
+        border-color: rgba(111, 217, 154, .25);
+    }
+
+    /* the Pay page's "due now" callout — stronger than .is-good since this
+       is the one number on the card that wants the eye first */
+    &.is-highlight {
+        background: color-mix(in srgb, var(--auth-primary) 30%, var(--auth-panel-bg));
+        border-color: color-mix(in srgb, var(--auth-primary) 45%, transparent);
+
+        .lending-stat-label { color: rgba(255, 255, 255, .7); }
+        .lending-stat-value { color: #fff; }
+    }
+}
+
+.lending-locked-breakdown {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Your deposits: prev/next between pages of the fixed-size server list */
+.lending-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+}
+
+.lending-pager-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: rgba(255, 255, 255, .03);
+    color: #c3cede;
+    cursor: pointer;
+    flex-shrink: 0;
+
+    svg { width: 15px; height: 15px; }
+
+    &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, .07);
+        border-color: var(--auth-primary);
+        color: #eef1f6;
+    }
+
+    &:disabled { opacity: .4; cursor: not-allowed; }
+}
+
+.lending-funds-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+
+.lending-action {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+}
+
+.lending-paypal {
+    min-height: 42px;
+
+    &.is-disabled {
+        opacity: .45;
+        pointer-events: none;
+    }
+}
+
+/* one page's worth of lots (fixed server-side page size — see
+   deposits_list.rs) — no inner scroll/max-height needed since the pager
+   below keeps each page short */
+.lending-lots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.lending-lot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .06);
+}
+
+.lending-lot-amount {
+    font-size: 13px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+    flex: 1;
+}
+
+.lending-lot-badge {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+
+    &.is-available { background: rgba(111, 217, 154, .13); color: #6fd99a; }
+    &.is-lent { background: rgba(245, 185, 66, .13); color: #f5b942; }
+    &.is-collateral { background: rgba(122, 162, 255, .13); color: #7aa2ff; }
+    &.is-pledged { background: rgba(216, 130, 255, .13); color: #d882ff; }
+}
+
+.lending-lot-date {
+    font-size: 11.5px;
+    color: #8492ac;
+    white-space: nowrap;
+}
+
+/* ---- borrow ---- */
+
+.lending-product-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+}
+
+.lending-product {
+    padding: 9px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: rgba(255, 255, 255, .03);
+    color: #c3cede;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+
+    &.is-selected {
+        border-color: var(--auth-primary);
+        background: color-mix(in srgb, var(--auth-primary) 12%, transparent);
+        color: #eef1f6;
+    }
+}
+
+/* the two headline numbers (rate / max) — same tile look ManageFundsCard
+   uses for Withdrawable/Locked, reused here for Interest rate/Max borrow */
+.lending-quote-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+}
+
+.lending-borrow-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.lending-quote {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 13px 14px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--auth-primary) 30%, transparent);
+    background: color-mix(in srgb, var(--auth-primary) 6%, transparent);
+}
+
+.lending-quote-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    color: #9fadc6;
+
+    b {
+        color: #eef1f6;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.lending-guarantor-asks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.lending-guarantor-row {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr auto;
+    gap: 8px;
+}
+
+.lending-btn-add {
+    align-self: flex-start;
+    padding: 8px 14px;
+}
+
+.lending-consent {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #9fadc6;
+    cursor: pointer;
+
+    input {
+        margin-top: 2px;
+        width: 15px;
+        height: 15px;
+        accent-color: var(--auth-primary);
+        flex-shrink: 0;
+        cursor: pointer;
+    }
+}
+
+/* ---- eligibility (Borrow page) ---- */
+
+/* the "hero" card: a stronger accent tint than the rest of the dark panels
+   so it reads as its own callout, same tokens (--auth-primary) as everywhere
+   else — Ocean/Forest still applies, this just isn't a neutral panel */
+.lending-card-eligibility {
+    background: color-mix(in srgb, var(--auth-primary) 14%, var(--auth-panel-bg));
+    border-color: color-mix(in srgb, var(--auth-primary) 35%, transparent);
+}
+
+.lending-eligibility-score {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.lending-eligibility-score-value {
+    font-family: var(--auth-font-display);
+    font-size: 34px;
+    font-weight: 700;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.lending-eligibility-score-max {
+    font-size: 13px;
+    color: rgba(255, 255, 255, .65);
+}
+
+.lending-eligibility-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, .12);
+}
+
+/* ---- loans ---- */
+
+.lending-loans,
+.lending-invites {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.lending-loan {
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+    overflow: hidden;
+}
+
+.lending-loan-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 13px 14px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+
+    > svg { width: 16px; height: 16px; color: #8492ac; flex-shrink: 0; }
+}
+
+.lending-loan-title {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    b {
+        font-size: 14.5px;
+        color: #eef1f6;
+        font-variant-numeric: tabular-nums;
+    }
+
+    span {
+        font-size: 12px;
+        color: #8492ac;
+    }
+}
+
+.lending-loan-status {
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+
+    &.is-pending { background: rgba(245, 185, 66, .13); color: #f5b942; }
+    &.is-active { background: rgba(122, 162, 255, .13); color: #7aa2ff; }
+    &.is-closed { background: rgba(111, 217, 154, .13); color: #6fd99a; }
+    &.is-defaulted,
+    &.is-declined { background: rgba(255, 125, 125, .13); color: #ff8f8f; }
+}
+
+.lending-loan-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 0 14px 14px;
+    border-top: 1px solid rgba(255, 255, 255, .06);
+    padding-top: 12px;
+}
+
+.lending-liquidation {
+    color: #ff8f8f;
+
+    svg { color: #ff8f8f; }
+}
+
+.lending-repay {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+/* Pay page: the "Payment method" identity row above the real PayPal button.
+   Purely informational framing — the interactive control below it is
+   PayPal's own hosted Buttons SDK (PayPalButton.tsx), never re-skinned, since
+   only PayPal's own SDK should render PayPal-branded UI. */
+.lending-payment-method {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--auth-primary) 30%, transparent);
+    background: color-mix(in srgb, var(--auth-primary) 6%, transparent);
+}
+
+.lending-payment-method-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    background: color-mix(in srgb, var(--auth-primary) 16%, transparent);
+    color: var(--auth-primary);
+
+    svg { width: 16px; height: 16px; }
+}
+
+.lending-payment-method-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+
+    b { font-size: 13.5px; color: #eef1f6; }
+    span { font-size: 12px; color: #9fadc6; }
+}
+
+.lending-payment-method-check {
+    width: 16px;
+    height: 16px;
+    color: #6fd99a;
+    flex-shrink: 0;
+}
+
+/* Pay page / Borrow page: "You're all paid up" / eventual empty states,
+   same shape as admin's .admin-empty but on lending's own tokens */
+.lending-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 50px 20px;
+    text-align: center;
+
+    .lending-muted { max-width: 320px; }
+}
+
+.lending-empty-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    background: rgba(111, 217, 154, .12);
+    color: #6fd99a;
+
+    svg { width: 26px; height: 26px; }
+}
+
+.lending-empty-title {
+    margin: 0;
+    font-family: var(--auth-font-display);
+    font-size: 17px;
+    font-weight: 600;
+    color: #eef1f6;
+}
+
+/* Pay page: payment history as a list of rows (not a table) — icon, amount +
+   date, principal/interest split trailing right */
+.lending-payment-history {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.lending-payment-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+}
+
+.lending-payment-row-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    flex-shrink: 0;
+    background: rgba(111, 217, 154, .13);
+    color: #6fd99a;
+
+    svg { width: 14px; height: 14px; }
+}
+
+.lending-payment-row-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    b { font-size: 13.5px; color: #eef1f6; font-variant-numeric: tabular-nums; }
+    span { font-size: 11.5px; color: #8492ac; }
+}
+
+.lending-payment-row-split {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    font-size: 11.5px;
+    color: #9fadc6;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+
+    .is-interest { color: #f5b942; }
+}
+
+/* routes to the Pay page — the actual repay flow lives there now, not inline */
+.lending-loan-pay {
+    align-self: flex-start;
+}
+
+/* Pay page: the loan header row — mirrors .lending-loan-summary (principal +
+   product·rate·term on the left, status pill on the right) but isn't a
+   collapsible button; the schedule and pay controls are always shown below it */
+.lending-pay-loan {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 14px;
+}
+
+/* ---- guarantor invites ---- */
+
+.lending-invite {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 13px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+}
+
+.lending-invite-title {
+    margin: 0 0 3px;
+    font-size: 13.5px;
+    color: #dfe6f2;
+
+    b { color: #eef1f6; }
+}
+
+.lending-invite-warning {
+    margin: 6px 0 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #f5b942;
+
+    b { color: #ffce7a; }
+}
+
+.lending-invite-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ---- responsive ---- */
+
+@media (max-width: 900px) {
+    .lending-columns { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+    .lending-page { padding: 24px 14px 56px; }
+    .lending-head-with-pill { flex-direction: column; }
+    .lending-borrow-form { grid-template-columns: 1fr; }
+    .lending-guarantor-row { grid-template-columns: 1fr; }
+    .lending-invite-actions { flex-direction: column; }
+}
