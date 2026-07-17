@@ -9,10 +9,10 @@ crate-type = ["cdylib", "lib"]
 doctest = false
 
 [dependencies]
-soroban-sdk = "23"
+soroban-sdk = "27"
 
 [dev-dependencies]
-soroban-sdk = { version = "23", features = ["testutils"] }
+soroban-sdk = { version = "27", features = ["testutils"] }
 
 # Standard Soroban release profile: tiny, deterministic wasm with overflow
 # checks kept ON — this contract holds user funds, a silent wrap is not

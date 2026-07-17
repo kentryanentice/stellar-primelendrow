@@ -12,9 +12,11 @@ depositor recorded at lock time; the admin cannot redirect it.
 cargo test
 ```
 
+Tests live in `src/test.rs` (kept out of `lib.rs`).
+
 (The lockfile pins the transitive `ed25519-dalek` at 2.2.0 — 3.0.0 breaks
 `soroban-env-host`'s testutils. Don't `cargo update` it past 2.x until
-upstream catches up.)
+upstream catches up. Still required on soroban-sdk 27.)
 
 ## Build & deploy (testnet)
 
