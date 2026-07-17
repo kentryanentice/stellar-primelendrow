@@ -34,9 +34,9 @@ so the records never disagree with each other.
         (notebook + books)            │         │                via lr-mailer Worker
                                       │         │
                      Stellar network ◀┘         └▶ PayPal API  (fiat deposit / repay rail)
-             · Horizon (tx verify)
-             · Soroban collateral_vault (XLM lock)
-             · SHA-256 event anchoring
+             · Horizon (tx verify + anchoring)
+             · Soroban: collateral_vault (XLM custody)
+                        deposit · loan · payment registries (on-chain records)
 
         Supabase Storage ◀── lr-cdn Worker ── private ID photos (HMAC-signed URLs)
 ```
@@ -48,7 +48,8 @@ so the records never disagree with each other.
 | `lr_frontend` | The web app ("the window") — renders state, runs KYC capture, signs Stellar transactions | React 19, Vite, TypeScript (React Compiler), SCSS |
 | `lr_engine` | The backend ("the brain") — all business rules, money math, and persistence | Rust, Axum, SQLx → PostgreSQL |
 | `lr_api` | MongoDB Atlas port of the identity/auth + KYC layer (same design, document store) | Rust, Axum, MongoDB |
-| `lr_contracts/collateral_vault` | Soroban smart contract holding XLM collateral, keyed by loan id | Rust, `soroban-sdk` |
+| `lr_contracts/collateral_vault` | Soroban contract holding XLM collateral, keyed by loan id | Rust, `soroban-sdk` 27 |
+| `lr_contracts/{deposit,loan,payment}_registry` | Soroban contracts recording deposits, loans, and payments on-chain — tamper-evident mirrors of the ledger | Rust, `soroban-sdk` 27 |
 | `lr-mailer` | Edge Worker that sends transactional email (OTP, resets) via Resend | Cloudflare Worker, TypeScript |
 | `lr-cdn` | Edge Worker proxying Supabase Storage for private ID photos with caching | Cloudflare Worker, TypeScript |
 
@@ -74,7 +75,11 @@ lr_engine/       Rust engine — the primary backend
   src/infra/       database, storage, mailer client, crypto helpers
   src/migrations/  the SQL schema, 001 … 024 (applied in order)
 lr_api/          Rust engine — MongoDB Atlas port of the auth + KYC layer
-lr_contracts/    Soroban contracts — collateral_vault (XLM lock)
+lr_contracts/    Soroban contracts (soroban-sdk 27):
+  collateral_vault    XLM collateral custody (lock / release / seize)
+  deposit_registry    on-chain deposit records (badged lots)
+  loan_registry       on-chain loan records (status lifecycle)
+  payment_registry    on-chain repayment records (append-only)
 lr-mailer/       Cloudflare Worker — Resend email sender
 lr-cdn/          Cloudflare Worker — Supabase Storage proxy for ID photos
 ```
@@ -274,14 +279,28 @@ in a fixed order and never reaches ordinary savers' deposits:
 
 After liquidation the loan is `Closed` and credit penalties are applied.
 
-### 5.10 Stellar anchoring → README §12
+### 5.10 On-chain record registries & anchoring → README §12
 
-Financial events (deposit, withdrawal, loan creation, repayment, closure,
-collateral lock/release, default) are anchored on Stellar as tamper-evidence.
-The engine builds a canonical payload for the event, hashes it with **SHA-256**,
-and submits that hash in a Stellar transaction; the confirmation is recorded
-against the event. **Only the cryptographic proof is anchored** — no personal
-data, KYC documents, ID numbers, or facial images ever go on-chain.
+Beyond the vault's custody role, three Soroban **record registries** mirror the
+engine's ledger tables on-chain, so the life of every deposit, loan, and payment
+is auditable on a ledger nobody can rewrite:
+
+| Registry | Mirrors | Records |
+|---|---|---|
+| `deposit_registry` | `deposits` | deposit lots and their badge (available / lent / collateral / pledged / withdrawn), with the badge ↔ backing-loan invariant enforced on-chain |
+| `loan_registry` | `loans` | loan terms and status lifecycle, with `rate_bps` and policy version **pinned at birth** and **one open loan per borrower** |
+| `payment_registry` | `loan_payments` | captured repayments — **append-only** and **deduplicated by PayPal capture id** so a resent callback can't double-log |
+
+They share the vault's trust model: **only the engine's Stellar account can
+write; reads are open.** Amounts are whole centavos and records are keyed by the
+same UUIDs Postgres uses, so a row and its on-chain twin always line up. Each
+registry write is itself a Stellar transaction, so every record carries an
+on-chain proof — and **only financial facts and their proofs are anchored**; no
+personal data, KYC documents, ID numbers, or facial images ever go on-chain.
+
+The registries are deployed as standalone contracts; wiring the engine to write
+to them inside each Postgres transaction (via the `*_REGISTRY_CONTRACT_ID`
+settings) is the remaining integration step.
 
 ---
 
@@ -299,7 +318,9 @@ data, KYC documents, ID numbers, or facial images ever go on-chain.
   never publicly listable.
 - **On-chain custody** — the vault is backend-gated: `release`/`seize` are
   admin-only and the release destination is fixed at lock time, so funds can
-  enter permissionlessly but only leave under engine authority.
+  enter permissionlessly but only leave under engine authority. The record
+  registries are likewise admin-gated — only the engine's account can write,
+  anyone may read.
 - **Server-side authority** — every rule (eligibility, limits, money math) is
   enforced in the engine; the frontend cannot grant itself capability it wasn't
   given.
@@ -312,7 +333,7 @@ data, KYC documents, ID numbers, or facial images ever go on-chain.
 |---|---|---|
 | **PayPal** | Fiat rail for deposits and repayments | Backend verifies orders/captures over HTTPS (`reqwest`) before posting to the ledger |
 | **Stellar Horizon** | Verifying on-chain locks; anchoring | Engine reads transactions to confirm a `lock` before disbursing, and submits anchoring transactions |
-| **Soroban** | XLM collateral custody | `collateral_vault` contract (§5.7) |
+| **Soroban** | XLM collateral custody + on-chain records | `collateral_vault` (§5.7) and the deposit/loan/payment registries (§5.10) |
 | **Resend** (via `lr-mailer`) | Transactional email (OTP, resets) | Engine calls the Worker at `stellar.mailer.primelendrow.com` |
 | **Supabase Storage** (via `lr-cdn`) | Private ID photo hosting | Worker at `cdn.primelendrow.com` proxies the bucket with edge caching |
 
@@ -328,8 +349,9 @@ data, KYC documents, ID numbers, or facial images ever go on-chain.
   `001`–`024` in `src/migrations/`.
 - **`lr_api`** — the same auth/KYC layer against **MongoDB Atlas**, for
   document-store deployments.
-- **Contracts** — `collateral_vault` compiled to Wasm and deployed to Soroban;
-  its admin is the engine's own Stellar account.
+- **Contracts** — the four Soroban contracts (`collateral_vault` and the
+  deposit/loan/payment registries) compiled to Wasm with `soroban-sdk` 27 and
+  deployed to Soroban; each is admin-owned by the engine's own Stellar account.
 - **Edge Workers** — `lr-mailer` and `lr-cdn` deployed with Wrangler, each bound
   to its own custom domain so it can only ever serve its intended Worker.
 
