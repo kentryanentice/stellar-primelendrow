@@ -18,6 +18,22 @@ const STATUS_LABEL: Record<string, string> = {
 function GuarantorCard({ onChanged }: { onChanged: () => void }) {
     const { invites, loading, error, respond, respondingId } = useGuarantorInvites(onChanged)
 
+    // Quiet footer treatment when there's truly nothing to review — the
+    // moment there's a real invite (or the fetch is loading/failed), this
+    // opens back up into the full card below with its header, count pill,
+    // and the actionable list.
+    if (!loading && !error && invites.length === 0) {
+        return (
+            <div className='lending-guarantor-empty'>
+                <span className='lending-guarantor-empty-icon'><Users aria-hidden='true' /></span>
+                <p className='lending-muted'>
+                    No guarantee requests yet. When someone asks you to guarantee a loan, you’ll decide here —
+                    accepting locks part of your deposit for their loan.
+                </p>
+            </div>
+        )
+    }
+
     return (
         <section className='lending-card lending-card-guarantor'>
             <div className='lending-card-head'>
@@ -32,11 +48,6 @@ function GuarantorCard({ onChanged }: { onChanged: () => void }) {
                 <p className='lending-muted'>Loading invitations…</p>
             ) : error ? (
                 <p className='lending-muted'>Couldn’t load invitations. Please try again later.</p>
-            ) : invites.length === 0 ? (
-                <p className='lending-muted'>
-                    Nobody has asked you to guarantee a loan yet. When someone does, you’ll decide here —
-                    accepting locks part of your deposit for their loan.
-                </p>
             ) : (
                 <ul className='lending-invites'>
                     {invites.map(invite => (

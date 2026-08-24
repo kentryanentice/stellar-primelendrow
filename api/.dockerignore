@@ -1,0 +1,10 @@
+# Never bake secrets into image layers — Cloud Run injects env vars at deploy.
+.env
+.env.*
+env.yaml
+
+# Build/context noise
+target/
+.git/
+Dockerfile
+.dockerignore

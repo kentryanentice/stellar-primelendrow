@@ -14,6 +14,28 @@
     gap: 18px;
 }
 
+/* ---- skeleton loading ---- */
+/* Shared bone for the Lending/Borrow/Pay loading states (SkeletonBone).
+   Sizing is per-instance (inline width/height) — this class only supplies
+   the look, so a skeleton page composes bones directly inside the same
+   layout classes the loaded page uses, and matches its dimensions by
+   construction rather than by hand-measured pixel values. */
+@keyframes lending-skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .45; }
+}
+
+.skeleton {
+    display: inline-block;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, .08);
+    animation: lending-skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton { animation: none; opacity: .7; }
+}
+
 .lending-head {
     margin-bottom: 4px;
 
@@ -73,6 +95,68 @@
     flex-direction: column;
     gap: 18px;
     min-width: 0;
+}
+
+/* Lending page only: sticky money rail on the left (balance + deposit/
+   withdraw, always in reach), ledger-dominant content on the right. Distinct
+   from .lending-columns above (which Borrow/Pay also use for their own
+   two-column layouts) — this pair is never touched by those pages. */
+.lending-rail-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+}
+
+.lending-rail {
+    width: 360px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.lending-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+/* Borrow page only: a wider sticky sidebar (credit + open loan + lifetime
+   stats) than Lending's money rail — its own pair rather than widening
+   .lending-rail, which Lending.tsx still depends on at 360px. */
+.lending-borrow-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+}
+
+.lending-borrow-sidebar {
+    width: 400px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.lending-borrow-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.lending-rail-note {
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+
+    b { color: #dfe6f2; }
 }
 
 .lending-muted {
@@ -279,6 +363,15 @@ select.lending-input option {
     gap: 12px;
 }
 
+/* Pool overview as four standalone tiles (no enclosing card) above the tier
+   and ledger cards — reuses .lending-funds-tile's look for the individual
+   tile, but its own grid wrapper so Pay's .lending-funds-grid is untouched. */
+.lending-pool-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+}
+
 .lending-stat-label {
     display: block;
     font-size: 11.5px;
@@ -296,6 +389,29 @@ select.lending-input option {
     font-variant-numeric: tabular-nums;
 
     &.is-good { color: #6fd99a; }
+    &.is-warn { color: #f5b942; }
+}
+
+/* the "Pool working" tile's inline bar — same fraction PoolOverviewCard
+   already clamps for the value text, just also drawn as a track+fill */
+.lending-pool-working {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.lending-pool-working-track {
+    flex: 1;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, .08);
+    overflow: hidden;
+}
+
+.lending-pool-working-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: #6fd99a;
 }
 
 .lending-utilization {
@@ -316,6 +432,53 @@ select.lending-input option {
     border-radius: 999px;
     background: var(--auth-primary-grad);
     transition: width .4s ease;
+}
+
+/* the collapsed "your tier" summary row RateTiersCard shows before the
+   caller expands the full bands table */
+.lending-tier-summary {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.lending-tier-summary-score {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.lending-tier-summary-band {
+    font-size: 15px;
+    font-weight: 600;
+    color: #eef1f6;
+}
+
+.lending-tier-summary-divider {
+    width: 1px;
+    align-self: stretch;
+    background: rgba(255, 255, 255, .1);
+}
+
+.lending-tier-summary-stats {
+    display: flex;
+    gap: 26px;
+    flex: 1;
+    flex-wrap: wrap;
+
+    > div {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+}
+
+.lending-tier-toggle {
+    margin-left: auto;
+    white-space: nowrap;
+
+    svg { width: 14px; height: 14px; }
 }
 
 .lending-rates-title {
@@ -376,7 +539,135 @@ select.lending-input option {
     color: #6fd99a;
 }
 
-/* ---- my funds ---- */
+/* ---- my funds (sidebar money rail) ---- */
+
+/* the primary-action card in the sticky rail — same mild accent lift
+   .lending-card-eligibility uses, just subtler since this isn't a hero
+   celebration moment, only "the important card" */
+.lending-card-funds {
+    background: color-mix(in srgb, var(--auth-primary) 8%, var(--auth-panel-bg));
+    border-color: color-mix(in srgb, var(--auth-primary) 22%, transparent);
+}
+
+.lending-rail-balance {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+
+.lending-rail-balance-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.lending-rail-balance-value {
+    font-family: var(--auth-font-display);
+    font-size: 32px;
+    font-weight: 700;
+    color: #6fd99a;
+    letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums;
+}
+
+.lending-rail-secondary {
+    display: flex;
+    flex-direction: column;
+
+    > div {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 11px 0;
+        border-top: 1px solid rgba(255, 255, 255, .08);
+        font-size: 13px;
+
+        span:first-child { color: #9fadc6; }
+        span:last-child { color: #dfe6f2; font-weight: 600; font-variant-numeric: tabular-nums; }
+    }
+}
+
+.lending-tab-group {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .08);
+}
+
+.lending-tab {
+    flex: 1;
+    border: none;
+    cursor: pointer;
+    padding: 9px;
+    border-radius: 7px;
+    background: transparent;
+    color: #9fadc6;
+    font-size: 13.5px;
+    font-weight: 600;
+    transition: background .15s ease, color .15s ease;
+
+    &:hover { color: #dfe6f2; }
+
+    &.is-active {
+        background: var(--auth-primary-grad);
+        color: #fff;
+    }
+}
+
+.lending-rail-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.lending-rail-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: rgba(255, 255, 255, .04);
+
+    &:focus-within { border-color: var(--auth-primary); }
+
+    > span:first-child { font-size: 16px; color: #66748d; }
+
+    input {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: 14px 0;
+        color: #eef1f6;
+        font-size: 19px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+
+        &::placeholder { color: #4c5975; font-weight: 400; }
+    }
+}
+
+.lending-rail-max {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--auth-primary);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    padding: 6px 4px;
+
+    &:hover:not(:disabled) { color: #dfe6f2; }
+    &:disabled { opacity: .4; cursor: not-allowed; }
+}
 
 .lending-funds-grid {
     display: grid;
@@ -520,7 +811,271 @@ select.lending-input option {
     white-space: nowrap;
 }
 
+.lending-ledger-count {
+    white-space: nowrap;
+}
+
+/* "Your deposits" as a ledger table — same lot data/pager as before, in
+   Amount / Status / Deposited columns instead of stacked badge rows. */
+.lending-ledger-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+
+    th {
+        text-align: left;
+        padding: 8px 12px;
+        font-size: 11px;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+        color: #8492ac;
+        border-bottom: 1px solid rgba(255, 255, 255, .08);
+        white-space: nowrap;
+    }
+
+    td {
+        padding: 10px 12px;
+        color: #dfe6f2;
+        border-bottom: 1px solid rgba(255, 255, 255, .05);
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    th:last-child, td:last-child { text-align: right; color: #8492ac; font-size: 12.5px; }
+}
+
+.lending-ledger-amount {
+    font-weight: 700;
+    color: #eef1f6;
+}
+
 /* ---- borrow ---- */
+
+/* the sidebar's open-loan callout (OpenLoanCard) — a loan blocking new
+   applications is the one thing on this page that isn't just informational,
+   so it gets the amber "pay attention" treatment other warn-toned pieces
+   already use elsewhere in this file. */
+.lending-open-loan {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px;
+    border-radius: 14px;
+    background: rgba(224, 176, 96, .07);
+    border: 1px solid rgba(224, 176, 96, .28);
+}
+
+.lending-open-loan-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #eef1f6;
+}
+
+.lending-open-loan-next {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(224, 176, 96, .18);
+}
+
+.lending-open-loan-amount {
+    font-family: var(--auth-font-display);
+    font-size: 26px;
+    font-weight: 700;
+    color: #eef1f6;
+    letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums;
+}
+
+.lending-open-loan-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(224, 176, 96, .18);
+
+    > div {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12.5px;
+
+        span:first-child { color: #9fadc6; }
+        span:last-child { color: #dfe6f2; font-weight: 600; font-variant-numeric: tabular-nums; }
+    }
+}
+
+.lending-open-loan-toggle {
+    align-self: center;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #9fadc6;
+    font-size: 12px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px;
+
+    svg { width: 13px; height: 13px; }
+
+    &:hover { color: #dfe6f2; }
+}
+
+/* the caller's all-time borrowing record — quiet card, no icon, sits below
+   the open-loan callout; renders only once there's at least one loan ever
+   (see Borrow.tsx), so a first-time borrower isn't shown all-zero stats */
+.lending-lifetime-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .025);
+    border: 1px solid rgba(255, 255, 255, .06);
+}
+
+.lending-lifetime-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.lending-lifetime-pill {
+    padding: 7px 11px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .07);
+    color: #9fadc6;
+
+    &.is-good { color: #6fd99a; background: rgba(111, 217, 154, .1); border-color: rgba(111, 217, 154, .22); }
+    &.is-warn { color: #f5b942; background: rgba(245, 185, 66, .1); border-color: rgba(245, 185, 66, .22); }
+}
+
+/* banner surfacing quote.eligible===false (an open loan blocking every
+   product) right under the header — earlier than the old inline per-product
+   error, which only appeared once the user had already started filling the
+   form in. Amber rather than .lending-field-error's red: nothing was
+   submitted wrong, this is "not yet," not an error. */
+.lending-borrow-blocked {
+    margin: 0;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: rgba(224, 176, 96, .08);
+    border: 1px solid rgba(224, 176, 96, .3);
+    color: #e0b060;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.lending-locked-badge {
+    display: inline-block;
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid rgba(224, 176, 96, .4);
+    color: #e0b060;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+/* three product tiles with a live rate + cap preview each, replacing the
+   plain label-only picker below (kept, unused — see .lending-product) */
+.lending-product-tiles {
+    display: flex;
+    gap: 12px;
+}
+
+.lending-product-tile {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, .1);
+    background: rgba(255, 255, 255, .03);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+
+    &:hover { border-color: rgba(255, 255, 255, .22); }
+
+    &.is-selected {
+        border-color: var(--auth-primary);
+        background: color-mix(in srgb, var(--auth-primary) 10%, transparent);
+
+        &::after {
+            content: '';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--auth-primary);
+        }
+    }
+}
+
+.lending-product-tile-label {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #eef1f6;
+}
+
+.lending-product-tile-rate {
+    font-family: var(--auth-font-display);
+    font-size: 19px;
+    font-weight: 700;
+    color: #6fd99a;
+}
+
+/* the apply card's two-column split: fields+consent+submit on the left,
+   a compact quote panel on the right, divided the same way the pool
+   overview card's stat groups are elsewhere on Lending */
+.lending-borrow-split {
+    display: flex;
+    gap: 24px;
+}
+
+.lending-borrow-fields {
+    flex: 1.2;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.lending-borrow-quotepanel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 24px;
+    border-left: 1px solid rgba(255, 255, 255, .08);
+    min-width: 0;
+}
+
+.lending-quote-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* the quote panel's Rate row highlighted the way ManageFundsCard already
+   highlights its "good" figures elsewhere */
+.lending-quote-row b.is-good { color: #6fd99a; }
 
 .lending-product-picker {
     display: grid;
@@ -628,6 +1183,13 @@ select.lending-input option {
 .lending-card-eligibility {
     background: color-mix(in srgb, var(--auth-primary) 14%, var(--auth-panel-bg));
     border-color: color-mix(in srgb, var(--auth-primary) 35%, transparent);
+}
+
+.lending-eligibility-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .lending-eligibility-score {
@@ -904,6 +1466,29 @@ select.lending-input option {
 
 /* ---- guarantor invites ---- */
 
+/* the quiet "nothing to review" footer, sat directly under the deposits
+   ledger — the moment there's a real invite (or the fetch errors/loads),
+   GuarantorCard renders its full card instead of this. */
+.lending-guarantor-empty {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 4px 0;
+}
+
+.lending-guarantor-empty-icon {
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--auth-primary) 14%, transparent);
+    color: var(--auth-primary);
+
+    svg { width: 15px; height: 15px; }
+}
+
 .lending-invite {
     display: flex;
     flex-direction: column;
@@ -941,6 +1526,10 @@ select.lending-input option {
 
 @media (max-width: 900px) {
     .lending-columns { grid-template-columns: 1fr; }
+    .lending-rail-layout { flex-direction: column; }
+    .lending-rail { width: 100%; position: static; }
+    .lending-borrow-layout { flex-direction: column; }
+    .lending-borrow-sidebar { width: 100%; position: static; }
 }
 
 @media (max-width: 560px) {
@@ -949,4 +1538,8 @@ select.lending-input option {
     .lending-borrow-form { grid-template-columns: 1fr; }
     .lending-guarantor-row { grid-template-columns: 1fr; }
     .lending-invite-actions { flex-direction: column; }
+    .lending-tier-summary-stats { gap: 16px; }
+    .lending-product-tiles { flex-direction: column; }
+    .lending-borrow-split { flex-direction: column; }
+    .lending-borrow-quotepanel { padding-left: 0; padding-top: 16px; border-left: 0; border-top: 1px solid rgba(255, 255, 255, .08); }
 }

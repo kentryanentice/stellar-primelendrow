@@ -1,52 +1,41 @@
-import { ShieldCheck } from 'lucide-react'
 import { CREDIT_SCORE_MAX } from '../../functions/useCreditScore'
-import { pesos, rate } from '../../functions/Lending/money'
+import { pesosCompact, rate } from '../../functions/Lending/money'
 import type { PoolResponse } from '../../functions/Lending/types'
-import type { BorrowFormState } from '../../functions/Lending/useBorrowForm'
 
 /**
- * The caller's live eligibility for whichever product is selected in the
- * apply form next to it: score against the band ladder, tier, and — once a
- * quote has come back — that product's rate and cap, verbatim from the
- * engine (same `form` the BorrowCard renders, so the two never disagree).
+ * The caller's credit standing: score against the band ladder, tier, and —
+ * if there's a next tier to reach — what repaying on time unlocks. The
+ * product-specific rate/cap preview used to be duplicated here too, but
+ * that's exactly what BorrowCard's own quote tiles already show, so it
+ * isn't repeated.
  */
-function EligibilityCard({ data, form }: { data: PoolResponse; form: BorrowFormState }) {
+function EligibilityCard({ data }: { data: PoolResponse }) {
     const { me, params } = data
     const bands = params.policy.bands
     const tierIndex = bands.findIndex(b => me.score >= b.min_score && me.score <= b.max_score)
     const band = tierIndex >= 0 ? bands[tierIndex] : null
-    const { productQuote } = form
+    const nextBand = tierIndex >= 0 && tierIndex + 1 < bands.length ? bands[tierIndex + 1] : null
 
     return (
         <section className='lending-card lending-card-eligibility'>
-            <div className='lending-card-head'>
-                <span className='lending-card-icon is-accent'><ShieldCheck /></span>
-                <h2>Your eligibility</h2>
-                {band && <span className='lending-pill is-accent'>Tier {tierIndex + 1}</span>}
-            </div>
-
-            <div className='lending-eligibility-score'>
-                <span className='lending-eligibility-score-value'>{me.score}</span>
-                <span className='lending-eligibility-score-max'>
-                    / {CREDIT_SCORE_MAX}{band && <> · band {band.min_score}–{band.max_score}</>}
-                </span>
+            <div className='lending-eligibility-head'>
+                <div>
+                    <span className='lending-stat-label'>Credit score</span>
+                    <div className='lending-eligibility-score'>
+                        <span className='lending-eligibility-score-value'>{me.score}</span>
+                        <span className='lending-eligibility-score-max'>/ {CREDIT_SCORE_MAX}</span>
+                    </div>
+                </div>
+                {band && <span className='lending-pill is-accent'>Tier {tierIndex + 1} · Band {band.min_score}–{band.max_score}</span>}
             </div>
             <div className='lending-utilization-track'>
                 <div className='lending-utilization-fill' style={{ width: `${Math.min(100, (me.score / CREDIT_SCORE_MAX) * 100)}%` }} />
             </div>
-
-            {/* no .lending-quote box here — the whole card already carries the
-                accent treatment, so a second nested box would double up */}
-            <div className='lending-eligibility-rows'>
-                <div className='lending-quote-row'>
-                    <span>Rate for this product</span>
-                    <b>{productQuote ? rate(productQuote.rate_bps) : '—'}</b>
-                </div>
-                <div className='lending-quote-row'>
-                    <span>Max you can borrow</span>
-                    <b>{productQuote ? pesos(productQuote.max_amount) : '—'}</b>
-                </div>
-            </div>
+            {nextBand && (
+                <p className='lending-muted'>
+                    Repay on time to reach band {nextBand.min_score}–{nextBand.max_score}: {pesosCompact(nextBand.cap)} cap at {rate(nextBand.secured_bps)}.
+                </p>
+            )}
         </section>
     )
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ClipboardList, CircleCheckBig, Wallet, Check } from 'lucide-react'
 import { formatDate, pesos, rate } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import { RepayCardBody } from './PaySkeleton'
 
 // Lazy so the page shell (and the summary/history cards next to it) paint
 // before the PayPal SDK bootstrap loads.
@@ -63,7 +64,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
             </div>
 
             {loading ? (
-                <p className='lending-muted'>Loading your loan…</p>
+                <RepayCardBody />
             ) : error ? (
                 <p className='lending-muted'>Couldn’t load your loan. Please try again later.</p>
             ) : !activeLoan ? (

@@ -1,19 +1,22 @@
 import { X, CheckCircle, XCircle, User, Maximize2 } from 'lucide-react'
 import type { AdminState } from './types'
-import { idTypeLabel, formatDate, scoreVerdict, REJECT_PRESETS } from '../../functions/Admin/AdminFunctions'
+import { idTypeLabel, formatDate, scoreVerdict } from '../../functions/Admin/AdminFunctions'
 import { truncateAddress } from '../../functions/Wallet/wallet'
 import ImageLightbox from './ImageLightbox'
+import ConfirmDecisionModal from './ConfirmDecisionModal'
 
 type ReviewPanelProps = Pick<AdminState,
     'detail' | 'detailLoading' | 'detailError' | 'closeReview' |
     'lightboxOpen' | 'openLightbox' | 'closeLightbox' |
-    'rejecting' | 'setRejecting' | 'reason' | 'setReason' | 'deciding' | 'decide'
+    'rejecting' | 'setRejecting' | 'reason' | 'setReason' | 'deciding' | 'decide' |
+    'confirmingApprove' | 'openApproveConfirm' | 'closeApproveConfirm' | 'closeRejectConfirm'
 >
 
 export default function ReviewPanel({
     detail, detailLoading, detailError, closeReview,
     lightboxOpen, openLightbox, closeLightbox,
     rejecting, setRejecting, reason, setReason, deciding, decide,
+    confirmingApprove, openApproveConfirm, closeApproveConfirm, closeRejectConfirm,
 }: ReviewPanelProps) {
     return (
         <div className='admin-panel'>
@@ -131,58 +134,21 @@ export default function ReviewPanel({
                     </div>
 
                     <div className='admin-panel-actions'>
-                        {!rejecting ? (
-                            <div className='admin-actions-row is-decide'>
-                                <button type='button' className='admin-btn-approve' disabled={deciding} onClick={() => decide('approve')}>
-                                    <CheckCircle /> Approve
-                                </button>
-                                <button type='button' className='admin-btn-reject' disabled={deciding} onClick={() => setRejecting(true)}>
-                                    <XCircle /> Reject
-                                </button>
-                            </div>
-                        ) : (
-                            <div className='admin-reject-form'>
-                                <p className='admin-muted'>Select a reason for rejecting this submission. This is recorded and sent to the applicant.</p>
-                                <div className='admin-reject-presets'>
-                                    {REJECT_PRESETS.map(preset => (
-                                        <button
-                                            key={preset}
-                                            type='button'
-                                            className={`admin-reject-preset${reason === preset ? ' is-active' : ''}`}
-                                            onClick={() => setReason(preset)}
-                                        >
-                                            {preset}
-                                        </button>
-                                    ))}
-                                </div>
-                                <textarea
-                                    value={reason}
-                                    onChange={e => setReason(e.target.value)}
-                                    placeholder='Add a note explaining the rejection…'
-                                    maxLength={500}
-                                />
-                                <div className='admin-actions-row'>
-                                    <button
-                                        type='button'
-                                        className='admin-btn-ghost'
-                                        disabled={deciding}
-                                        onClick={() => { setRejecting(false); setReason('') }}
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type='button'
-                                        className='admin-btn-reject'
-                                        disabled={deciding || !reason.trim()}
-                                        onClick={() => decide('reject')}
-                                    >
-                                        <XCircle /> Confirm rejection
-                                    </button>
-                                </div>
-                            </div>
-                        )}
+                        <div className='admin-actions-row is-decide'>
+                            <button type='button' className='admin-btn-approve' disabled={deciding} onClick={openApproveConfirm}>
+                                <CheckCircle /> Approve
+                            </button>
+                            <button type='button' className='admin-btn-reject' disabled={deciding} onClick={() => setRejecting(true)}>
+                                <XCircle /> Reject
+                            </button>
+                        </div>
                     </div>
 
+                    <ConfirmDecisionModal
+                        detail={detail} deciding={deciding} decide={decide}
+                        confirmingApprove={confirmingApprove} closeApproveConfirm={closeApproveConfirm}
+                        rejecting={rejecting} closeRejectConfirm={closeRejectConfirm} reason={reason} setReason={setReason}
+                    />
                     <ImageLightbox detail={detail} lightboxOpen={lightboxOpen} closeLightbox={closeLightbox} />
                 </>
             )}

@@ -1,20 +1,25 @@
 import { useState } from 'react'
-import { PiggyBank, Lock, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react'
+import { Lock } from 'lucide-react'
 import useMyFunds from '../../functions/Lending/useMyFunds'
 import { parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
 import type { PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
 
+type Tab = 'deposit' | 'withdraw'
+
 /**
- * The caller's money in the pool: withdrawable vs. locked, deposit via
- * PayPal, and withdraw of whatever is still wearing the 'available' badge.
- * The lot-by-lot breakdown lives next to this in its own card
- * (YourDepositsCard) — split out so each card answers one question.
+ * The sidebar money rail: the caller's balance at a glance (withdrawable /
+ * locked / total deposited), then one active form at a time — a Deposit tab
+ * and a Withdraw tab, rather than both forms shown together — so there's
+ * always exactly one clear action in front of the user. The lot-by-lot
+ * breakdown lives in its own card in the main column (YourDepositsCard);
+ * this card only answers "what can I do with my money right now."
  */
 function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: () => void }) {
     const { me, params } = data
     const { confirmDeposit, confirming, withdraw, withdrawing } = useMyFunds(onChanged)
 
+    const [tab, setTab] = useState<Tab>('deposit')
     const [depositInput, setDepositInput] = useState('')
     const [withdrawInput, setWithdrawInput] = useState('')
 
@@ -24,22 +29,26 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const withdrawTooBig = withdrawCentavos !== null && withdrawCentavos > me.available
 
     const locked = me.lent + me.collateral + me.pledged
+    const totalDeposited = me.available + locked
 
     return (
         <section className='lending-card lending-card-funds'>
-            <div className='lending-card-head'>
-                <span className='lending-card-icon is-accent'><PiggyBank /></span>
-                <h2>Manage funds</h2>
+            <div className='lending-rail-balance'>
+                <span className='lending-stat-label'>Your balance</span>
+                <div className='lending-rail-balance-row'>
+                    <span className='lending-rail-balance-value'>{pesos(me.available)}</span>
+                    <span className='lending-muted'>withdrawable</span>
+                </div>
             </div>
 
-            <div className='lending-funds-grid'>
-                <div className='lending-funds-tile is-good'>
-                    <span className='lending-stat-label'>Withdrawable</span>
-                    <span className='lending-stat-value is-good'>{pesos(me.available)}</span>
+            <div className='lending-rail-secondary'>
+                <div>
+                    <span className='lending-muted'>Locked in loans</span>
+                    <span>{pesos(locked)}</span>
                 </div>
-                <div className='lending-funds-tile'>
-                    <span className='lending-stat-label'>Locked</span>
-                    <span className='lending-stat-value'>{pesos(locked)}</span>
+                <div>
+                    <span className='lending-muted'>Total deposited</span>
+                    <span>{pesos(totalDeposited)}</span>
                 </div>
             </div>
 
@@ -54,24 +63,32 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                 </p>
             )}
 
-            <div className='lending-funds-actions'>
-                <div className='lending-action'>
-                    <label className='lending-label' htmlFor='lending-deposit-amount'>
-                        <ArrowDownToLine /> Deposit to pool
-                    </label>
-                    <input
-                        id='lending-deposit-amount'
-                        className='lending-input'
-                        inputMode='decimal'
-                        placeholder={`Min ${pesos(params.policy.min_deposit)}`}
-                        value={depositInput}
-                        onChange={e => setDepositInput(e.target.value)}
-                        disabled={confirming}
-                    />
+            <div className='lending-tab-group'>
+                <button type='button' className={`lending-tab${tab === 'deposit' ? ' is-active' : ''}`} onClick={() => setTab('deposit')}>
+                    Deposit
+                </button>
+                <button type='button' className={`lending-tab${tab === 'withdraw' ? ' is-active' : ''}`} onClick={() => setTab('withdraw')}>
+                    Withdraw
+                </button>
+            </div>
+
+            {tab === 'deposit' ? (
+                <div className='lending-rail-form'>
+                    <div className='lending-rail-input'>
+                        <span>₱</span>
+                        <input
+                            inputMode='decimal'
+                            placeholder='0.00'
+                            value={depositInput}
+                            onChange={e => setDepositInput(e.target.value)}
+                            disabled={confirming}
+                            aria-label='Deposit amount'
+                        />
+                    </div>
                     {depositTooSmall ? (
                         <p className='lending-field-error'>Minimum deposit is {pesos(params.policy.min_deposit)}.</p>
                     ) : (
-                        <p className='lending-muted'>Added to the community pool</p>
+                        <p className='lending-muted'>Minimum {pesos(params.policy.min_deposit)} · funds are lent out as borrowers request</p>
                     )}
                     <PayPalButton
                         amountCentavos={depositTooSmall ? null : depositCentavos}
@@ -83,20 +100,27 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     />
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}
                 </div>
-
-                <div className='lending-action'>
-                    <label className='lending-label' htmlFor='lending-withdraw-amount'>
-                        <ArrowUpFromLine /> Withdraw
-                    </label>
-                    <input
-                        id='lending-withdraw-amount'
-                        className='lending-input'
-                        inputMode='decimal'
-                        placeholder={`Up to ${pesos(me.available)}`}
-                        value={withdrawInput}
-                        onChange={e => setWithdrawInput(e.target.value)}
-                        disabled={withdrawing}
-                    />
+            ) : (
+                <div className='lending-rail-form'>
+                    <div className='lending-rail-input'>
+                        <span>₱</span>
+                        <input
+                            inputMode='decimal'
+                            placeholder='0.00'
+                            value={withdrawInput}
+                            onChange={e => setWithdrawInput(e.target.value)}
+                            disabled={withdrawing}
+                            aria-label='Withdraw amount'
+                        />
+                        <button
+                            type='button'
+                            className='lending-rail-max'
+                            disabled={withdrawing || me.available <= 0}
+                            onClick={() => setWithdrawInput((me.available / 100).toFixed(2))}
+                        >
+                            Max
+                        </button>
+                    </div>
                     {withdrawTooBig ? (
                         <p className='lending-field-error'>Only {pesos(me.available)} of your deposit is withdrawable right now.</p>
                     ) : (
@@ -104,17 +128,17 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     )}
                     <button
                         type='button'
-                        className='lending-btn'
+                        className='lending-btn-primary'
                         disabled={!withdrawCentavos || withdrawTooBig || withdrawing}
                         onClick={async () => {
                             if (!withdrawCentavos) return
                             if (await withdraw(withdrawCentavos)) setWithdrawInput('')
                         }}
                     >
-                        {withdrawing ? 'Withdrawing…' : 'Withdraw'}
+                        {withdrawing ? 'Withdrawing…' : 'Withdraw to wallet'}
                     </button>
                 </div>
-            </div>
+            )}
         </section>
     )
 }

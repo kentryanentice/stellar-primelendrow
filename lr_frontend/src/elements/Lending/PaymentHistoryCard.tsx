@@ -1,6 +1,7 @@
 import { Receipt, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import type usePayments from '../../functions/Lending/usePayments'
 import { formatDate, pesos } from '../../functions/Lending/money'
+import { PaymentRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 /**
  * The caller's payments, one page at a time (POST /loans/payments) — each
@@ -19,7 +20,12 @@ function PaymentHistoryCard({ payments }: { payments: ReturnType<typeof usePayme
             </div>
 
             {loading ? (
-                <p className='lending-muted'>Loading your payments…</p>
+                <>
+                    <ul className='lending-payment-history' aria-hidden='true'>
+                        <PaymentRowsSkeleton />
+                    </ul>
+                    {totalPages > 1 && <PagerSkeleton />}
+                </>
             ) : error ? (
                 <p className='lending-muted'>Couldn’t load your payment history. Please try again later.</p>
             ) : total === 0 ? (

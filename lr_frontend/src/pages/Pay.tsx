@@ -3,20 +3,12 @@ import useLendingPool from '../functions/Lending/useLendingPool'
 import useLoans from '../functions/Lending/useLoans'
 import usePayments from '../functions/Lending/usePayments'
 import PaymentSummaryCard from '../elements/Lending/PaymentSummaryCard'
+import PaySkeleton, { RepayCardSkeleton, PaymentHistoryCardSkeleton } from '../elements/Lending/PaySkeleton'
 
 // RepayCard pulls the wallet-adjacent PayPal SDK bootstrap — lazy so the page
 // shell (and the summary/history cards) paint first.
 const RepayCard = lazy(() => import('../elements/Lending/RepayCard'))
 const PaymentHistoryCard = lazy(() => import('../elements/Lending/PaymentHistoryCard'))
-
-function CardFallback({ title }: { title: string }) {
-    return (
-        <section className='lending-card'>
-            <div className='lending-card-head'><h2>{title}</h2></div>
-            <p className='lending-muted'>Loading…</p>
-        </section>
-    )
-}
 
 /**
  * The Pay page: settle the next installment on the caller's one open loan
@@ -46,9 +38,7 @@ function Pay() {
             </header>
 
             {poolLoading ? (
-                <section className='lending-card'>
-                    <p className='lending-muted'>Loading…</p>
-                </section>
+                <PaySkeleton />
             ) : poolError || !data ? (
                 <section className='lending-card'>
                     <p className='lending-muted'>Couldn’t load the pool. Please try again later.</p>
@@ -57,7 +47,7 @@ function Pay() {
             ) : (
                 <div className='lending-columns'>
                     <div className='lending-column'>
-                        <Suspense fallback={<CardFallback title='Repay your loan' />}>
+                        <Suspense fallback={<RepayCardSkeleton />}>
                             <RepayCard
                                 data={data}
                                 loans={loans}
@@ -71,7 +61,7 @@ function Pay() {
                     </div>
                     <div className='lending-column'>
                         <PaymentSummaryCard totals={payments.totals} count={payments.total} />
-                        <Suspense fallback={<CardFallback title='Payment history' />}>
+                        <Suspense fallback={<PaymentHistoryCardSkeleton />}>
                             <PaymentHistoryCard payments={payments} />
                         </Suspense>
                     </div>

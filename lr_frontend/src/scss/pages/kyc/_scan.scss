@@ -1,21 +1,42 @@
+// Driven by `transform`, never `top`. OCR inference is heavy enough to occupy
+// the main thread in bursts, and a layout-animated property stalls with it —
+// the sweep would freeze for exactly the seconds it exists to cover. Transform
+// and opacity animate on the compositor, so this keeps moving regardless of
+// what the main thread is doing.
 @keyframes kyc-scan-sweep {
-    from { top: 2%; }
-    to { top: 96%; }
+    from { transform: translateY(0); }
+    to { transform: translateY(calc(100% - 3px)); }
 }
 
 .kyc-scan-sweep {
     position: absolute;
-    left: 0;
-    right: 0;
-    top: 2%;
-    height: 3px;
-    background: linear-gradient(90deg, transparent, var(--color-accent-400), transparent);
+    inset: 0;
     opacity: 0;
+    // full-bleed now rather than a 3px strip, so it would otherwise swallow
+    // clicks meant for the ID preview underneath
+    pointer-events: none;
+
+    // the visible line: a 3px band painted at the top of a full-height box, so
+    // translating the box by its own height sweeps the band down the preview
+    &::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(90deg, transparent, var(--color-accent-400), transparent);
+        background-size: 100% 3px;
+        background-repeat: no-repeat;
+        background-position: 0 0;
+    }
 
     &.is-active {
         opacity: 1;
-        animation: kyc-scan-sweep 1.4s linear infinite;
+
+        &::after { animation: kyc-scan-sweep 1.4s linear infinite; }
     }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kyc-scan-sweep.is-active::after { animation: none; }
 }
 
 /* ---------------- id scan form ---------------- */

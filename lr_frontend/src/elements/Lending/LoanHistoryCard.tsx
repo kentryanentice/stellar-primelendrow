@@ -7,6 +7,7 @@ import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',
@@ -67,7 +68,12 @@ function LoanHistoryCard({ data, history, onChanged }: {
             </div>
 
             {loading ? (
-                <p className='lending-muted'>Loading your loans…</p>
+                <>
+                    <ul className='lending-loans' aria-hidden='true'>
+                        <LoanRowsSkeleton />
+                    </ul>
+                    {totalPages > 1 && <PagerSkeleton />}
+                </>
             ) : error ? (
                 <p className='lending-muted'>Couldn’t load your loans. Please try again later.</p>
             ) : total === 0 ? (

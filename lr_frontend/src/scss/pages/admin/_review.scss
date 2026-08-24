@@ -577,6 +577,62 @@
     &:focus { outline: none; border-color: var(--auth-primary); }
 }
 
+/* ---------------- approve/reject confirmation modal ---------------- */
+@keyframes admin-confirm-overlay-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes admin-confirm-in {
+    from { opacity: 0; transform: scale(.96) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.admin-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    // above the lightbox: the two shouldn't be open together in practice, but
+    // a decision confirmation taking priority is the correct call if they are
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(4, 8, 20, .8);
+    backdrop-filter: blur(6px);
+    animation: admin-confirm-overlay-in .2s ease both;
+}
+
+.admin-confirm-modal {
+    width: 100%;
+    max-width: 420px;
+    padding: 24px;
+    border-radius: 18px;
+    background: #0b1329;
+    border: 1px solid rgba(255, 255, 255, .1);
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .6);
+    animation: admin-confirm-in .22s cubic-bezier(.2, .7, .2, 1) both;
+
+    h3 {
+        margin: 0 0 8px;
+        font-size: 17px;
+        font-weight: 700;
+        color: #eaf0ff;
+    }
+
+    > p.admin-muted { margin: 0 0 18px; }
+
+    // reused from the reject flow's own layout — presets/textarea keep their
+    // existing look, this just adds the heading/spacing the modal needs
+    .admin-reject-form > p.admin-muted { margin: 0; }
+
+    // direct-child only: the approve case's actions row sits right under the
+    // modal (no flex gap of its own, so it needs this margin); the reject
+    // case's row is nested inside .admin-reject-form, which already spaces
+    // its children with `gap` — adding margin-top there would double it up
+    > .admin-actions-row { margin-top: 18px; }
+}
+
 /* ---------------- full-size image lightbox ---------------- */
 @keyframes admin-lightbox-overlay-in {
     from { opacity: 0; }

@@ -119,8 +119,11 @@ export default function useAdminFunctions() {
     const [lightboxOpen, setLightboxOpen] = useState(false)
 
     // ---- decision ----
+    // `rejecting` doubles as "compose a rejection reason" and "the reject
+    // confirmation modal is open" — one decision, so one flag for it.
     const [rejecting, setRejecting] = useState(false)
     const [reason, setReason] = useState('')
+    const [confirmingApprove, setConfirmingApprove] = useState(false)
     const [deciding, setDeciding] = useState(false)
 
     // page_size is fixed server-side (10) — this only ever tells the backend
@@ -190,6 +193,7 @@ export default function useAdminFunctions() {
         setDetail(null)
         setRejecting(false)
         setReason('')
+        setConfirmingApprove(false)
         setLightboxOpen(false)
     }, [])
 
@@ -202,6 +206,7 @@ export default function useAdminFunctions() {
         setDetailError(false)
         setRejecting(false)
         setReason('')
+        setConfirmingApprove(false)
         setLightboxOpen(false)
         setDetailLoading(true)
         try {
@@ -218,17 +223,25 @@ export default function useAdminFunctions() {
     const openLightbox = useCallback(() => setLightboxOpen(true), [])
     const closeLightbox = useCallback(() => setLightboxOpen(false), [])
 
-    // Escape closes whichever layer is on top: the lightbox first, then review mode
+    const openApproveConfirm = useCallback(() => setConfirmingApprove(true), [])
+    const closeApproveConfirm = useCallback(() => setConfirmingApprove(false), [])
+    const closeRejectConfirm = useCallback(() => { setRejecting(false); setReason('') }, [])
+
+    // Escape closes whichever layer is on top: the lightbox, then a decision
+    // confirmation, then review mode. Suppressed mid-request so a stray Escape
+    // can't dismiss the modal while its own "Confirm" click is still in flight.
     useEffect(() => {
-        if (mode !== 'review') return
+        if (mode !== 'review' || deciding) return
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return
             if (lightboxOpen) closeLightbox()
+            else if (confirmingApprove) closeApproveConfirm()
+            else if (rejecting) closeRejectConfirm()
             else closeReview()
         }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
-    }, [mode, lightboxOpen, closeLightbox, closeReview])
+    }, [mode, deciding, lightboxOpen, closeLightbox, confirmingApprove, closeApproveConfirm, rejecting, closeRejectConfirm, closeReview])
 
     const decide = useCallback(async (decision: 'approve' | 'reject') => {
         if (!selectedId || deciding) return
@@ -291,5 +304,6 @@ export default function useAdminFunctions() {
 
         // decision
         rejecting, setRejecting, reason, setReason, deciding, decide,
+        confirmingApprove, openApproveConfirm, closeApproveConfirm, closeRejectConfirm,
     }
 }
