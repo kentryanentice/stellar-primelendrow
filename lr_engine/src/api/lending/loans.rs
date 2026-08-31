@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use super::domain;
 use super::policy::{self, Policy};
+use super::pricing;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
@@ -41,6 +42,12 @@ pub struct CollateralView {
     pub health_pct: Option<i64>,
     /// True when health has fallen below the policy's liquidation threshold.
     pub liquidatable: bool,
+    /// The rate `required_stroops` was struck at, and when the feeds behind
+    /// it were read. Pinned at issuance and never recomputed — this is what
+    /// lets a borrower (or a reviewer) check the conversion they were given
+    /// rather than take it on trust. Null on positions predating migration 025.
+    pub priced_centavos_per_xlm: Option<i64>,
+    pub priced_at: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -93,15 +100,16 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     .map_err(|e| db_err(e, "schedule"))?;
 
     let collateral = if product == "xlm_collateral" {
-        let row: Option<(String, i64, i64, String)> = sqlx::query_as(
-            "SELECT wallet_address, required_stroops, locked_stroops, status
+        let row: Option<(String, i64, i64, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT wallet_address, required_stroops, locked_stroops, status,
+                    priced_centavos_per_xlm, priced_at
                FROM public.xlm_collateral WHERE loan_id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
         .await
         .map_err(|e| db_err(e, "collateral"))?;
-        row.map(|(wallet_address, required_stroops, locked_stroops, c_status)| {
+        row.map(|(wallet_address, required_stroops, locked_stroops, c_status, priced_centavos_per_xlm, priced_at)| {
             // Health = collateral value / outstanding, at the live rate.
             // Display + liquidation watch; the seize decision itself is an
             // admin action against the vault, never automatic here.
@@ -119,6 +127,8 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
                 status: c_status,
                 health_pct,
                 liquidatable,
+                priced_centavos_per_xlm,
+                priced_at,
             }
         })
     } else {
@@ -169,7 +179,7 @@ pub async fn list(
     let user_id = require_verified_user(&pool, &headers).await?;
 
     let rules = policy::active(&pool).await?;
-    let fx = policy::fx_centavos_per_xlm(&pool).await?;
+    let fx = pricing::for_display(&pool).await?.centavos_per_xlm;
 
     let loan_rows: Vec<LoanRow> = sqlx::query_as(
         "SELECT id, product, principal, rate_bps, term_months, status,
@@ -222,7 +232,7 @@ pub async fn history(
     let user_id = require_verified_user(&pool, &headers).await?;
 
     let rules = policy::active(&pool).await?;
-    let fx = policy::fx_centavos_per_xlm(&pool).await?;
+    let fx = pricing::for_display(&pool).await?.centavos_per_xlm;
 
     let page = q.page.max(1);
     let offset = (page - 1) * PAGE_SIZE;

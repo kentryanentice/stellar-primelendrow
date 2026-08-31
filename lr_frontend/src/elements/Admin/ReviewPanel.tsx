@@ -4,6 +4,7 @@ import { idTypeLabel, formatDate, scoreVerdict } from '../../functions/Admin/Adm
 import { truncateAddress } from '../../functions/Wallet/wallet'
 import ImageLightbox from './ImageLightbox'
 import ConfirmDecisionModal from './ConfirmDecisionModal'
+import ReviewPanelSkeleton from './ReviewPanelSkeleton'
 
 type ReviewPanelProps = Pick<AdminState,
     'detail' | 'detailLoading' | 'detailError' | 'closeReview' |
@@ -21,10 +22,7 @@ export default function ReviewPanel({
     return (
         <div className='admin-panel'>
             {detailLoading ? (
-                <div className='admin-status-block'>
-                    <span className='admin-spinner' aria-hidden='true' />
-                    <p className='admin-muted'>Loading submission…</p>
-                </div>
+                <ReviewPanelSkeleton />
             ) : detailError || !detail ? (
                 <p className='admin-muted admin-status-block'>Couldn’t load this submission. Please try again.</p>
             ) : (

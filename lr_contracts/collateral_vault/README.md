@@ -48,6 +48,12 @@ stellar contract invoke --id <CONTRACT_ID> --source lr-admin --network testnet \
 ```
 COLLATERAL_CONTRACT_ID=C...          # the deployed vault; unset = XLM loans refused
 HORIZON_URL=https://horizon-testnet.stellar.org
+XLM_PRICE_SOURCES=                   # optional: narrow the price feeds, e.g.
+                                     # "coingecko,kraken,er-api". Unset = all six
+                                     # (coingecko, binance, kraken, coinbase,
+                                     # er-api, frankfurter). Two must agree
+                                     # within 5% or issuance is refused.
+XLM_PRICE_TIMEOUT_SECS=8             # per-feed HTTP timeout, 1..30
 PAYPAL_CLIENT_ID=...                 # PHP rail (deposits + repayments)
 PAYPAL_SECRET=...
 PAYPAL_ENV=sandbox                   # "live" in production

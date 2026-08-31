@@ -15,6 +15,18 @@ export const pesosCompact = (centavos: number) =>
 export const xlm = (stroops: number) =>
     `${(stroops / 10_000_000).toLocaleString(undefined, { maximumFractionDigits: 7 })} XLM`
 
+/** The XLM/PHP conversion, as a rate: "₱11.00 / XLM". */
+export const xlmRate = (centavosPerXlm: number) => `${pesos(centavosPerXlm)} / XLM`
+
+/** "12s ago" / "4m ago" — how old a price read is, in words. */
+export function since(secs: number) {
+    const age = Math.max(0, Math.floor(Date.now() / 1000) - secs)
+    if (age < 60) return `${age}s ago`
+    if (age < 3600) return `${Math.floor(age / 60)}m ago`
+    if (age < 86400) return `${Math.floor(age / 3600)}h ago`
+    return `${Math.floor(age / 86400)}d ago`
+}
+
 /** Monthly basis points -> "1.75%/mo". */
 export const rate = (bps: number) => `${(bps / 100).toFixed(2).replace(/\.?0+$/, '')}%/mo`
 

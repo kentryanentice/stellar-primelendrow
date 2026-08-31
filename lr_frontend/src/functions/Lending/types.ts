@@ -27,6 +27,35 @@ export type PolicyParams = {
     interest_split: { savers: number; platform: number; reserve: number }
 }
 
+/** One public price feed's contribution to the agreed XLM/PHP rate. */
+export type PriceSource = {
+    name: string
+    centavos_per_xlm: number
+    /** 'XLM/PHP' when quoted directly, 'XLM/USD x USD/PHP' when derived. */
+    leg: string
+    deviation_bps: number
+    /** false = further than the engine's band from the median, so excluded. */
+    used: boolean
+}
+
+/**
+ * The XLM->PHP conversion behind every collateral number, with the evidence
+ * for it. The engine agrees this from several independent public feeds and
+ * refuses to issue a collateral loan when fewer than two of them agree —
+ * `live: false` means no agreement was reached and this is the last rate on
+ * record, safe to display and never enough to borrow against.
+ */
+export type FxQuote = {
+    centavos_per_xlm: number
+    /** Unix seconds the feeds were read. */
+    as_of: number
+    method: string
+    usd_php_centavos: number | null
+    sources: PriceSource[]
+    failures: { name: string; reason: string }[]
+    live: boolean
+}
+
 export type LotBadge = 'available' | 'lent' | 'collateral' | 'pledged'
 
 export type Lot = {
@@ -63,7 +92,9 @@ export type PoolResponse = {
     }
     params: {
         policy: PolicyParams
+        /** The agreed rate alone; `fx` is the same number with its provenance. */
         fx_centavos_per_xlm: number
+        fx: FxQuote
         collateral_contract: string | null
         paypal_ready: boolean
     }
@@ -89,6 +120,8 @@ export type QuoteResponse = {
     products: ProductQuote[]
     schedule_preview: { installment: number; principal_due: number; interest_due: number }[] | null
     total_interest: number | null
+    /** The conversion `required_stroops` was computed at. */
+    fx: FxQuote
 }
 
 export type ApplyResponse = {
@@ -97,6 +130,10 @@ export type ApplyResponse = {
     rate_bps: number
     required_stroops: number | null
     collateral_contract: string | null
+    /** xlm_collateral: the rate the requirement was pinned at, and its read time. */
+    priced_centavos_per_xlm: number | null
+    priced_at: number | null
+    price_method: string | null
     message: string
 }
 
@@ -129,6 +166,9 @@ export type Loan = {
         status: 'pending' | 'locked' | 'released' | 'seized'
         health_pct: number | null
         liquidatable: boolean
+        /** Pinned at issuance; null on positions created before the oracle. */
+        priced_centavos_per_xlm: number | null
+        priced_at: number | null
     } | null
     guarantors: { username: string; pledge_amount: number; status: string }[]
 }

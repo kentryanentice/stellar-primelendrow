@@ -11,6 +11,7 @@ use sqlx::PgPool;
 
 use super::domain;
 use super::policy;
+use super::pricing;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
@@ -57,6 +58,10 @@ pub struct QuoteResponse {
     /// Present when amount+term were given and within range.
     pub schedule_preview: Option<Vec<InstallmentPreview>>,
     pub total_interest: Option<i64>,
+    /// The XLM/PHP rate `required_stroops` was struck at, with the feeds
+    /// behind it — so the screen can show the conversion instead of just its
+    /// result, and say plainly when the number is a held one.
+    pub fx: pricing::Priced,
 }
 
 pub async fn quote(
@@ -68,7 +73,12 @@ pub async fn quote(
 
     let rules = policy::active(&pool).await?;
     let params = &rules.params;
-    let fx = policy::fx_centavos_per_xlm(&pool).await?;
+    // A quote is a screen, so it uses the display rate: it shows the last
+    // agreed number even when the feeds are momentarily down. Apply re-prices
+    // through `pricing::for_issuance`, which refuses outright — so a quote can
+    // outlive its price, and the loan behind it still cannot.
+    let priced = pricing::for_display(&pool).await?;
+    let fx = priced.centavos_per_xlm;
 
     let score: i16 = sqlx::query_scalar("SELECT score FROM public.credit_scores WHERE user_id = $1")
         .bind(user_id)
@@ -177,5 +187,6 @@ pub async fn quote(
         products,
         schedule_preview,
         total_interest,
+        fx: priced,
     }))
 }

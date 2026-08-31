@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Wallet as WalletIcon, ShieldCheck, Unlink, Plus, Loader2 } from 'lucide-react'
 import useWallets from '../../functions/Wallet/useWallets'
 import { truncateAddress } from '../../functions/Wallet/wallet'
+import { WalletsCardBody } from './Skeleton'
 
 /** Mirrors lr_engine::api::wallets::shared::MAX_WALLETS_PER_USER. */
 const MAX_WALLETS = 5
@@ -46,7 +47,7 @@ export default function WalletsCard() {
             </div>
 
             {loading ? (
-                <p className='settings-muted'>Loading wallets…</p>
+                <WalletsCardBody />
             ) : error ? (
                 <p className='settings-muted'>Couldn’t load your wallets. Please try again later.</p>
             ) : (

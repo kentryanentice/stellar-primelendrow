@@ -4,6 +4,7 @@
 //!
 //!   domain   — PURE rules (pricing, caps, LTV, schedules, rounding)
 //!   policy   — the versioned rulebook loader (D8)
+//!   pricing  — the live XLM/PHP rate: many feeds in, one agreed number out
 //!   ledger   — the ONE writer + balance reads (D9)
 //!   lots     — badge moves on deposit lots, always under row locks
 //!   shared   — error mapping + the single disburse routine
@@ -22,6 +23,7 @@ mod lots;
 mod payments;
 mod policy;
 mod pool;
+mod pricing;
 mod quote;
 mod repay;
 mod shared;

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CircleCheckBig, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { AdminState } from './types'
 import Card from './Card'
+import CardSkeleton from './CardSkeleton'
+
+const SKELETON_CARD_COUNT = 6
 
 type CarouselProps = Pick<AdminState,
     'queue' | 'page' | 'totalPages' | 'queueLoading' | 'queueLoadingMore' | 'queueError' | 'loadMore' | 'openReview'
@@ -76,9 +79,12 @@ export default function Carousel({
     }
 
     if (queueLoading) return (
-        <div className='admin-status-block'>
-            <span className='admin-spinner' aria-hidden='true' />
-            <p className='admin-muted'>Loading queue…</p>
+        <div className='admin-carousel' aria-hidden='true'>
+            <button type='button' className='admin-carousel-arrow' disabled><ChevronLeft /></button>
+            <div className='admin-carousel-track'>
+                {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => <CardSkeleton key={i} />)}
+            </div>
+            <button type='button' className='admin-carousel-arrow' disabled><ChevronRight /></button>
         </div>
     )
     if (queueError) return <p className='admin-muted admin-status-block'>Couldn’t load the queue. Please try again.</p>

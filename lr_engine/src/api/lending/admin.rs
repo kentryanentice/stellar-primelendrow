@@ -1,7 +1,15 @@
-//! Admin lending controls. For now: the XLM/PHP rate the 120%/110% collateral
-//! rules value against. Append-only history (fx_rates), and the change itself
-//! is an event (D8) — a rate move that flips someone to liquidatable is
-//! always attributable.
+//! Admin lending controls. For now: the manually-filed XLM/PHP rate.
+//!
+//! This is no longer how loans get priced. Since migration 025 the live rate
+//! comes from `pricing`, which agrees several independent public feeds and
+//! REFUSES to price a loan when they don't — an admin cannot talk the engine
+//! into issuing at a number of their choosing, which is the whole point of
+//! taking the rate off a form. What this endpoint still does is seed the
+//! fallback that screens fall back to when every feed is unreachable, and
+//! give the operator a way to file a rate on a fresh deployment.
+//!
+//! Append-only history (fx_rates), and the change itself is an event (D8), so
+//! a filed rate is always attributable to the admin who filed it.
 
 use axum::{Extension, Json, http::{HeaderMap, StatusCode}};
 use serde::{Deserialize, Serialize};
@@ -35,7 +43,10 @@ pub async fn set_fx_rate(
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin fx"))?;
 
-    sqlx::query("INSERT INTO public.fx_rates (centavos_per_xlm, actor_id) VALUES ($1, $2)")
+    sqlx::query(
+        "INSERT INTO public.fx_rates (centavos_per_xlm, actor_id, source, method)
+         VALUES ($1, $2, 'admin', 'filed by an administrator')",
+    )
         .bind(p.centavos_per_xlm)
         .bind(admin_id)
         .execute(&mut *tx)
@@ -63,6 +74,6 @@ pub async fn set_fx_rate(
 
     Ok(Json(FxRateResponse {
         centavos_per_xlm: p.centavos_per_xlm,
-        message: "XLM/PHP rate updated",
+        message: "Fallback XLM/PHP rate filed — live loans are still priced from the public feeds",
     }))
 }

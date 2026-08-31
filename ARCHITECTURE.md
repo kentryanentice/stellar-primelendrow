@@ -72,8 +72,8 @@ lr_frontend/     React app — pages/, elements/, functions/, providers/, scss/
 lr_engine/       Rust engine — the primary backend
   src/api/         users/ · kyc/ · wallets/ · credit/ · lending/
   src/routes/      the HTTP surface (/api/v1)
-  src/infra/       database, storage, mailer client, crypto helpers
-  src/migrations/  the SQL schema, 001 … 024 (applied in order)
+  src/infra/       database, storage, mailer client, price oracle, crypto helpers
+  src/migrations/  the SQL schema, 001 … 025 (applied in order)
 lr_api/          Rust engine — MongoDB Atlas port of the auth + KYC layer
 lr_contracts/    Soroban contracts (soroban-sdk 27):
   collateral_vault    XLM collateral custody (lock / release / seize)
@@ -117,7 +117,7 @@ without stranding old clients.
 
 ## 4. Data model
 
-The schema is built up across migrations `001`–`024`. Grouped by concern:
+The schema is built up across migrations `001`–`025`. Grouped by concern:
 
 **Identity & sessions**
 - `users` — account, role (`Pending` → `User` → admin), password hash (Argon2)
@@ -145,7 +145,10 @@ The schema is built up across migrations `001`–`024`. Grouped by concern:
 - `deposits` — pool deposits and their status (Available / Reserved / Locked)
 - `loans` — loan records: amount, term, product, rate, schedule, status
 - `guarantors` — guarantor invitations and their locked backing (cap of 2)
-- `xlm_collateral` — the link between a loan and its on-chain XLM lock
+- `xlm_collateral` — the link between a loan and its on-chain XLM lock, plus
+  the XLM/PHP rate that position was priced at and the feeds behind it (`025`)
+- `fx_rates` — append-only XLM/PHP history; each row records whether it came
+  from the price oracle or an administrator, and the per-feed evidence (`025`)
 - `loan_payments` — the diminishing-balance repayment schedule and payments
 
 ---
@@ -255,6 +258,28 @@ loan's collateral cannot expire out of existence. The contract is built with
 overflow checks left **on** in release — it holds user funds, so a silent wrap
 is unacceptable.
 
+**Pricing the collateral.** How much XLM 120% of a peso loan comes to depends on
+what XLM is worth, and that number is no longer typed in by an admin. On every
+XLM-collateral application `api/lending/pricing` reads six independent public
+feeds at once (`infra/oracle`): CoinGecko quotes XLM/PHP directly, Binance,
+Kraken and Coinbase quote XLM/USD, and er-api and Frankfurter supply the USD/PHP
+leg those three are crossed through — the derived rate the SOW requires be
+recorded with the loan. The candidates are reconciled by **median**, any feed
+sitting more than **5%** off it is dropped, and at least **two** must still
+stand. Prices are parsed by string math into 1e8 fixed point; no float ever
+holds a rate the engine acts on.
+
+The rule is **fail-closed**: when fewer than two feeds agree, or the newest
+agreement is older than **15 minutes**, `for_issuance` returns 503 and the loan
+is not issued — a loan struck at a price nobody can vouch for is worse than no
+loan. Screens degrade instead of failing (`for_display` falls back to the last
+rate on record, flagged `live: false`, and the UI says so). The agreed rate is
+appended to `fx_rates` with its per-feed evidence, and **pinned** onto the
+`xlm_collateral` row plus a `collateral_priced` ledger event, so a later price
+move never rewrites what a borrower was asked to lock. The oracle is the
+engine's candidate price; the SEP-40/Reflector bound the vault contract applies
+before acting on it is the next sprint's deliverable.
+
 ### 5.8 Loan creation & repayment → README §8–10
 
 On approval, collateral (and any pledges) are frozen, the loan's parameters are
@@ -346,7 +371,7 @@ settings) is the remaining integration step.
   KYC capture on a real phone over LAN.
 - **Engine** — the Rust binary (`lr_engine`) against a **Supabase-hosted
   PostgreSQL** database; the schema is defined by the ordered migrations
-  `001`–`024` in `src/migrations/`.
+  `001`–`025` in `src/migrations/`.
 - **`lr_api`** — the same auth/KYC layer against **MongoDB Atlas**, for
   document-store deployments.
 - **Contracts** — the four Soroban contracts (`collateral_vault` and the

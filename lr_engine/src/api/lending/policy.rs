@@ -75,10 +75,13 @@ pub async fn active<'e, X: PgExecutor<'e>>(executor: X) -> Result<Policy, E> {
     Ok(Policy { id, params })
 }
 
-/// Latest XLM->PHP rate (centavos per 1 XLM), newest fx_rates row.
-pub async fn fx_centavos_per_xlm<'e, X: PgExecutor<'e>>(executor: X) -> Result<i64, E> {
-    sqlx::query_scalar(
-        "SELECT centavos_per_xlm FROM public.fx_rates
+/// The newest XLM->PHP rate on record (centavos per 1 XLM) and when it was
+/// filed. This is HISTORY, not the live price: `pricing::for_display` falls
+/// back to it when no feed agrees, and nothing that moves money reads it —
+/// issuance goes through `pricing::for_issuance`, which fails closed.
+pub async fn last_recorded_fx<'e, X: PgExecutor<'e>>(executor: X) -> Result<(i64, i64), E> {
+    sqlx::query_as(
+        "SELECT centavos_per_xlm, created_at FROM public.fx_rates
           WHERE base = 'XLM' AND quote = 'PHP'
           ORDER BY created_at DESC, id DESC LIMIT 1",
     )

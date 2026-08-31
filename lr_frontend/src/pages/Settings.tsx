@@ -9,6 +9,7 @@ import { useSession } from '../providers/useSession'
 import { useToast } from '../providers/useToast'
 import { useAccent } from '../providers/AccentProvider'
 import { useCreditScore, CREDIT_SCORE_MAX } from '../functions/useCreditScore'
+import { CreditScoreSkeleton, IdentityTimelineSkeleton, WalletsCardSkeleton } from '../elements/Settings/Skeleton'
 
 // The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
@@ -283,7 +284,7 @@ function Settings() {
                     {!scoreEligible ? (
                         <p className='settings-muted'>Your credit score becomes available once your identity is verified.</p>
                     ) : creditLoading ? (
-                        <p className='settings-muted'>Loading credit score…</p>
+                        <CreditScoreSkeleton />
                     ) : creditError || !creditScore ? (
                         <p className='settings-muted'>Couldn’t load your credit score. Please try again later.</p>
                     ) : (
@@ -324,7 +325,7 @@ function Settings() {
                         })()}
                     </div>
                     {kycLoading ? (
-                        <p className='settings-muted'>Loading verification status…</p>
+                        <IdentityTimelineSkeleton />
                     ) : kycError || !kyc ? (
                         <p className='settings-muted'>Couldn’t load your verification status. Please try again later.</p>
                     ) : kyc.status === 'none' ? (
@@ -370,15 +371,7 @@ function Settings() {
                 </section>
 
                 {scoreEligible && (
-                    <Suspense fallback={
-                        <section className='settings-card settings-card-wallets'>
-                            <div className='settings-card-head'>
-                                <span className='settings-card-icon is-accent'><ShieldCheck /></span>
-                                <h2>Wallets</h2>
-                            </div>
-                            <p className='settings-muted'>Loading wallets…</p>
-                        </section>
-                    }>
+                    <Suspense fallback={<WalletsCardSkeleton />}>
                         <WalletsCard />
                     </Suspense>
                 )}

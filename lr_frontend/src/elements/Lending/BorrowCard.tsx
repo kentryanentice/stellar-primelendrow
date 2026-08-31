@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { HandCoins, Plus, Trash2, ShieldCheck } from 'lucide-react'
 import useWallets from '../../functions/Wallet/useWallets'
 import { truncateAddress } from '../../functions/Wallet/wallet'
-import { pesos, rate, xlm } from '../../functions/Lending/money'
+import { pesos, rate, since, xlm, xlmRate } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse, type Product } from '../../functions/Lending/types'
 import type { BorrowFormState } from '../../functions/Lending/useBorrowForm'
 
@@ -50,6 +50,17 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                     the engine verifies the transaction on the network, then disburses. Only the platform can
                     release or seize the vault; your coins come back automatically when the loan is repaid.
                 </p>
+                {/* The rate this requirement was struck at is pinned to the
+                    loan, so it is worth naming here: a later price move will
+                    not change the amount being asked for. */}
+                {pendingLock.priced_centavos_per_xlm !== null && (
+                    <p className='lending-muted'>
+                        Priced at <b>{xlmRate(pendingLock.priced_centavos_per_xlm)}</b>
+                        {pendingLock.price_method ? ` — ${pendingLock.price_method}` : ''}
+                        {pendingLock.priced_at !== null ? `, read ${since(pendingLock.priced_at)}` : ''}. This
+                        rate is locked to your loan and won't be recalculated.
+                    </p>
+                )}
                 <button
                     type='button'
                     className='lending-btn-primary'
@@ -274,6 +285,24 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                 <div className='lending-quote-row'>
                                     <span>XLM to lock ({params.policy.xlm_min_collateral_pct}%)</span>
                                     <b>{xlm(productQuote.required_stroops)}</b>
+                                </div>
+                            )}
+                            {/* The conversion behind that number, not just its
+                                result: the engine agrees the rate across
+                                independent public feeds, so the borrower can
+                                see which price they're being asked to lock at
+                                and how fresh it is. */}
+                            {product === 'xlm_collateral' && quote?.fx && (
+                                <div className='lending-quote-row lending-quote-fx'>
+                                    <span>
+                                        Rate used
+                                        <small className='lending-muted'>
+                                            {quote.fx.live
+                                                ? ` ${quote.fx.method}, ${since(quote.fx.as_of)}`
+                                                : ' last recorded rate — no live feed agreed'}
+                                        </small>
+                                    </span>
+                                    <b className={quote.fx.live ? undefined : 'is-warn'}>{xlmRate(quote.fx.centavos_per_xlm)}</b>
                                 </div>
                             )}
                             {product === 'guarantor' && productQuote.required_pledges !== null && (

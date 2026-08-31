@@ -14,10 +14,10 @@
 }
 
 :root {
-	--font-family: 'Nunito Sans', 'Inter', sans-serif;
-	--font-family-serif: 'Roboto Serif', serif;
-	--font-family-poppins: 'Poppins', sans-serif;
-	--font-family-montserrat: 'Montserrat', sans-serif;
+	--font-family: 'Quicksand', sans-serif;
+	--font-family-serif: 'Quicksand', sans-serif;
+	--font-family-poppins: 'Quicksand', sans-serif;
+	--font-family-montserrat: 'Quicksand', sans-serif;
 	--font-size-5: 5px;
 	--font-size-6: 6px;
 	--font-size-7: 7px;
@@ -91,8 +91,8 @@
 	--animation: all .3s ease-in-out forwards;
 
 	/* ---- Auth page design tokens (from the auth mockup) ---- */
-	--auth-font-display: 'Clash Display', 'Poppins', sans-serif;
-	--auth-font-body: 'Satoshi', 'Nunito Sans', system-ui, sans-serif;
+	--auth-font-display: 'Quicksand', sans-serif;
+	--auth-font-body: 'Quicksand', sans-serif;
 
 	--auth-glow-rgb: 63, 111, 238;
 	--auth-page-bg:

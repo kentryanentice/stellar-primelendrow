@@ -10,6 +10,7 @@ use sqlx::PgPool;
 
 use super::ledger::account_balance;
 use super::policy::{self, PolicyParams};
+use super::pricing;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::{paypal, stellar};
@@ -36,7 +37,11 @@ pub struct MyFunds {
 #[derive(Serialize)]
 pub struct Params {
     pub policy: PolicyParams,
+    /// The agreed rate on its own — every existing caller reads this.
     pub fx_centavos_per_xlm: i64,
+    /// ...and the same rate with its provenance: which feeds agreed, when
+    /// they were read, and whether this is a live agreement or a held one.
+    pub fx: pricing::Priced,
     pub collateral_contract: Option<String>,
     pub paypal_ready: bool,
 }
@@ -55,7 +60,7 @@ pub async fn summary(
     let user_id = require_verified_user(&pool, &headers).await?;
 
     let rules = policy::active(&pool).await?;
-    let fx = policy::fx_centavos_per_xlm(&pool).await?;
+    let fx = pricing::for_display(&pool).await?;
 
     // ::BIGINT everywhere SUM appears: Postgres widens SUM(BIGINT) to NUMERIC,
     // which sqlx refuses to decode as i64.
@@ -130,7 +135,8 @@ pub async fn summary(
         me,
         params: Params {
             policy: rules.params,
-            fx_centavos_per_xlm: fx,
+            fx_centavos_per_xlm: fx.centavos_per_xlm,
+            fx,
             collateral_contract: stellar::contract_id(),
             paypal_ready: paypal::is_configured(),
         },

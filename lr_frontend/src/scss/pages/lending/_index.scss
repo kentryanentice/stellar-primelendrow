@@ -1139,6 +1139,28 @@ select.lending-input option {
     }
 }
 
+/* The XLM/PHP conversion behind the collateral figure. Ruled off from the
+   quote rows above it because it isn't another term of the loan — it's the
+   price those terms were struck at, with how it was reached in small print
+   under the label rather than behind a tooltip nobody opens. */
+.lending-quote-fx {
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--auth-primary) 18%, transparent);
+
+    > span {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    small {
+        font-size: 11px;
+        line-height: 1.35;
+    }
+
+    b.is-warn { color: #f5b942; }
+}
+
 .lending-guarantor-asks {
     display: flex;
     flex-direction: column;

@@ -20,6 +20,7 @@ use super::domain;
 use super::ledger::{EventDraft, commit_event};
 use super::lots;
 use super::policy;
+use super::pricing;
 use super::shared::{db_err, disburse, ledger_err, validate_centavos, validate_product};
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::stellar;
@@ -53,6 +54,12 @@ pub struct ApplyResponse {
     /// xlm_collateral: what the wallet must lock, and where.
     pub required_stroops: Option<i64>,
     pub collateral_contract: Option<String>,
+    /// xlm_collateral: the agreed rate that requirement was struck at, when
+    /// the feeds were read, and how they were reconciled — pinned, so the
+    /// borrower can check the number the engine used rather than trust it.
+    pub priced_centavos_per_xlm: Option<i64>,
+    pub priced_at: Option<i64>,
+    pub price_method: Option<String>,
     pub message: &'static str,
 }
 
@@ -76,6 +83,23 @@ pub async fn apply(
     if amount < params.min_loan {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Amount is below the minimum loan"));
     }
+
+    // XLM collateral is priced from live feeds, and reading feeds is network
+    // I/O: it happens BEFORE the transaction opens, never with row locks held
+    // (blueprint §3.3, the same rule the Horizon call in collateral.rs
+    // follows). Fails closed — no agreement between independent feeds, no
+    // loan, rather than a loan struck at a price nobody can vouch for.
+    let priced = if product == "xlm_collateral" {
+        // Cheap refusals first: no point asking six providers for a price
+        // for a product this deployment can't issue anyway.
+        stellar::contract_id().ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "XLM collateral is not enabled on this deployment yet",
+        ))?;
+        Some(pricing::for_issuance(&pool).await?)
+    } else {
+        None
+    };
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin apply"))?;
 
@@ -178,6 +202,9 @@ pub async fn apply(
                 rate_bps: rate,
                 required_stroops: None,
                 collateral_contract: None,
+                priced_centavos_per_xlm: None,
+                priced_at: None,
+                price_method: None,
                 message: "Loan approved and disbursed — your backing deposit is locked until it's repaid",
             }
         }
@@ -202,22 +229,61 @@ pub async fn apply(
             .map_err(|e| db_err(e, "wallet lookup"))?;
             let address = address.ok_or((StatusCode::UNPROCESSABLE_ENTITY, "That wallet isn't connected to your account"))?;
 
-            let fx = policy::fx_centavos_per_xlm(&mut *tx).await?;
-            let required =
-                domain::required_collateral_stroops(amount, params.xlm_min_collateral_pct, fx);
+            let priced = priced.expect("xlm_collateral is priced before the transaction opens");
+            let required = domain::required_collateral_stroops(
+                amount,
+                params.xlm_min_collateral_pct,
+                priced.centavos_per_xlm,
+            );
+            let sources = serde_json::to_value(&priced.sources)
+                .unwrap_or(serde_json::Value::Null);
 
+            // The rate is pinned with the position, not looked up again later:
+            // "priced at issuance" (SOW §3.8) means a later price move never
+            // rewrites what this borrower was asked to lock.
             sqlx::query(
                 "INSERT INTO public.xlm_collateral
-                    (loan_id, user_id, wallet_address, required_stroops, status)
-                 VALUES ($1, $2, $3, $4, 'pending')",
+                    (loan_id, user_id, wallet_address, required_stroops, status,
+                     priced_centavos_per_xlm, priced_at, price_sources)
+                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)",
             )
             .bind(loan_id)
             .bind(user_id)
             .bind(&address)
             .bind(required)
+            .bind(priced.centavos_per_xlm)
+            .bind(priced.as_of)
+            .bind(&sources)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "insert collateral"))?;
+
+            // The same evidence in the notebook (D9), where the public proof
+            // page reads it: which feeds said what, and when they were read.
+            commit_event(
+                &mut tx,
+                EventDraft {
+                    kind: "collateral_priced",
+                    user_id: Some(user_id),
+                    loan_id: Some(loan_id),
+                    deposit_id: None,
+                    rail_ref: None,
+                    payload: serde_json::json!({
+                        "centavos_per_xlm": priced.centavos_per_xlm,
+                        "usd_php_centavos": priced.usd_php_centavos,
+                        "as_of": priced.as_of,
+                        "method": priced.method,
+                        "min_collateral_pct": params.xlm_min_collateral_pct,
+                        "required_stroops": required,
+                        "sources": sources,
+                        "unavailable": priced.failures,
+                    }),
+                    actor_id: Some(user_id),
+                },
+                &[],
+            )
+            .await
+            .map_err(|e| ledger_err(e, "collateral_priced"))?;
 
             ApplyResponse {
                 loan_id,
@@ -225,6 +291,9 @@ pub async fn apply(
                 rate_bps: rate,
                 required_stroops: Some(required),
                 collateral_contract: Some(contract),
+                priced_centavos_per_xlm: Some(priced.centavos_per_xlm),
+                priced_at: Some(priced.as_of),
+                price_method: Some(priced.method),
                 message: "Lock the required XLM from your wallet, then confirm — the loan disburses once the chain shows it",
             }
         }
@@ -291,6 +360,9 @@ pub async fn apply(
                 rate_bps: rate,
                 required_stroops: None,
                 collateral_contract: None,
+                priced_centavos_per_xlm: None,
+                priced_at: None,
+                price_method: None,
                 message: "Invitations sent — the loan disburses once your guarantors accept and their pledges cover it",
             }
         }

@@ -86,6 +86,72 @@ pub fn collateral_value_centavos(stroops: i64, centavos_per_xlm: i64) -> i64 {
     (stroops as i128 * centavos_per_xlm as i128 / CENTAVOS_PER_XLM_UNIT as i128) as i64
 }
 
+// ---- pricing the collateral (SOW §3.10, "Price source and oracle bounds") --
+//
+// The feeds themselves are I/O and live in `infra::oracle`; deciding ONE
+// number out of what they said is arithmetic, so it lives here with the rest
+// of the money rules and is tested with plain integers.
+
+/// Fixed-point scale shared with `infra::oracle`: rates are integers of
+/// hundred-millionths, never floats.
+pub const RATE_SCALE: i64 = 100_000_000;
+
+/// XLM/USD times USD/PHP -> PHP per XLM, all three scaled by RATE_SCALE.
+/// This is the derived rate the SOW requires be recorded with the loan when
+/// no direct XLM/PHP feed answers.
+pub fn derive_php_per_xlm(usd_per_xlm: i64, php_per_usd: i64) -> i64 {
+    (usd_per_xlm as i128 * php_per_usd as i128 / RATE_SCALE as i128) as i64
+}
+
+/// A scaled PHP-per-XLM rate -> the whole centavos the collateral rules
+/// actually value against, at the single rounding site.
+pub fn scaled_to_centavos(php_per_xlm: i64) -> i64 {
+    round_half_even(php_per_xlm as i128 * 100, RATE_SCALE as i128)
+}
+
+/// Middle value of a non-empty set; an even count averages the two middles
+/// at the single rounding site. A median (not a mean) is the point: one
+/// provider printing a wild number moves it by nothing.
+pub fn median(values: &[i64]) -> Option<i64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let mid = sorted.len() / 2;
+    Some(if sorted.len() % 2 == 1 {
+        sorted[mid]
+    } else {
+        round_half_even(sorted[mid - 1] as i128 + sorted[mid] as i128, 2)
+    })
+}
+
+/// The agreed rate, or None — which is a refusal to price, not a fallback.
+///
+/// Take the median, drop every quote further than `max_deviation_bps` from
+/// it, and re-median the survivors. `min_sources` independent feeds must
+/// still stand after the drop: one feed alone can be wrong in a way nothing
+/// else contradicts, so it is never enough to lend against.
+pub fn agree_on_rate(quotes: &[i64], min_sources: usize, max_deviation_bps: i64) -> Option<i64> {
+    let min_sources = min_sources.max(1);
+    if quotes.len() < min_sources {
+        return None;
+    }
+    let first = median(quotes)?;
+    let kept: Vec<i64> = quotes
+        .iter()
+        .copied()
+        .filter(|q| {
+            let drift = (*q as i128 - first as i128).abs();
+            drift * 10_000 <= first as i128 * max_deviation_bps as i128
+        })
+        .collect();
+    if kept.len() < min_sources {
+        return None;
+    }
+    median(&kept)
+}
+
 pub struct Installment {
     pub installment: i16,
     pub due_at: i64,
@@ -195,6 +261,45 @@ mod tests {
         assert!(value >= amount * 120 / 100);
         // and not absurdly more than one stroop over
         assert!(collateral_value_centavos(stroops - 1, rate) < 600_000 + rate);
+    }
+
+    #[test]
+    fn derives_the_php_rate_through_the_dollar() {
+        // $0.39 per XLM at ₱58.50 per $ = ₱22.815 per XLM -> ₱22.82 (half-even
+        // lands on the even centavo at exactly half; here it rounds up).
+        let usd_per_xlm = 39 * RATE_SCALE / 100;
+        let php_per_usd = 585 * RATE_SCALE / 10;
+        let scaled = derive_php_per_xlm(usd_per_xlm, php_per_usd);
+        assert_eq!(scaled, 2_281_500_000);
+        assert_eq!(scaled_to_centavos(scaled), 2282);
+        // and the identity leg: anything times ₱1.00/$ is itself
+        assert_eq!(derive_php_per_xlm(usd_per_xlm, RATE_SCALE), usd_per_xlm);
+    }
+
+    #[test]
+    fn median_is_the_middle_not_the_mean() {
+        assert_eq!(median(&[]), None);
+        assert_eq!(median(&[7]), Some(7));
+        assert_eq!(median(&[9, 1, 5]), Some(5));
+        assert_eq!(median(&[4, 2]), Some(3));
+        // one absurd outlier cannot drag the middle
+        assert_eq!(median(&[2280, 2282, 2284, 1]), Some(2281));
+    }
+
+    #[test]
+    fn agreement_needs_a_quorum_that_survives_the_deviation_band() {
+        let band = 500; // 5%
+        // three feeds within a whisker of each other -> their middle
+        assert_eq!(agree_on_rate(&[2280, 2282, 2284], 2, band), Some(2282));
+        // one feed is never enough, however plausible
+        assert_eq!(agree_on_rate(&[2282], 2, band), None);
+        // an out-of-band quote is dropped and the rest still agree
+        assert_eq!(agree_on_rate(&[2280, 2282, 9000], 2, band), Some(2281));
+        // two feeds that disagree wildly leave no quorum -> refuse to price
+        assert_eq!(agree_on_rate(&[1000, 9000], 2, band), None);
+        // exactly at the band edge is kept (2282 * 5% = 114.1)
+        assert_eq!(agree_on_rate(&[2282, 2282, 2396], 3, band), Some(2282));
+        assert_eq!(agree_on_rate(&[2282, 2282, 2397], 3, band), None);
     }
 
     #[test]
