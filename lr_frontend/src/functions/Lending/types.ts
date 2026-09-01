@@ -124,16 +124,35 @@ export type QuoteResponse = {
     fx: FxQuote
 }
 
-export type ApplyResponse = {
+/**
+ * The pinned rate in the shape the vault contract takes it. The wallet
+ * submits these three numbers with the lock and the contract measures the
+ * dollar leg against a public SEP-40 feed (Reflector), refusing a stale feed,
+ * an out-of-band quote, or a peso rate the two legs don't support — so
+ * nothing here is worth a client tampering with.
+ */
+export type PinnedQuote = {
+    /** Whole centavos one XLM is worth: the rate the collateral is valued at. */
+    priced_centavos_per_xlm: number | null
+    /** USD per XLM scaled 1e8 — the leg the on-chain feed checks. */
+    priced_usd_per_xlm_e8: number | null
+    /** Whole centavos one USD is worth — the leg it was crossed through. */
+    priced_usd_php_centavos: number | null
+}
+
+export type ApplyResponse = PinnedQuote & {
     loan_id: string
     status: 'active' | 'pending'
     rate_bps: number
+    /** Whole centavos, as recorded by the engine — what the lock covers. */
+    principal: number
     required_stroops: number | null
     collateral_contract: string | null
-    /** xlm_collateral: the rate the requirement was pinned at, and its read time. */
-    priced_centavos_per_xlm: number | null
+    /** xlm_collateral: when the rate was read, and how it was reconciled. */
     priced_at: number | null
     price_method: string | null
+    /** The collateral ratio the contract enforces, in basis points. */
+    collateral_ratio_bps: number | null
     message: string
 }
 
@@ -159,7 +178,7 @@ export type Loan = {
     closed_at: number | null
     created_at: number
     schedule: ScheduleRow[]
-    collateral: {
+    collateral: (PinnedQuote & {
         wallet_address: string
         required_stroops: number
         locked_stroops: number
@@ -167,9 +186,9 @@ export type Loan = {
         health_pct: number | null
         liquidatable: boolean
         /** Pinned at issuance; null on positions created before the oracle. */
-        priced_centavos_per_xlm: number | null
         priced_at: number | null
-    } | null
+        collateral_ratio_bps: number | null
+    }) | null
     guarantors: { username: string; pledge_amount: number; status: string }[]
 }
 

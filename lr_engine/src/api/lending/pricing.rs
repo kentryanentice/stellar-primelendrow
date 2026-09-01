@@ -79,6 +79,12 @@ pub struct Priced {
     /// The USD/PHP leg the derived quotes crossed, in centavos per USD, when
     /// one was used. Null when every contributing feed quoted XLM/PHP itself.
     pub usd_php_centavos: Option<i64>,
+    /// The XLM/USD leg alone, scaled by `oracle::RATE_SCALE` (1e8) — the only
+    /// part of this price a Stellar feed can check, so it is what the vault
+    /// contract is handed to measure against Reflector. Null when no crypto
+    /// venue answered, which is why `for_issuance` then refuses: a price the
+    /// contract cannot check is a price it will not act on.
+    pub usd_per_xlm_e8: Option<i64>,
     pub sources: Vec<PricedSource>,
     pub failures: Vec<PricedFailure>,
     /// false = no feed agreed and this is the last rate on record. Display
@@ -122,6 +128,12 @@ fn aggregate(reading: oracle::Reading, as_of: i64) -> Option<Priced> {
     // the fiat feeds is what carries those quotes into pesos.
     let usd_php_scaled = domain::median(
         &reading.php_per_usd.iter().map(|s| s.scaled).collect::<Vec<_>>(),
+    );
+    // The dollar leg on its own, kept whole: the vault contract checks this
+    // number against Reflector, so it travels beside the peso rate rather
+    // than being folded into it and lost.
+    let usd_per_xlm_scaled = domain::median(
+        &reading.usd_per_xlm.iter().map(|s| s.scaled).collect::<Vec<_>>(),
     );
 
     let mut candidates: Vec<(String, i64, &'static str)> = Vec::new();
@@ -170,6 +182,7 @@ fn aggregate(reading: oracle::Reading, as_of: i64) -> Option<Priced> {
             sources.len()
         ),
         usd_php_centavos: usd_php_scaled.map(domain::scaled_to_centavos),
+        usd_per_xlm_e8: usd_per_xlm_scaled,
         sources,
         failures: reading
             .failures
@@ -270,12 +283,27 @@ async fn current(pool: &PgPool) -> Result<Priced, E> {
     }
 }
 
+impl Priced {
+    /// The two legs the vault contract is handed with a lock: the XLM/USD it
+    /// measures against Reflector, and the USD/PHP it records beside it. Both
+    /// or neither — a peso rate with no dollar leg behind it is one the
+    /// contract has no way to check.
+    pub fn checkable_legs(&self) -> Option<(i64, i64)> {
+        Some((self.usd_per_xlm_e8?, self.usd_php_centavos?))
+    }
+}
+
 /// The rate a loan may be priced at. Fails closed: an unavailable or
 /// disagreeing set of feeds refuses the loan rather than issuing it at a
-/// price nobody can vouch for.
+/// price nobody can vouch for — and so does a price the vault contract
+/// couldn't check, since a lock submitted without a dollar leg is a lock the
+/// chain will reject anyway.
 pub async fn for_issuance(pool: &PgPool) -> Result<Priced, E> {
     let priced = current(pool).await?;
-    if !priced.live || Utc::now().timestamp() - priced.as_of > MAX_AGE_SECS {
+    if !priced.live
+        || Utc::now().timestamp() - priced.as_of > MAX_AGE_SECS
+        || priced.checkable_legs().is_none()
+    {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "XLM pricing is unavailable — no independent price feeds agree right now",
@@ -297,6 +325,7 @@ pub async fn for_display(pool: &PgPool) -> Result<Priced, E> {
         as_of,
         method: "last recorded rate — no live feed agreed".to_string(),
         usd_php_centavos: None,
+        usd_per_xlm_e8: None,
         sources: Vec::new(),
         failures: Vec::new(),
         live: false,
@@ -332,6 +361,10 @@ mod tests {
         .expect("three feeds agree");
         assert_eq!(p.centavos_per_xlm, 2282);
         assert_eq!(p.usd_php_centavos, Some(5850));
+        // The dollar leg survives whole for the contract to check: the median
+        // of $0.3900 and $0.3901, scaled 1e8.
+        assert_eq!(p.usd_per_xlm_e8, Some(39_005_000));
+        assert!(p.checkable_legs().is_some());
         assert_eq!(p.sources.len(), 3);
         assert!(p.sources.iter().all(|s| s.used));
         assert_eq!(p.failures.len(), 1);
@@ -343,6 +376,17 @@ mod tests {
         // No fiat leg answered, so the dollar quotes cannot be crossed and
         // only the direct feed survives — below quorum, so: no price.
         assert!(aggregate(reading(&[("coingecko", 22.82)], &[("binance", 0.39)], &[]), 0).is_none());
+    }
+
+    #[test]
+    fn a_price_with_no_dollar_leg_is_not_issuable() {
+        // Two direct XLM/PHP feeds agree, so there IS a price — but no crypto
+        // venue answered, so there is nothing the vault contract could check
+        // it against, and `for_issuance` refuses on exactly this.
+        let p = aggregate(reading(&[("coingecko", 22.82), ("kraken", 22.83)], &[], &[]), 0)
+            .expect("two direct feeds agree");
+        assert_eq!(p.centavos_per_xlm, 2282); // ₱22.825, half-to-even
+        assert!(p.checkable_legs().is_none());
     }
 
     #[test]

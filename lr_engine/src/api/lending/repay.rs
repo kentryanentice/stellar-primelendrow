@@ -277,8 +277,14 @@ pub async fn repay(
             .await
             .map_err(|e| db_err(e, "release collateral"))?;
             if let Some(cid) = collateral_id {
+                // Two steps, in this order: the contract refuses to release
+                // coins from a position with no repayment recorded against
+                // it, so the outcome goes on-chain as its own transaction
+                // before the money moves. The queue is ordered by id, which
+                // is what keeps the pair the right way round.
                 sqlx::query(
-                    "INSERT INTO public.collateral_actions (collateral_id, action) VALUES ($1, 'release')",
+                    "INSERT INTO public.collateral_actions (collateral_id, action)
+                     VALUES ($1, 'mark_repaid'), ($1, 'release')",
                 )
                 .bind(cid)
                 .execute(&mut *tx)
