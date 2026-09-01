@@ -51,6 +51,10 @@ pub struct ApplyResponse {
     pub loan_id: Uuid,
     pub status: &'static str,
     pub rate_bps: i32,
+    /// The principal recorded, in whole centavos. Echoed back because an
+    /// xlm_collateral lock has to name the principal it covers on-chain, and
+    /// that number must be the engine's, not the form's.
+    pub principal: i64,
     /// xlm_collateral: what the wallet must lock, and where.
     pub required_stroops: Option<i64>,
     pub collateral_contract: Option<String>,
@@ -60,6 +64,15 @@ pub struct ApplyResponse {
     pub priced_centavos_per_xlm: Option<i64>,
     pub priced_at: Option<i64>,
     pub price_method: Option<String>,
+    /// xlm_collateral: the two legs the vault contract is handed with the
+    /// lock — the XLM/USD it measures against Reflector (scaled 1e8) and the
+    /// USD/PHP the peso rate was crossed through (centavos) — plus the ratio
+    /// it will enforce. The wallet submits these verbatim; the contract
+    /// refuses the lock if the feed disagrees or the legs don't support the
+    /// peso rate, so there is no number here the client can usefully invent.
+    pub priced_usd_per_xlm_e8: Option<i64>,
+    pub priced_usd_php_centavos: Option<i64>,
+    pub collateral_ratio_bps: Option<i32>,
     pub message: &'static str,
 }
 
@@ -200,11 +213,15 @@ pub async fn apply(
                 loan_id,
                 status: "active",
                 rate_bps: rate,
+                principal: amount,
                 required_stroops: None,
                 collateral_contract: None,
                 priced_centavos_per_xlm: None,
                 priced_at: None,
                 price_method: None,
+                priced_usd_per_xlm_e8: None,
+                priced_usd_php_centavos: None,
+                collateral_ratio_bps: None,
                 message: "Loan approved and disbursed — your backing deposit is locked until it's repaid",
             }
         }
@@ -230,11 +247,28 @@ pub async fn apply(
             let address = address.ok_or((StatusCode::UNPROCESSABLE_ENTITY, "That wallet isn't connected to your account"))?;
 
             let priced = priced.expect("xlm_collateral is priced before the transaction opens");
+            // Both legs, or no loan: the vault contract measures the dollar
+            // leg against Reflector and refuses a peso rate the legs don't
+            // support, so a quote missing one is a lock the chain would
+            // bounce. `for_issuance` has already refused this case — this is
+            // the wall behind it, not a second opinion.
+            let (usd_per_xlm_e8, usd_php_centavos) = priced.checkable_legs().ok_or((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "XLM pricing is unavailable — no independent price feeds agree right now",
+            ))?;
             let required = domain::required_collateral_stroops(
                 amount,
                 params.xlm_min_collateral_pct,
                 priced.centavos_per_xlm,
             );
+            // The contract counts the ratio in basis points; policy states it
+            // in whole percent. The vault enforces its OWN configured ratio,
+            // so if policy is raised without reconfiguring the contract the
+            // engine simply asks for more than the chain requires — never
+            // less. Lowering policy below the vault's ratio is what would
+            // strand borrowers at the lock, and the vault is the wall there
+            // by design.
+            let ratio_bps = (params.xlm_min_collateral_pct * 100) as i32;
             let sources = serde_json::to_value(&priced.sources)
                 .unwrap_or(serde_json::Value::Null);
 
@@ -244,8 +278,9 @@ pub async fn apply(
             sqlx::query(
                 "INSERT INTO public.xlm_collateral
                     (loan_id, user_id, wallet_address, required_stroops, status,
-                     priced_centavos_per_xlm, priced_at, price_sources)
-                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)",
+                     priced_centavos_per_xlm, priced_at, price_sources,
+                     priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)
+                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10)",
             )
             .bind(loan_id)
             .bind(user_id)
@@ -254,6 +289,9 @@ pub async fn apply(
             .bind(priced.centavos_per_xlm)
             .bind(priced.as_of)
             .bind(&sources)
+            .bind(usd_per_xlm_e8)
+            .bind(usd_php_centavos)
+            .bind(ratio_bps)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "insert collateral"))?;
@@ -271,9 +309,11 @@ pub async fn apply(
                     payload: serde_json::json!({
                         "centavos_per_xlm": priced.centavos_per_xlm,
                         "usd_php_centavos": priced.usd_php_centavos,
+                        "usd_per_xlm_e8": usd_per_xlm_e8,
                         "as_of": priced.as_of,
                         "method": priced.method,
                         "min_collateral_pct": params.xlm_min_collateral_pct,
+                        "collateral_ratio_bps": ratio_bps,
                         "required_stroops": required,
                         "sources": sources,
                         "unavailable": priced.failures,
@@ -289,10 +329,14 @@ pub async fn apply(
                 loan_id,
                 status: "pending",
                 rate_bps: rate,
+                principal: amount,
                 required_stroops: Some(required),
                 collateral_contract: Some(contract),
                 priced_centavos_per_xlm: Some(priced.centavos_per_xlm),
                 priced_at: Some(priced.as_of),
+                priced_usd_per_xlm_e8: Some(usd_per_xlm_e8),
+                priced_usd_php_centavos: Some(usd_php_centavos),
+                collateral_ratio_bps: Some(ratio_bps),
                 price_method: Some(priced.method),
                 message: "Lock the required XLM from your wallet, then confirm — the loan disburses once the chain shows it",
             }
@@ -358,11 +402,15 @@ pub async fn apply(
                 loan_id,
                 status: "pending",
                 rate_bps: rate,
+                principal: amount,
                 required_stroops: None,
                 collateral_contract: None,
                 priced_centavos_per_xlm: None,
                 priced_at: None,
                 price_method: None,
+                priced_usd_per_xlm_e8: None,
+                priced_usd_php_centavos: None,
+                collateral_ratio_bps: None,
                 message: "Invitations sent — the loan disburses once your guarantors accept and their pledges cover it",
             }
         }

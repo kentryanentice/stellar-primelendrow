@@ -48,6 +48,14 @@ pub struct CollateralView {
     /// rather than take it on trust. Null on positions predating migration 025.
     pub priced_centavos_per_xlm: Option<i64>,
     pub priced_at: Option<i64>,
+    /// The same pinned quote in the shape the vault contract takes it: the
+    /// XLM/USD leg it measures against Reflector (scaled 1e8), the USD/PHP
+    /// leg the peso rate was crossed through (centavos), and the ratio it
+    /// enforces. A borrower resuming an interrupted lock submits THESE, not a
+    /// fresh number — the position is priced once, at issuance.
+    pub priced_usd_per_xlm_e8: Option<i64>,
+    pub priced_usd_php_centavos: Option<i64>,
+    pub collateral_ratio_bps: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -100,16 +108,17 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     .map_err(|e| db_err(e, "schedule"))?;
 
     let collateral = if product == "xlm_collateral" {
-        let row: Option<(String, i64, i64, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+        let row: Option<(String, i64, i64, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i32)> = sqlx::query_as(
             "SELECT wallet_address, required_stroops, locked_stroops, status,
-                    priced_centavos_per_xlm, priced_at
+                    priced_centavos_per_xlm, priced_at,
+                    priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps
                FROM public.xlm_collateral WHERE loan_id = $1",
         )
         .bind(id)
         .fetch_optional(pool)
         .await
         .map_err(|e| db_err(e, "collateral"))?;
-        row.map(|(wallet_address, required_stroops, locked_stroops, c_status, priced_centavos_per_xlm, priced_at)| {
+        row.map(|(wallet_address, required_stroops, locked_stroops, c_status, priced_centavos_per_xlm, priced_at, priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)| {
             // Health = collateral value / outstanding, at the live rate.
             // Display + liquidation watch; the seize decision itself is an
             // admin action against the vault, never automatic here.
@@ -129,6 +138,9 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
                 liquidatable,
                 priced_centavos_per_xlm,
                 priced_at,
+                priced_usd_per_xlm_e8,
+                priced_usd_php_centavos,
+                collateral_ratio_bps: Some(collateral_ratio_bps),
             }
         })
     } else {

@@ -4,7 +4,7 @@ import { ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Alert
 import type useLoanHistory from '../../functions/Lending/useLoanHistory'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
-import { lockAndConfirmCollateral } from '../../functions/Lending/stellarLock'
+import { lockAndConfirmCollateral, quoteFromPinned } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
 import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
@@ -39,6 +39,15 @@ function LoanHistoryCard({ data, history, onChanged }: {
 
     const resumeLock = async (loan: Loan) => {
         if (!loan.collateral || !data.params.collateral_contract) return
+        // Resuming submits the quote pinned when the loan was applied for,
+        // never a fresh one — the position is priced once, at issuance. If
+        // XLM has since moved outside the vault's band, the contract refuses
+        // and says so, which is the fail-closed behaviour, not a bug.
+        const quote = quoteFromPinned(loan.collateral)
+        if (!quote) {
+            toast.error('This application has no checkable price on it — apply again to get a fresh quote')
+            return
+        }
         setLockingId(loan.id)
         try {
             const result = await lockAndConfirmCollateral({
@@ -46,6 +55,8 @@ function LoanHistoryCard({ data, history, onChanged }: {
                 walletAddress: loan.collateral.wallet_address,
                 loanId: loan.id,
                 stroops: loan.collateral.required_stroops,
+                principalCentavos: loan.principal,
+                quote,
                 csrfToken,
             })
             if ('error' in result) {

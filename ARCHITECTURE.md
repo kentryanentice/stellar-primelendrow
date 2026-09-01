@@ -243,14 +243,25 @@ Soroban contract, keyed by the loan's UUID (16 bytes). The security model is
 deliberately asymmetric — **anyone can put funds in, only the engine can take
 them out:**
 
-- `lock` — the borrower signs from their own wallet; funds move into the vault.
-  The engine verifies the resulting transaction on **Horizon** before the loan
-  disburses.
-- `release` — **admin-only**; on repayment, funds return to the depositor
-  recorded at lock time. The destination cannot be redirected, so even a
-  compromised engine key cannot route a release elsewhere.
-- `seize` — **admin-only**; the default/liquidation path, sending funds to the
-  treasury address.
+- `lock` — the borrower signs from their own wallet; funds move into the vault,
+  and the position starts `Active`. The engine verifies the resulting
+  transaction on **Horizon** before the loan disburses.
+- `mark_repaid` / `mark_defaulted` — **admin-only**; the outcome, recorded
+  on-chain as its own transaction, before any money moves.
+- `release` — **admin-only**, and refused unless the loan was recorded repaid.
+  Funds return to the depositor recorded at lock time; the destination cannot
+  be redirected, so even a compromised engine key cannot route a release
+  elsewhere.
+- `seize` — **admin-only**, and refused unless a default was recorded first;
+  the liquidation path, sending funds to the treasury address at a
+  contract-checked seizure price.
+
+That state machine is what makes two of the SOW's guarantees contract
+behaviour rather than policy: there is no call sequence that takes coins out of
+an `Active` position, and no seizure that does not leave a public default
+record on the ledger ahead of it. The admin still decides *what* to record —
+the contract makes the record unavoidable and ordered, which is the boundary
+claimed and no more.
 
 One lock per loan (top-ups are refused so a single transaction hash maps to a
 single position), and locks extend their ledger TTL on every touch so an active
@@ -276,9 +287,24 @@ loan. Screens degrade instead of failing (`for_display` falls back to the last
 rate on record, flagged `live: false`, and the UI says so). The agreed rate is
 appended to `fx_rates` with its per-feed evidence, and **pinned** onto the
 `xlm_collateral` row plus a `collateral_priced` ledger event, so a later price
-move never rewrites what a borrower was asked to lock. The oracle is the
-engine's candidate price; the SEP-40/Reflector bound the vault contract applies
-before acting on it is the next sprint's deliverable.
+move never rewrites what a borrower was asked to lock.
+
+**And the contract checks it.** The engine's number is a *candidate*: it is the
+platform's own, so on its own it is exactly the operator discretion this
+design exists to narrow. `lock` and `seize` therefore carry the quote on-chain
+— the peso rate, the XLM/USD leg, and the USD/PHP leg it was crossed through —
+and the vault measures the dollar leg against a public **SEP-40** feed
+(Reflector) before it acts. It refuses a feed with nothing to say, a feed point
+older than **15 minutes**, a quote more than **5%** from it, or a peso rate its
+own two legs don't support; it then refuses coins that don't cover the ratio
+(**120%**, `collateral_ratio_bps`) at that checked rate. Both bounds are
+contract constants — the admin can repoint the feed or recalibrate the ratio,
+but cannot widen the check itself. The whole path fails closed: no checkable
+price, no lock, and `pricing::for_issuance` refuses upstream for the same
+reason rather than sending the borrower into a transaction the chain will
+bounce. Only the dollar leg is verifiable on-chain; the fiat leg is recorded
+but no Stellar feed can vouch for it, and inside the band the backend still
+picks the exact number.
 
 ### 5.8 Loan creation & repayment → README §8–10
 
@@ -341,9 +367,12 @@ settings) is the remaining integration step.
 - **Private ID photos** — stored in a non-public Supabase bucket and served only
   through the `lr-cdn` Worker via **HMAC-signed, expiring URLs**; the bytes are
   never publicly listable.
-- **On-chain custody** — the vault is backend-gated: `release`/`seize` are
-  admin-only and the release destination is fixed at lock time, so funds can
-  enter permissionlessly but only leave under engine authority. The record
+- **On-chain custody** — the vault is backend-gated: recording an outcome,
+  `release` and `seize` are admin-only, and the release destination is fixed at
+  lock time, so funds can enter permissionlessly but only leave under engine
+  authority. Even that authority is bounded: a release needs a recorded
+  repayment, a seizure needs a recorded default, and both movements are priced
+  against a public SEP-40 feed within published constants (§5.7). The record
   registries are likewise admin-gated — only the engine's account can write,
   anyone may read.
 - **Server-side authority** — every rule (eligibility, limits, money math) is

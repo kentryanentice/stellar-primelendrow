@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
-import { lockAndConfirmCollateral } from './stellarLock'
+import { lockAndConfirmCollateral, quoteFromPinned } from './stellarLock'
 import type { ApplyResponse, Product, QuoteResponse } from './types'
 
 const API = import.meta.env.VITE_API_URL ?? ''
@@ -92,6 +92,13 @@ export default function useBorrow(onChanged: () => void) {
      *  for verification — the engine only believes Horizon. */
     const lockAndConfirm = useCallback(async (walletAddress: string) => {
         if (!pendingLock?.required_stroops || !pendingLock.collateral_contract) return
+        // The contract will not lock against a rate it can't check, so a
+        // quote missing its dollar leg never reaches the wallet.
+        const quote = quoteFromPinned(pendingLock)
+        if (!quote) {
+            toast.error('This application has no checkable price on it — apply again to get a fresh quote')
+            return
+        }
         setLocking(true)
         try {
             const result = await lockAndConfirmCollateral({
@@ -99,6 +106,8 @@ export default function useBorrow(onChanged: () => void) {
                 walletAddress,
                 loanId: pendingLock.loan_id,
                 stroops: pendingLock.required_stroops,
+                principalCentavos: pendingLock.principal,
+                quote,
                 csrfToken,
             })
             if ('error' in result) {

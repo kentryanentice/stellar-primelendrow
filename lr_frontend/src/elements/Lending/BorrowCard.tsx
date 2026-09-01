@@ -58,7 +58,9 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                         Priced at <b>{xlmRate(pendingLock.priced_centavos_per_xlm)}</b>
                         {pendingLock.price_method ? ` — ${pendingLock.price_method}` : ''}
                         {pendingLock.priced_at !== null ? `, read ${since(pendingLock.priced_at)}` : ''}. This
-                        rate is locked to your loan and won't be recalculated.
+                        rate is locked to your loan and won't be recalculated. The vault checks it against a
+                        public price feed before it accepts your coins, and refuses the lock if the feed has
+                        gone quiet or the market has moved too far from it.
                     </p>
                 )}
                 <button
