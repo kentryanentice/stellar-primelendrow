@@ -94,6 +94,7 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/collateral/confirm",
             post(lending::collateral_confirm).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        .route("/loans/{loan_id}/collateral", get(lending::collateral_record))
         .route("/guarantors/invites", get(lending::guarantor_invites))
         .route(
             "/guarantors/respond",

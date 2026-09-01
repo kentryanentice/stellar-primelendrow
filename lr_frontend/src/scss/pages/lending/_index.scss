@@ -1544,6 +1544,142 @@ select.lending-input option {
     flex-wrap: wrap;
 }
 
+/* ---- collateral record (CollateralRecordCard) ---- */
+/* The custody panel inside an expanded XLM loan row: what is locked, the
+   price it was struck at with the feeds behind it, and every on-chain
+   movement. Insetting it slightly separates "here is the loan" from "here is
+   what the chain says about it" without introducing a second card style. */
+
+.lending-custody {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 12px 13px 13px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+}
+
+.lending-custody-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+
+    h3 {
+        margin: 0;
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #eef1f6;
+    }
+
+    .lending-card-icon { width: 26px; height: 26px; }
+    .lending-card-icon svg { width: 14px; height: 14px; }
+}
+
+.lending-custody-status {
+    margin-left: auto;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+
+    &.is-pending { background: rgba(245, 185, 66, .13); color: #f5b942; }
+    &.is-locked { background: rgba(122, 162, 255, .13); color: #7aa2ff; }
+    &.is-released { background: rgba(111, 217, 154, .13); color: #6fd99a; }
+    &.is-seized { background: rgba(255, 125, 125, .13); color: #ff8f8f; }
+}
+
+.lending-custody-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px 16px;
+    margin: 0;
+
+    dt {
+        font-size: 10.5px;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+        color: #8492ac;
+    }
+
+    dd {
+        margin: 2px 0 0;
+        font-size: 13px;
+        color: #dfe6f2;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.lending-custody-price {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* A feed that sat outside the band is shown, not hidden — "two of five feeds
+   disagreed" is exactly what a reviewer should be able to see behind a price. */
+.lending-feeds tr.is-dropped td {
+    color: #8492ac;
+    text-decoration: line-through solid rgba(255, 255, 255, .25);
+}
+
+.lending-moves {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.lending-move {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 0;
+    font-size: 13px;
+    color: #dfe6f2;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+
+    &:last-child { border-bottom: 0; }
+}
+
+.lending-move-what {
+    flex: 1 1 200px;
+    min-width: 0;
+
+    b { font-weight: 600; }
+}
+
+.lending-move-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--auth-primary);
+    text-decoration: none;
+
+    svg { width: 12px; height: 12px; }
+    &:hover { text-decoration: underline; }
+}
+
+/* Queued = the engine has recorded the intent, the chain hasn't seen it yet.
+   Deliberately not styled as a success. */
+.lending-move-status {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    background: rgba(245, 185, 66, .13);
+    color: #f5b942;
+}
+
 /* ---- responsive ---- */
 
 @media (max-width: 900px) {

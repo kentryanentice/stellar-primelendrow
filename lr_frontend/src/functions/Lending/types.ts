@@ -156,6 +156,67 @@ export type ApplyResponse = PinnedQuote & {
     message: string
 }
 
+/**
+ * One movement of collateral in or out of the vault. `queued` means the
+ * engine has recorded the intent but the admin key hasn't executed it yet —
+ * a claim about us, not about the chain, and shown as such.
+ */
+export type CollateralMovement = {
+    kind: 'lock' | 'mark_repaid' | 'release' | 'mark_defaulted' | 'seize'
+    status: 'confirmed' | 'queued'
+    tx_hash: string | null
+    at: number | null
+    /** A seizure is priced again at the day's checked quote; a lock uses the pinned one. */
+    quote_php_per_xlm_centavos: number | null
+    quote_usd_per_xlm_e8: number | null
+    quote_php_per_usd_centavos: number | null
+}
+
+/** One public feed's contribution to the rate a position was struck at. */
+export type CollateralPriceSource = {
+    name: string
+    centavos_per_xlm: number
+    /** 'XLM/PHP' when quoted directly, 'XLM/USD x USD/PHP' when derived. */
+    leg: string
+    deviation_bps: number
+    /** false = outside the engine's 5% band, so excluded from the median. */
+    used: boolean
+}
+
+/**
+ * GET /loans/{id}/collateral — the custody record: the position, the price it
+ * was struck at with the feeds behind it, and every on-chain movement with
+ * its transaction hash. Everything here is checkable against the ledger.
+ */
+export type CollateralRecord = {
+    loan_id: string
+    principal: number
+    loan_status: Loan['status']
+    /** The vault contract the record should be checked against. */
+    contract_id: string | null
+    wallet_address: string
+    required_stroops: number
+    locked_stroops: number
+    status: 'pending' | 'locked' | 'released' | 'seized'
+    collateral_ratio_bps: number
+    created_at: number
+    /** When the lock was verified on-chain; null while still pending. */
+    locked_at: number | null
+    /** Worth of the locked coins at the LIVE rate — display only. */
+    value_centavos: number | null
+    health_pct: number | null
+    liquidatable: boolean
+    price: {
+        centavos_per_xlm: number | null
+        usd_per_xlm_e8: number | null
+        usd_php_centavos: number | null
+        priced_at: number | null
+        sources_used: number
+        sources: CollateralPriceSource[]
+    }
+    movements: CollateralMovement[]
+}
+
 export type ScheduleRow = {
     installment: number
     due_at: number

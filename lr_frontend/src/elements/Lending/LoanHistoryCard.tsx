@@ -7,6 +7,8 @@ import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral, quoteFromPinned } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import useCollateralRecord from '../../functions/Lending/useCollateralRecord'
+import CollateralRecordCard from './CollateralRecordCard'
 import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 const STATUS_CLS: Record<Loan['status'], string> = {
@@ -36,6 +38,11 @@ function LoanHistoryCard({ data, history, onChanged }: {
     const navigate = useNavigate()
     const [openId, setOpenId] = useState<string | null>(null)
     const [lockingId, setLockingId] = useState<string | null>(null)
+    /** The open row's custody record, fetched only when it's actually opened. */
+    const openLoan = loans.find(l => l.id === openId)
+    const custody = useCollateralRecord(
+        openLoan?.product === 'xlm_collateral' ? openLoan.id : null,
+    )
 
     const resumeLock = async (loan: Loan) => {
         if (!loan.collateral || !data.params.collateral_contract) return
@@ -64,6 +71,9 @@ function LoanHistoryCard({ data, history, onChanged }: {
                 return
             }
             toast.success(result.message)
+            // The record just gained a lock transaction — drop the cached
+            // copy so reopening the row reads the new one.
+            custody.invalidate(loan.id)
             await refresh()
             onChanged()
         } finally {
@@ -120,13 +130,24 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                 </p>
                                             )}
 
+                                            {/* The full custody record replaces the one-line
+                                                summary once it loads: same numbers, plus the
+                                                transaction hashes and the feeds behind the
+                                                price. The line stays as the fallback for a
+                                                record that couldn't be fetched. */}
                                             {loan.collateral && (
-                                                <p className={`lending-muted${loan.collateral.liquidatable ? ' lending-liquidation' : ''}`}>
-                                                    {loan.collateral.liquidatable && <AlertTriangle />}
-                                                    Collateral: {xlm(loan.collateral.locked_stroops || loan.collateral.required_stroops)} ({loan.collateral.status})
-                                                    {loan.collateral.health_pct !== null && <> · health {loan.collateral.health_pct}%</>}
-                                                    {loan.collateral.liquidatable && <> — below the liquidation threshold, top-up is not supported: repay to protect it</>}
-                                                </p>
+                                                custody.record && custody.record.loan_id === loan.id ? (
+                                                    <CollateralRecordCard record={custody.record} />
+                                                ) : custody.loading ? (
+                                                    <p className='lending-muted'>Loading the collateral record…</p>
+                                                ) : (
+                                                    <p className={`lending-muted${loan.collateral.liquidatable ? ' lending-liquidation' : ''}`}>
+                                                        {loan.collateral.liquidatable && <AlertTriangle />}
+                                                        Collateral: {xlm(loan.collateral.locked_stroops || loan.collateral.required_stroops)} ({loan.collateral.status})
+                                                        {loan.collateral.health_pct !== null && <> · health {loan.collateral.health_pct}%</>}
+                                                        {loan.collateral.liquidatable && <> — below the liquidation threshold, top-up is not supported: repay to protect it</>}
+                                                    </p>
+                                                )
                                             )}
 
                                             {loan.guarantors.length > 0 && (
