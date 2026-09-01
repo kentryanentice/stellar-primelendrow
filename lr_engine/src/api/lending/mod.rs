@@ -13,6 +13,7 @@
 mod admin;
 mod apply;
 mod collateral;
+mod custody;
 mod deposit;
 mod deposits_list;
 mod domain;
@@ -32,6 +33,7 @@ mod withdraw;
 pub use admin::set_fx_rate;
 pub use apply::apply;
 pub use collateral::confirm as collateral_confirm;
+pub use custody::record as collateral_record;
 pub use deposit::deposit;
 pub use deposits_list::list as deposits_list;
 pub use guarantors::{invites as guarantor_invites, respond as guarantor_respond};

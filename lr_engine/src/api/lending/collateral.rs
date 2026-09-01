@@ -94,9 +94,13 @@ pub async fn confirm(
 
     // One tx hash credits one position, ever (unique index) — a replayed
     // confirm, or the same lock pointed at two loans, stops here.
+    // locked_at is written once and never moved again: `updated_at` shifts on
+    // release or seizure, so without it the custody record would lose the one
+    // date it exists to show (027).
     let updated = sqlx::query(
         "UPDATE public.xlm_collateral
-            SET locked_stroops = $1, lock_tx_hash = $2, status = 'locked', updated_at = $3
+            SET locked_stroops = $1, lock_tx_hash = $2, status = 'locked',
+                locked_at = $3, updated_at = $3
           WHERE loan_id = $4 AND status = 'pending'",
     )
     .bind(locked_stroops)

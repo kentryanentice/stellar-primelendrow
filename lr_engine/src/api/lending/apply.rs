@@ -269,18 +269,17 @@ pub async fn apply(
             // strand borrowers at the lock, and the vault is the wall there
             // by design.
             let ratio_bps = (params.xlm_min_collateral_pct * 100) as i32;
-            let sources = serde_json::to_value(&priced.sources)
-                .unwrap_or(serde_json::Value::Null);
 
             // The rate is pinned with the position, not looked up again later:
             // "priced at issuance" (SOW §3.8) means a later price move never
             // rewrites what this borrower was asked to lock.
-            sqlx::query(
+            let collateral_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO public.xlm_collateral
                     (loan_id, user_id, wallet_address, required_stroops, status,
-                     priced_centavos_per_xlm, priced_at, price_sources,
+                     priced_centavos_per_xlm, priced_at,
                      priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)
-                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10)",
+                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
+                 RETURNING id",
             )
             .bind(loan_id)
             .bind(user_id)
@@ -288,16 +287,38 @@ pub async fn apply(
             .bind(required)
             .bind(priced.centavos_per_xlm)
             .bind(priced.as_of)
-            .bind(&sources)
             .bind(usd_per_xlm_e8)
             .bind(usd_php_centavos)
             .bind(ratio_bps)
-            .execute(&mut *tx)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| db_err(e, "insert collateral"))?;
 
-            // The same evidence in the notebook (D9), where the public proof
-            // page reads it: which feeds said what, and when they were read.
+            // Which feed said what, one row each (027). This is the evidence
+            // the borrower's custody record and the proof page read back, and
+            // it is kept queryable — "how often did this feed sit outside the
+            // band" is a question the database should be able to answer, not
+            // one that needs every row unpacked in application code.
+            for source in &priced.sources {
+                sqlx::query(
+                    "INSERT INTO public.collateral_price_sources
+                        (collateral_id, name, centavos_per_xlm, leg, deviation_bps, used)
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                )
+                .bind(collateral_id)
+                .bind(&source.name)
+                .bind(source.centavos_per_xlm)
+                .bind(source.leg)
+                .bind(source.deviation_bps)
+                .bind(source.used)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| db_err(e, "insert price source"))?;
+            }
+
+            // The summary in the notebook (D9): the agreed number and when it
+            // was read. The per-feed detail is no longer duplicated here — it
+            // is rows in collateral_price_sources, keyed to this position.
             commit_event(
                 &mut tx,
                 EventDraft {
@@ -315,8 +336,9 @@ pub async fn apply(
                         "min_collateral_pct": params.xlm_min_collateral_pct,
                         "collateral_ratio_bps": ratio_bps,
                         "required_stroops": required,
-                        "sources": sources,
-                        "unavailable": priced.failures,
+                        "sources_used": priced.sources.iter().filter(|s| s.used).count(),
+                        "sources_read": priced.sources.len(),
+                        "unavailable": priced.failures.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
                     }),
                     actor_id: Some(user_id),
                 },
