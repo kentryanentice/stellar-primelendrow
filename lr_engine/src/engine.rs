@@ -146,6 +146,9 @@ async fn main() {
     let db_pool = init_db_pool().await;
 
     infra::gc::spawn(db_pool.clone());
+    // Retries payouts PayPal never received and reconciles the ones it did —
+    // the only place a payout moves the books (028).
+    infra::payouts::spawn(db_pool.clone());
 
     let app = api_routes::routes(mail_rate_limiter)
         .layer(Extension(db_pool))

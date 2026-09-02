@@ -1,0 +1,43 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+/* The Settings "PayPal" card — the account loan proceeds are paid to.
+   Deliberately borrows the Wallets card's vocabulary (badge, disconnect
+   button, spinner) rather than inventing a second look for the same idea:
+   both cards are "an external account you've linked, and can unlink". */
+
+.settings-card-paypal {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.settings-paypal-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 11px 13px;
+    border-radius: 11px;
+    border: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(255, 255, 255, .025);
+    color: #e6edff;
+    font-size: 13px;
+
+    > div {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    b { font-weight: 600; }
+}
+
+/* Left-aligned and self-sized: unlike the wallets list, there is only ever
+   one PayPal account, so the button sits under the row rather than in it. */
+.settings-paypal-disconnect {
+    align-self: flex-start;
+}

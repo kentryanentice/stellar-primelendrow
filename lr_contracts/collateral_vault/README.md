@@ -154,9 +154,15 @@ XLM_PRICE_SOURCES=                   # optional: narrow the price feeds, e.g.
                                      # the vault checks the XLM/USD leg and a
                                      # price it can't check is one it won't act on.
 XLM_PRICE_TIMEOUT_SECS=8             # per-feed HTTP timeout, 1..30
-PAYPAL_CLIENT_ID=...                 # PHP rail (deposits + repayments)
+PAYPAL_CLIENT_ID=...                 # PHP rail, both directions
 PAYPAL_SECRET=...
 PAYPAL_ENV=sandbox                   # "live" in production
+PAYPAL_RETURN_URL=https://<engine-host>/paypal/callback
+                                     # "Log in with PayPal" comes back here.
+                                     # Must match a return URL registered on
+                                     # the PayPal app exactly, or PayPal
+                                     # refuses the redirect.
+CLIENT_URL=https://primelendrow.com  # where the callback sends the member next
 ```
 
 `lr_frontend` (.env, optional — these are the defaults):

@@ -7,7 +7,7 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::domain;
-use super::ledger::{EventDraft, LedgerError, Posting, account_balance, commit_event};
+use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash};
 use super::lots;
 use crate::api::users::shared::E;
 
@@ -69,7 +69,10 @@ pub async fn disburse(
         .await
         .map_err(|e| db_err(e, "pool lock"))?;
 
-    let cash = account_balance(&mut **tx, "cash")
+    // Free cash, not raw cash: proceeds already promised to other borrowers
+    // and not yet paid out are gone as far as new lending is concerned, even
+    // though they are still sitting in the platform's PayPal balance.
+    let cash = free_cash(&mut **tx)
         .await
         .map_err(|e| db_err(e, "cash balance"))?;
     if cash < principal {
@@ -97,9 +100,13 @@ pub async fn disburse(
             }),
             actor_id: Some(borrower_id),
         },
+        // The pool now OWES the borrower their proceeds; the pesos themselves
+        // don't move until a PayPal payout settles (028). Posting `cash` here
+        // would claim money had left the platform's balance while it was
+        // still sitting in it.
         &[
             Posting { account: "loans_receivable", amount: principal },
-            Posting { account: "cash", amount: -principal },
+            Posting { account: "payout_payable", amount: -principal },
         ],
     )
     .await

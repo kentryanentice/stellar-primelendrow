@@ -353,6 +353,45 @@ The registries are deployed as standalone contracts; wiring the engine to write
 to them inside each Postgres transaction (via the `*_REGISTRY_CONTRACT_ID`
 settings) is the remaining integration step.
 
+### 5.11 Paying members out — PayPal Payouts (migration 028)
+
+The peso rail runs both ways. Money in is a captured order; money out is a
+**PayPal payout to the member's own account**, and the two halves are
+deliberately symmetric — each is idempotent on a reference the provider
+recognises, and neither believes the client about an amount.
+
+**Connecting.** A member links their PayPal through **Log in with PayPal**
+(`api/paypal`): the engine mints a single-use `state`, the member authenticates
+on paypal.com, and the callback exchanges the code server-side for a
+PayPal-issued **payer id**. Nobody ever types a destination, so there is no
+address to mistype and no email for an attacker to substitute. The callback
+identifies the member from the `state` row rather than a cookie — it is a
+cross-site redirect, and a flow that depends on the browser sending cookies is
+a flow that breaks quietly. One PayPal account may back one member
+(`idx_paypal_accounts_payer`), the same rule KYC applies to government IDs.
+
+**Paying.** Disbursement no longer posts `cash`; it raises
+**`payout_payable`**, because the pesos really are still in the platform's
+PayPal balance at that moment. Every liquidity decision therefore reads
+`free_cash` = `cash + payout_payable`, never `cash` alone, or the same peso
+could fund two loans. When the borrower withdraws, the engine writes a
+`payouts` row and **commits it before calling PayPal**: the row's primary key
+is the `sender_batch_id` PayPal is given, and PayPal refuses a batch id it has
+seen, so no retry — after a timeout, a crash, a double click — can pay twice.
+
+**Settling.** A submitted payout is not a paid one. `infra::payouts` retries
+what PayPal never received and polls what it did; only a confirmed `SUCCESS`
+posts `payout_payable → cash`, carrying the transfer's own reference as the
+ledger's unique `rail_ref` so the credit cannot be posted twice. A payout that
+returns or is refused leaves the payable standing — the member is still owed
+the money and can ask again.
+
+**Sandbox and live are the same code.** `PAYPAL_ENV` switches two hostnames
+(`api_base`, `web_base`) and nothing else: identical request shapes, statuses,
+idempotency rules and failure modes. What differs is on PayPal's side —
+Payouts must be enabled on a live business account, and live recipients are
+real people.
+
 ---
 
 ## 6. Security model
@@ -385,7 +424,7 @@ settings) is the remaining integration step.
 
 | Integration | Used for | How |
 |---|---|---|
-| **PayPal** | Fiat rail for deposits and repayments | Backend verifies orders/captures over HTTPS (`reqwest`) before posting to the ledger |
+| **PayPal** | Fiat rail, both directions | **In:** backend verifies orders/captures over HTTPS (`reqwest`) before posting to the ledger. **Out:** Payouts to the member's own connected account (§5.11) |
 | **Stellar Horizon** | Verifying on-chain locks; anchoring | Engine reads transactions to confirm a `lock` before disbursing, and submits anchoring transactions |
 | **Soroban** | XLM collateral custody + on-chain records | `collateral_vault` (§5.7) and the deposit/loan/payment registries (§5.10) |
 | **Resend** (via `lr-mailer`) | Transactional email (OTP, resets) | Engine calls the Worker at `stellar.mailer.primelendrow.com` |

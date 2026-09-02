@@ -14,7 +14,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use super::ledger::{EventDraft, Posting, account_balance, commit_event};
+use super::ledger::{EventDraft, Posting, commit_event, free_cash};
 use super::lots;
 use super::shared::{db_err, ledger_err, validate_centavos};
 use crate::api::users::shared::{E, require_verified_user};
@@ -59,7 +59,10 @@ pub async fn withdraw(
 
     // The books are the wall: even a correct lot sum can't overdraw actual
     // cash (loans out are cash gone until repaid).
-    let cash = account_balance(&mut *tx, "cash")
+    // Free cash: loan proceeds already promised but not yet paid out are not
+    // available to cover a withdrawal, even though they haven't left the
+    // platform's PayPal balance yet (028).
+    let cash = free_cash(&mut *tx)
         .await
         .map_err(|e| db_err(e, "cash balance"))?;
     if cash < amount {
