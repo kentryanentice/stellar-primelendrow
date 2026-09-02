@@ -157,6 +157,41 @@ export type ApplyResponse = PinnedQuote & {
 }
 
 /**
+ * GET /paypal/account — the PayPal account loan proceeds are paid to.
+ * Connected through "Log in with PayPal", so the destination is an account
+ * PayPal itself identified; the member never types one.
+ */
+export type PaypalAccount = {
+    connected: boolean
+    /** "j•••@gmail.com" — enough to recognise, never the full address. */
+    email_masked: string | null
+    verified: boolean
+    connected_at: number | null
+    /** False when this deployment has no PayPal credentials at all. */
+    paypal_ready: boolean
+}
+
+/**
+ * A transfer of money out to a member.
+ *
+ * `sent` means PayPal accepted it, not that it arrived — only `paid` moves
+ * the books. `unclaimed` means the recipient hasn't accepted it yet; PayPal
+ * returns those to us after 30 days.
+ */
+export type Payout = {
+    id: string
+    loan_id: string | null
+    amount: number
+    status: 'pending' | 'sent' | 'paid' | 'unclaimed' | 'returned' | 'failed'
+    batch_id: string | null
+    transaction_id: string | null
+    created_at: number
+    settled_at: number | null
+    /** Why it's stuck or came back, in plain words. */
+    note: string | null
+}
+
+/**
  * One movement of collateral in or out of the vault. `queued` means the
  * engine has recorded the intent but the admin key hasn't executed it yet —
  * a claim about us, not about the chain, and shown as such.

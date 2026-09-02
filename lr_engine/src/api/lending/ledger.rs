@@ -91,17 +91,23 @@ pub async fn commit_event(
     Ok(event_id)
 }
 
-/// SUM of signed postings for an account. For debit-normal accounts (cash,
-/// loans_receivable) a positive number is what the pool holds/is owed.
-pub async fn account_balance<'e, X: PgExecutor<'e>>(
-    executor: X,
-    account: &str,
-) -> Result<i64, sqlx::Error> {
-    // ::BIGINT: SUM(BIGINT) is NUMERIC in Postgres, which won't decode to i64.
+/// Cash the pool may actually commit: what it holds, less what it has already
+/// promised to members and not yet sent (migration 028).
+///
+/// Disbursing a loan raises `payout_payable` rather than lowering `cash` —
+/// the pesos really are still in the platform's PayPal balance until a payout
+/// settles. Reading raw `cash` after that would let the same peso fund two
+/// loans, so every liquidity decision reads THIS, never `cash` alone.
+/// `payout_payable` is credit-normal, so its balance is negative and adding
+/// it subtracts the promise.
+/// Summed in ONE query rather than two reads added together: the two accounts
+/// move in the same transaction as each other, and a pair of round trips could
+/// see them mid-flight.
+pub async fn free_cash<'e, X: PgExecutor<'e>>(executor: X) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.ledger_postings WHERE account = $1",
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.ledger_postings
+          WHERE account IN ('cash', 'payout_payable')",
     )
-    .bind(account)
     .fetch_one(executor)
     .await
 }

@@ -10,6 +10,8 @@ import { useToast } from '../providers/useToast'
 import { useAccent } from '../providers/AccentProvider'
 import { useCreditScore, CREDIT_SCORE_MAX } from '../functions/useCreditScore'
 import { CreditScoreSkeleton, IdentityTimelineSkeleton, WalletsCardSkeleton } from '../elements/Settings/Skeleton'
+// Not lazy like WalletsCard: there's no SDK behind it, just a fetch and a redirect.
+import PaypalCard from '../elements/Settings/PaypalCard'
 
 // The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
@@ -131,11 +133,11 @@ function Settings() {
     const [confirming, setConfirming] = useState(false)
     const [loggingOut, setLoggingOut] = useState(false)
 
-    // the owner's own KYC status — no PII, just where the submission stands
+    // the owner's own KYC status — no PII, just where the submission stands.
+    // Fetched once per mount, so there's no stale state to reset up front:
+    // loading/error already start at true/false.
     useEffect(() => {
         let aborted = false
-        setKycLoading(true)
-        setKycError(false)
         fetch(`${API}/kyc/status`, { credentials: 'include' })
             .then(async res => {
                 if (!res.ok) throw new Error()
@@ -375,6 +377,11 @@ function Settings() {
                         <WalletsCard />
                     </Suspense>
                 )}
+
+                {/* Not gated on score: connecting a payout account is
+                    something a member should be able to do before they ever
+                    qualify to borrow, not a step wedged into the withdrawal. */}
+                <PaypalCard />
 
                 <section className='settings-card settings-card-account'>
                     <div className='settings-card-head'>

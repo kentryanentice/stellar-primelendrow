@@ -6,10 +6,24 @@ import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral, quoteFromPinned } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
-import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import { PRODUCT_LABEL, type Loan, type Payout, type PoolResponse } from '../../functions/Lending/types'
 import useCollateralRecord from '../../functions/Lending/useCollateralRecord'
+import usePayouts from '../../functions/Lending/usePayouts'
 import CollateralRecordCard from './CollateralRecordCard'
 import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
+
+/** Where the member's money has actually got to, in their words. */
+const PAYOUT_LABEL: Record<Payout['status'], string> = {
+    pending: 'Queued for PayPal — we’ll keep trying',
+    sent: 'Sent to PayPal — it usually lands within minutes',
+    paid: 'Paid to your PayPal',
+    unclaimed: 'Waiting for you to accept it in PayPal',
+    returned: 'Came back to us',
+    failed: 'PayPal couldn’t send it',
+}
+
+/** The states worth pulling the member's eye to. */
+const PAYOUT_ALERT = new Set<Payout['status']>(['unclaimed', 'returned', 'failed'])
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',
@@ -43,6 +57,7 @@ function LoanHistoryCard({ data, history, onChanged }: {
     const custody = useCollateralRecord(
         openLoan?.product === 'xlm_collateral' ? openLoan.id : null,
     )
+    const { forLoan, requestPayout, requestingId } = usePayouts()
 
     const resumeLock = async (loan: Loan) => {
         if (!loan.collateral || !data.params.collateral_contract) return
@@ -129,6 +144,36 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                     {loan.disbursed_at && <> · disbursed {formatDate(loan.disbursed_at)}</>}
                                                 </p>
                                             )}
+
+                                            {/* The proceeds. Disbursement makes the pool owe them;
+                                                this is where the member actually takes the money. */}
+                                            {loan.status === 'active' && (() => {
+                                                const payout = forLoan(loan.id)
+                                                if (!payout) {
+                                                    return (
+                                                        <button
+                                                            type='button'
+                                                            className='lending-btn-primary'
+                                                            disabled={requestingId === loan.id}
+                                                            onClick={() => void requestPayout(loan.id)}
+                                                        >
+                                                            {requestingId === loan.id
+                                                                ? 'Sending to PayPal…'
+                                                                : `Send ${pesos(loan.principal)} to my PayPal`}
+                                                        </button>
+                                                    )
+                                                }
+                                                return (
+                                                    <p className={`lending-muted${PAYOUT_ALERT.has(payout.status) ? ' lending-liquidation' : ''}`}>
+                                                        {PAYOUT_ALERT.has(payout.status) && <AlertTriangle />}
+                                                        {PAYOUT_LABEL[payout.status]}
+                                                        {payout.status === 'paid' && payout.settled_at !== null && (
+                                                            <> on {formatDate(payout.settled_at)}</>
+                                                        )}
+                                                        {payout.note && <> — {payout.note}</>}
+                                                    </p>
+                                                )
+                                            })()}
 
                                             {/* The full custody record replaces the one-line
                                                 summary once it loads: same numbers, plus the

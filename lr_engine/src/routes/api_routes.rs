@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 
-use crate::api::{credit, kyc, lending, users, wallets};
+use crate::api::{credit, kyc, lending, paypal, users, wallets};
 use crate::infra::rate::{RateLimiter, enforce_rate_limit};
 
 const AUTH_BODY_LIMIT: usize = 16 * 1024;
@@ -95,6 +95,22 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             post(lending::collateral_confirm).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
         .route("/loans/{loan_id}/collateral", get(lending::collateral_record))
+        .route(
+            "/loans/payout",
+            post(lending::payout_request).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route("/payouts", get(lending::payouts_list))
+        // "Log in with PayPal": the member authorises on PayPal's own domain
+        // and is redirected back to /paypal/callback, which is a GET (so the
+        // CSRF guard passes it) and identifies them from the single-use
+        // `state` row rather than from a cookie the redirect may not carry.
+        .route("/paypal/connect", get(paypal::start))
+        .route("/paypal/callback", get(paypal::callback))
+        .route("/paypal/account", get(paypal::status))
+        .route(
+            "/paypal/disconnect",
+            post(paypal::disconnect).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/guarantors/invites", get(lending::guarantor_invites))
         .route(
             "/guarantors/respond",

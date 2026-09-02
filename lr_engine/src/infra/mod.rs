@@ -5,6 +5,7 @@ pub mod gc;
 pub mod limiter;
 pub mod login_guard;
 pub mod oracle;
+pub mod payouts;
 pub mod paypal;
 pub mod rate;
 pub mod stellar;

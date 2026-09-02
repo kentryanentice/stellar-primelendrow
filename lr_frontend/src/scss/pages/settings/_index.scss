@@ -1,6 +1,7 @@
 @use '../../core/globals';
 @use '../../core/styles';
 @use 'wallets';
+@use 'paypal';
 
 .settings-page {
     max-width: 1080px;

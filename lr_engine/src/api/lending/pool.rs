@@ -8,7 +8,7 @@ use axum::{Extension, Json, http::HeaderMap};
 use serde::Serialize;
 use sqlx::PgPool;
 
-use super::ledger::account_balance;
+use super::ledger::free_cash;
 use super::policy::{self, PolicyParams};
 use super::pricing;
 use super::shared::db_err;
@@ -70,7 +70,10 @@ pub async fn summary(
             .await
             .map_err(|e| db_err(e, "pool totals"))?;
 
-    let cash_available = account_balance(&pool, "cash")
+    // "Available" means available to lend, so it nets off proceeds already
+    // promised to borrowers and not yet paid out (028) — otherwise the pool
+    // would advertise capacity it has already committed.
+    let cash_available = free_cash(&pool)
         .await
         .map_err(|e| db_err(e, "cash balance"))?;
 
