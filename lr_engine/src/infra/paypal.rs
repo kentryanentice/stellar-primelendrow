@@ -332,15 +332,39 @@ struct UserInfo {
     payer_id: Option<String>,
     #[serde(default)]
     emails: Vec<UserEmail>,
-    #[serde(default)]
-    verified_account: Option<bool>,
+    #[serde(default, deserialize_with = "lenient_bool")]
+    verified_account: bool,
 }
 
 #[derive(Deserialize)]
 struct UserEmail {
-    value: String,
     #[serde(default)]
+    value: String,
+    #[serde(default, deserialize_with = "lenient_bool")]
     primary: bool,
+}
+
+/// The `paypalv1.1` identity schema is loose about booleans: it returns some as
+/// real JSON `true`/`false` and others as the *strings* `"true"`/`"false"`.
+/// `#[serde(default)]` is no defence — it covers a missing field, not a present
+/// one of the wrong type — so a single quoted boolean fails the whole decode,
+/// and it fails *after* the member has already authorised, which is the worst
+/// place to lose the connection. Accept either spelling.
+fn lenient_bool<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrString {
+        Bool(bool),
+        Str(String),
+    }
+    Ok(match Option::<BoolOrString>::deserialize(d)? {
+        Some(BoolOrString::Bool(b)) => b,
+        Some(BoolOrString::Str(s)) => s.eq_ignore_ascii_case("true"),
+        None => false,
+    })
 }
 
 /// Exchanges the authorization code for the member's identity. Runs entirely
@@ -400,9 +424,17 @@ pub async fn exchange_code(code: &str) -> Result<ConnectedPaypal, &'static str> 
         tracing::error!("paypal userinfo status {}", res.status());
         return Err("PayPal did not share the account details");
     }
-    let info: UserInfo = res.json().await.map_err(|e| {
+    // Decoded from text rather than `.json()` so the error names the field and
+    // type that didn't fit. The body itself stays out of the logs: it carries
+    // the member's name and email, which is exactly what `mask` exists to keep
+    // off a screen — a log line is no different.
+    let body = res.text().await.map_err(|e| {
         tracing::error!("paypal userinfo body: {e}");
         "PayPal was unreachable"
+    })?;
+    let info: UserInfo = serde_json::from_str(&body).map_err(|e| {
+        tracing::error!("paypal userinfo decode: {e}");
+        "PayPal sent account details we couldn't read"
     })?;
 
     // Fail closed: an identity with no payer id is an account we cannot pay,
@@ -422,7 +454,7 @@ pub async fn exchange_code(code: &str) -> Result<ConnectedPaypal, &'static str> 
     Ok(ConnectedPaypal {
         payer_id,
         email,
-        verified: info.verified_account.unwrap_or(false),
+        verified: info.verified_account,
     })
 }
 
@@ -638,7 +670,38 @@ pub async fn payout_status(batch_id: &str) -> Result<PayoutOutcome, &'static str
 
 #[cfg(test)]
 mod tests {
-    use super::{format_centavos, parse_centavos};
+    use super::{UserInfo, format_centavos, parse_centavos};
+
+    /// PayPal quotes its booleans in the paypalv1.1 schema. This is the exact
+    /// shape that broke a live connect: 200 from PayPal, and a decode failure
+    /// after the member had already authorised.
+    #[test]
+    fn reads_paypals_quoted_booleans() {
+        let quoted = r#"{
+            "payer_id": "ABCD1234",
+            "emails": [{"value": "juan@example.com", "primary": "true"}],
+            "verified_account": "true"
+        }"#;
+        let info: UserInfo = serde_json::from_str(quoted).expect("quoted booleans");
+        assert!(info.verified_account);
+        assert!(info.emails[0].primary);
+
+        // and real JSON booleans still work, since PayPal sends both
+        let real = r#"{
+            "payer_id": "ABCD1234",
+            "emails": [{"value": "juan@example.com", "primary": true}],
+            "verified_account": false
+        }"#;
+        let info: UserInfo = serde_json::from_str(real).expect("real booleans");
+        assert!(!info.verified_account);
+        assert!(info.emails[0].primary);
+
+        // an absent verified_account is "not verified", not a failed decode
+        let sparse = r#"{"payer_id": "ABCD1234"}"#;
+        let info: UserInfo = serde_json::from_str(sparse).expect("sparse");
+        assert!(!info.verified_account);
+        assert!(info.emails.is_empty());
+    }
 
     #[test]
     fn formats_centavos_back_without_floats() {
