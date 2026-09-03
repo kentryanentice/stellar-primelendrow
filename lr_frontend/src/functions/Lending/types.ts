@@ -75,6 +75,52 @@ export type LotsPage = {
     total_pages: number
 }
 
+/** Every way money moves for a member: pesos in and out of the pool, XLM in
+ *  and out of the vault. State changes that shift no coins (mark_repaid,
+ *  mark_defaulted) are not transactions and stay in the custody record. */
+export type TransactionKind =
+    | 'deposit'
+    | 'withdrawal'
+    | 'collateral_lock'
+    | 'collateral_release'
+    | 'collateral_seize'
+
+/**
+ * Where a movement got to. Withdrawals carry their PayPal payout's own status
+ * (`Payout['status']`); the rest are settled the moment they're recorded —
+ * `completed` for a captured deposit, `recorded` for a withdrawal made before
+ * the payout rail existed, `confirmed`/`queued` for on-chain collateral.
+ */
+export type TransactionStatus =
+    | Payout['status']
+    | 'completed'
+    | 'recorded'
+    | 'confirmed'
+    | 'queued'
+
+export type Transaction = {
+    id: string
+    kind: TransactionKind
+    /** The unit `amount` is in: centavos for php, stroops for xlm. */
+    asset: 'php' | 'xlm'
+    /** Always positive — `kind` says which way it went. */
+    amount: number
+    status: TransactionStatus
+    /** A PayPal capture/transfer id, or a Stellar transaction hash. */
+    reference: string | null
+    loan_id: string | null
+    at: number
+}
+
+/** POST /pool/transactions — the caller's movements, paginated. */
+export type TransactionsPage = {
+    items: Transaction[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+}
+
 export type PoolResponse = {
     pool: {
         total_deposits: number

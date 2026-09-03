@@ -72,6 +72,10 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/pool/deposits",
             post(lending::deposits_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        .route(
+            "/pool/transactions",
+            post(lending::transactions_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/loans", get(lending::loans_list))
         .route(
             "/loans/history",

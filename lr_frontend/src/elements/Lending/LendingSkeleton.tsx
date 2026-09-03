@@ -1,4 +1,4 @@
-import { SkeletonBone, LedgerRowsSkeleton, PagerSkeleton } from './Skeleton'
+import { SkeletonBone, LedgerRowsSkeleton, TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 const TILE_LABEL_WIDTHS = [62, 84, 96, 88]
 const TILE_VALUE_WIDTHS = [78, 66, 72, 48]
@@ -111,6 +111,24 @@ function LendingSkeleton() {
                                 </thead>
                                 <tbody>
                                     <LedgerRowsSkeleton />
+                                </tbody>
+                            </table>
+                        </div>
+                        <PagerSkeleton />
+                    </section>
+
+                    <section className='lending-card lending-card-transactions'>
+                        <div className='lending-card-head'>
+                            <span className='lending-card-icon is-accent' aria-hidden='true' />
+                            <h2><SkeletonBone width={150} height={16} /></h2>
+                        </div>
+                        <div className='lending-rates-scroll'>
+                            <table className='lending-ledger-table' aria-hidden='true'>
+                                <thead>
+                                    <tr><th>Movement</th><th>Amount</th><th>Status</th><th>Date</th></tr>
+                                </thead>
+                                <tbody>
+                                    <TransactionRowsSkeleton />
                                 </tbody>
                             </table>
                         </div>
