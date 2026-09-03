@@ -879,6 +879,49 @@ select.lending-input option {
     color: #eef1f6;
 }
 
+/* ---- transaction record (TransactionsCard) ---- */
+
+/* The movement cell stacks its label over the provider's reference: the label
+   is what the row IS, the reference is how it can be checked. */
+.lending-tx-kind {
+    display: block;
+    color: #eef1f6;
+    white-space: nowrap;
+}
+
+.lending-tx-ref {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #8492ac;
+    text-decoration: none;
+
+    svg { width: 11px; height: 11px; }
+
+    /* only the on-chain half is a link — see Reference() */
+    &:is(a):hover { color: var(--auth-primary); }
+}
+
+/* Same pill shape as .lending-lot-badge, keyed to how settled a movement is
+   rather than to what kind of money it was. */
+.lending-tx-status {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+
+    &.is-good { background: rgba(111, 217, 154, .13); color: #6fd99a; }
+    &.is-progress { background: rgba(122, 162, 255, .13); color: #7aa2ff; }
+    &.is-warn { background: rgba(245, 185, 66, .13); color: #f5b942; }
+}
+
 /* ---- borrow ---- */
 
 /* the sidebar's open-loan callout (OpenLoanCard) — a loan blocking new

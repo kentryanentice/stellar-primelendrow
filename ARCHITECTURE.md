@@ -211,6 +211,20 @@ borrowed against, or pledged again until the backed loan closes. Every movement
 writes a `ledger` entry, and pool utilization is derived from the ledger, not
 stored as a mutable number.
 
+**The transaction record.** `POST /pool/transactions` is the member's money
+history: deposits and withdrawals in pesos, plus XLM locked into, released
+from, or seized out of the vault (§5.7), interleaved and paginated. It exists
+separately from the deposit-lot list because a withdrawal *deletes* the lots it
+consumes — the lots are what the member holds now, the ledger is what happened.
+The engine assembles it from what already exists rather than a mirror table:
+amounts come from `ledger_postings` (never from an event payload, so the number
+shown is the number in the books), withdrawal status from the `payouts` row,
+and the on-chain movements from `xlm_collateral` and `collateral_actions`.
+Every row carries the provider's own reference — a PayPal capture or transfer
+id, or a Stellar transaction hash — so nothing on it has to be taken on trust.
+Only movements are listed: `mark_repaid` and `mark_defaulted` change state
+on-chain without moving coins, so they stay in the per-loan custody record.
+
 ### 5.5 Borrowing & credit → README §6
 
 Three products, distinguished by what backs them:

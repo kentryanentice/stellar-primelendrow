@@ -45,6 +45,26 @@ export function LedgerRowsSkeleton({ rows = 6 }: { rows?: number }) {
     )
 }
 
+/* Movement labels vary a lot in length ("Deposit" vs "Collateral released"),
+   so the first cell's bone varies with them rather than sitting at one width
+   the real rows never have. */
+const TX_KIND_WIDTHS = [64, 118, 84, 132, 74, 110, 96, 88]
+
+export function TransactionRowsSkeleton({ rows = 8 }: { rows?: number }) {
+    return (
+        <>
+            {Array.from({ length: rows }).map((_, i) => (
+                <tr key={i}>
+                    <td><SkeletonBone width={TX_KIND_WIDTHS[i % TX_KIND_WIDTHS.length]} height={14} /></td>
+                    <td className='lending-ledger-amount'><SkeletonBone width={76} height={14} /></td>
+                    <td><SkeletonBone width={74} height={18} radius={999} /></td>
+                    <td><SkeletonBone width={68} height={12} /></td>
+                </tr>
+            ))}
+        </>
+    )
+}
+
 const LOAN_TITLE_WIDTHS = [72, 68, 74, 70, 76, 66]
 
 export function LoanRowsSkeleton({ rows = 6 }: { rows?: number }) {

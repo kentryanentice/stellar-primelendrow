@@ -2,11 +2,13 @@ import { lazy, Suspense } from 'react'
 import useLendingPool from '../functions/Lending/useLendingPool'
 import useDeposits from '../functions/Lending/useDeposits'
 import useLoans from '../functions/Lending/useLoans'
+import useTransactions from '../functions/Lending/useTransactions'
 import { pesos } from '../functions/Lending/money'
 
 import PoolOverviewCard from '../elements/Lending/PoolOverviewCard'
 import RateTiersCard from '../elements/Lending/RateTiersCard'
 import YourDepositsCard from '../elements/Lending/YourDepositsCard'
+import TransactionsCard from '../elements/Lending/TransactionsCard'
 import GuarantorCard from '../elements/Lending/GuarantorCard'
 import LendingSkeleton, { ManageFundsCardSkeleton } from '../elements/Lending/LendingSkeleton'
 
@@ -28,13 +30,16 @@ function Lending() {
     const { data, loading, error, refresh } = useLendingPool()
     const deposits = useDeposits()
     const loans = useLoans()
+    const transactions = useTransactions()
 
-    // A deposit/withdraw changes both the pool's badge totals (GET /pool) and
-    // the lot list (GET /pool/deposits) — refresh both together so the two
-    // cards never show numbers that disagree with each other.
+    // A deposit/withdraw changes the pool's badge totals (GET /pool), the lot
+    // list (POST /pool/deposits) and the movement history (POST
+    // /pool/transactions) — refresh all three together so no two cards on the
+    // page show numbers that disagree with each other.
     const handleChanged = () => {
         refresh()
         deposits.refresh()
+        transactions.refresh()
     }
 
     // At most one pending-or-active loan per borrower (same DB fact the
@@ -89,6 +94,7 @@ function Lending() {
 
                 <div className='lending-main'>
                     <YourDepositsCard deposits={deposits} />
+                    <TransactionsCard transactions={transactions} />
                     <GuarantorCard onChanged={refresh} />
                 </div>
             </div>

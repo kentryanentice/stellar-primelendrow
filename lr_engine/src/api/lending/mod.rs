@@ -29,6 +29,7 @@ mod pricing;
 mod quote;
 mod repay;
 pub(crate) mod shared;
+mod transactions;
 mod withdraw;
 
 pub use admin::set_fx_rate;
@@ -44,4 +45,5 @@ pub use payout::{list as payouts_list, request as payout_request};
 pub use pool::summary as pool_summary;
 pub use quote::quote as loan_quote;
 pub use repay::repay;
+pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
