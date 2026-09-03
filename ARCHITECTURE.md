@@ -353,7 +353,7 @@ The registries are deployed as standalone contracts; wiring the engine to write
 to them inside each Postgres transaction (via the `*_REGISTRY_CONTRACT_ID`
 settings) is the remaining integration step.
 
-### 5.11 Paying members out — PayPal Payouts (migration 028)
+### 5.11 Paying members out — PayPal Payouts (migrations 028, 029)
 
 The peso rail runs both ways. Money in is a captured order; money out is a
 **PayPal payout to the member's own account**, and the two halves are
@@ -374,10 +374,21 @@ a flow that breaks quietly. One PayPal account may back one member
 **`payout_payable`**, because the pesos really are still in the platform's
 PayPal balance at that moment. Every liquidity decision therefore reads
 `free_cash` = `cash + payout_payable`, never `cash` alone, or the same peso
-could fund two loans. When the borrower withdraws, the engine writes a
+could fund two loans. When the member takes the money, the engine writes a
 `payouts` row and **commits it before calling PayPal**: the row's primary key
 is the `sender_batch_id` PayPal is given, and PayPal refuses a batch id it has
 seen, so no retry — after a timeout, a crash, a double click — can pay twice.
+
+**Two reasons, one rail (029).** Money leaves for exactly two reasons —
+`loan_proceeds`, a borrower taking a disbursed loan, and `deposit_withdrawal`,
+a depositor taking back withdrawable balance — and both are the same transfer,
+so both are `payouts` rows. `POST /pool/withdraw` consumes the member's lots
+FIFO and raises `payout_payable` in the same transaction that writes the payout
+row; it no longer posts `cash` at request time or leaves a note for ops to pay
+by hand. Because `free_cash` already nets the payable out, a withdrawal in
+flight cannot be lent to somebody else in the meantime. The per-loan
+uniqueness (`idx_payouts_one_per_loan`) is scoped to `loan_id IS NOT NULL`, so
+a member may withdraw as often as they have balance for.
 
 **Settling.** A submitted payout is not a paid one. `infra::payouts` retries
 what PayPal never received and polls what it did; only a confirmed `SUCCESS`

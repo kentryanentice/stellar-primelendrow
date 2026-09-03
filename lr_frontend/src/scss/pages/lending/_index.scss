@@ -669,6 +669,35 @@ select.lending-input option {
     &:disabled { opacity: .4; cursor: not-allowed; }
 }
 
+/* Withdrawals in flight, under the Withdraw form. Same status wording as the
+   Borrow page's loan proceeds, sized for the sidebar rather than a detail row:
+   the amount leads, the state follows it on the same line. */
+.lending-rail-payouts {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, .07);
+
+    p {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 0 5px;
+        font-size: 12.5px;
+        line-height: 1.45;
+    }
+
+    b { color: #dfe6f2; font-variant-numeric: tabular-nums; }
+
+    svg {
+        width: 13px;
+        height: 13px;
+        flex-shrink: 0;
+        align-self: center;
+    }
+}
+
 .lending-funds-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

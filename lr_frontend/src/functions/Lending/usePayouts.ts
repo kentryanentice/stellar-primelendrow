@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Payout } from './types'
@@ -6,8 +6,10 @@ import type { Payout } from './types'
 const API = import.meta.env.VITE_API_URL ?? ''
 
 /**
- * The member's payouts (GET /payouts), and the request that starts one
- * (POST /loans/payout).
+ * The member's payouts (GET /payouts), and the two requests that start one:
+ * loan proceeds (POST /loans/payout, Borrow page) and a pool withdrawal
+ * (POST /pool/withdraw, Lend page). They are the same transfer with different
+ * reasons, so they share this hook rather than each owning half a rail.
  *
  * The engine treats a request as an intent it owns from that moment: even if
  * PayPal is unreachable, the payout row exists and a worker retries it with
@@ -24,6 +26,7 @@ export default function usePayouts() {
     const [payouts, setPayouts] = useState<Payout[]>([])
     const [loading, setLoading] = useState(true)
     const [requestingId, setRequestingId] = useState<string | null>(null)
+    const [withdrawing, setWithdrawing] = useState(false)
 
     const refresh = useCallback(async () => {
         try {
@@ -40,16 +43,18 @@ export default function usePayouts() {
 
     useEffect(() => { void refresh() }, [refresh])
 
+    const authHeaders = useCallback((): HeadersInit => ({
+        'Content-Type': 'application/json',
+        ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+    }), [csrfToken])
+
     const requestPayout = useCallback(async (loanId: string) => {
         setRequestingId(loanId)
         try {
             const res = await fetch(`${API}/loans/payout`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
-                },
+                headers: authHeaders(),
                 body: JSON.stringify({ loan_id: loanId }),
             })
             if (!res.ok) throw new Error(await res.text() || 'Unable to send your loan to PayPal')
@@ -63,7 +68,36 @@ export default function usePayouts() {
         } finally {
             setRequestingId(null)
         }
-    }, [csrfToken, refresh, toast])
+    }, [authHeaders, refresh, toast])
+
+    /**
+     * Takes `centavos` out of the caller's withdrawable deposit and sends it
+     * to their PayPal. Identical guarantees to requestPayout: once the engine
+     * answers at all, the withdrawal exists — a rejection here is the engine
+     * refusing to start one (locked funds, no connected account), never a
+     * transfer left in limbo.
+     */
+    const requestWithdrawal = useCallback(async (centavos: number) => {
+        setWithdrawing(true)
+        try {
+            const res = await fetch(`${API}/pool/withdraw`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: authHeaders(),
+                body: JSON.stringify({ amount: centavos }),
+            })
+            if (!res.ok) throw new Error(await res.text() || 'Unable to withdraw')
+            const data = await res.json() as { message: string }
+            toast.success(data.message)
+            await refresh()
+            return true
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Unable to withdraw')
+            return false
+        } finally {
+            setWithdrawing(false)
+        }
+    }, [authHeaders, refresh, toast])
 
     /** The payout for one loan, if the member has already asked for it. */
     const forLoan = useCallback(
@@ -71,5 +105,15 @@ export default function usePayouts() {
         [payouts],
     )
 
-    return { payouts, loading, requestingId, requestPayout, forLoan, refresh }
+    /** Withdrawals only, newest first (the engine already orders the list). */
+    const withdrawals = useMemo(
+        () => payouts.filter(p => p.kind === 'deposit_withdrawal'),
+        [payouts],
+    )
+
+    return {
+        payouts, loading, refresh,
+        requestPayout, requestingId, forLoan,
+        requestWithdrawal, withdrawing, withdrawals,
+    }
 }

@@ -1,11 +1,17 @@
 import { useState } from 'react'
-import { Lock } from 'lucide-react'
+import { AlertTriangle, Lock } from 'lucide-react'
 import useMyFunds from '../../functions/Lending/useMyFunds'
-import { parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
-import type { PoolResponse } from '../../functions/Lending/types'
+import usePayouts from '../../functions/Lending/usePayouts'
+import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
+import { PAYOUT_ALERT, PAYOUT_LABEL, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
 
 type Tab = 'deposit' | 'withdraw'
+
+/** How many past withdrawals the rail keeps in view — enough to see the one
+ *  just requested and the couple before it, without turning the sidebar into
+ *  a second ledger (that's YourDepositsCard's job). */
+const RECENT_WITHDRAWALS = 3
 
 /**
  * The sidebar money rail: the caller's balance at a glance (withdrawable /
@@ -14,10 +20,18 @@ type Tab = 'deposit' | 'withdraw'
  * always exactly one clear action in front of the user. The lot-by-lot
  * breakdown lives in its own card in the main column (YourDepositsCard);
  * this card only answers "what can I do with my money right now."
+ *
+ * Withdrawing is the Borrow page's payout flow, not a form of its own: the
+ * request creates a tracked PayPal transfer (usePayouts) and the states it can
+ * be in — queued, sent, waiting to be accepted, came back — are shown here
+ * with the same words LoanHistoryCard uses for loan proceeds. A withdrawal is
+ * a promise the engine keeps retrying, so a toast alone would be lying by
+ * omission about where the money is.
  */
 function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: () => void }) {
     const { me, params } = data
-    const { confirmDeposit, confirming, withdraw, withdrawing } = useMyFunds(onChanged)
+    const { confirmDeposit, confirming } = useMyFunds(onChanged)
+    const { requestWithdrawal, withdrawing, withdrawals } = usePayouts()
 
     const [tab, setTab] = useState<Tab>('deposit')
     const [depositInput, setDepositInput] = useState('')
@@ -124,7 +138,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     {withdrawTooBig ? (
                         <p className='lending-field-error'>Only {pesos(me.available)} of your deposit is withdrawable right now.</p>
                     ) : (
-                        <p className='lending-muted'>Up to {pesos(me.available)} available now</p>
+                        <p className='lending-muted'>Up to {pesos(me.available)} available now · sent to your connected PayPal</p>
                     )}
                     <button
                         type='button'
@@ -132,11 +146,42 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                         disabled={!withdrawCentavos || withdrawTooBig || withdrawing}
                         onClick={async () => {
                             if (!withdrawCentavos) return
-                            if (await withdraw(withdrawCentavos)) setWithdrawInput('')
+                            if (!await requestWithdrawal(withdrawCentavos)) return
+                            setWithdrawInput('')
+                            // The lots are gone and the balance has moved —
+                            // the pool card and the lot list have to be told.
+                            onChanged()
                         }}
                     >
-                        {withdrawing ? 'Withdrawing…' : 'Withdraw to wallet'}
+                        {withdrawing
+                            ? 'Sending to PayPal…'
+                            : withdrawCentavos && !withdrawTooBig
+                                ? `Send ${pesos(withdrawCentavos)} to my PayPal`
+                                : 'Send to my PayPal'}
                     </button>
+
+                    {/* Where the money actually got to. The engine owns a
+                        withdrawal from the moment it answers — it retries what
+                        PayPal never received — so this list, not the toast, is
+                        the truth about a transfer. */}
+                    {withdrawals.length > 0 && (
+                        <div className='lending-rail-payouts'>
+                            <span className='lending-stat-label'>Recent withdrawals</span>
+                            {withdrawals.slice(0, RECENT_WITHDRAWALS).map(payout => (
+                                <p
+                                    key={payout.id}
+                                    className={`lending-muted${PAYOUT_ALERT.has(payout.status) ? ' lending-liquidation' : ''}`}
+                                >
+                                    {PAYOUT_ALERT.has(payout.status) && <AlertTriangle />}
+                                    <b>{pesos(payout.amount)}</b> · {PAYOUT_LABEL[payout.status]}
+                                    {payout.status === 'paid' && payout.settled_at !== null && (
+                                        <> on {formatDate(payout.settled_at)}</>
+                                    )}
+                                    {payout.note && <> — {payout.note}</>}
+                                </p>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
         </section>

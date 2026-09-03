@@ -181,6 +181,9 @@ export type PaypalAccount = {
 export type Payout = {
     id: string
     loan_id: string | null
+    /** Why money is leaving: disbursed loan proceeds, or a depositor taking
+     *  back withdrawable balance. Both ride the same rail (029). */
+    kind: 'loan_proceeds' | 'deposit_withdrawal'
     amount: number
     status: 'pending' | 'sent' | 'paid' | 'unclaimed' | 'returned' | 'failed'
     batch_id: string | null
@@ -317,3 +320,18 @@ export const PRODUCT_LABEL: Record<Product, string> = {
     xlm_collateral: 'XLM-collateral loan',
     guarantor: 'Guarantor loan',
 }
+
+/** Where the member's money has actually got to, in their words. Shared by
+ *  every card that shows a transfer (loan proceeds on Borrow, withdrawals on
+ *  Lend) so one rail never gets described two different ways. */
+export const PAYOUT_LABEL: Record<Payout['status'], string> = {
+    pending: 'Queued for PayPal — we’ll keep trying',
+    sent: 'Sent to PayPal — it usually lands within minutes',
+    paid: 'Paid to your PayPal',
+    unclaimed: 'Waiting for you to accept it in PayPal',
+    returned: 'Came back to us',
+    failed: 'PayPal couldn’t send it',
+}
+
+/** The states worth pulling the member's eye to. */
+export const PAYOUT_ALERT = new Set<Payout['status']>(['unclaimed', 'returned', 'failed'])
