@@ -6,24 +6,11 @@ import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral, quoteFromPinned } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
-import { PRODUCT_LABEL, type Loan, type Payout, type PoolResponse } from '../../functions/Lending/types'
+import { PAYOUT_ALERT, PAYOUT_LABEL, PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
 import useCollateralRecord from '../../functions/Lending/useCollateralRecord'
 import usePayouts from '../../functions/Lending/usePayouts'
 import CollateralRecordCard from './CollateralRecordCard'
 import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
-
-/** Where the member's money has actually got to, in their words. */
-const PAYOUT_LABEL: Record<Payout['status'], string> = {
-    pending: 'Queued for PayPal — we’ll keep trying',
-    sent: 'Sent to PayPal — it usually lands within minutes',
-    paid: 'Paid to your PayPal',
-    unclaimed: 'Waiting for you to accept it in PayPal',
-    returned: 'Came back to us',
-    failed: 'PayPal couldn’t send it',
-}
-
-/** The states worth pulling the member's eye to. */
-const PAYOUT_ALERT = new Set<Payout['status']>(['unclaimed', 'returned', 'failed'])
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',

@@ -63,6 +63,16 @@ pub fn spawn(pool: PgPool) {
 
 type PendingRow = (Uuid, Uuid, i64, String, Option<Uuid>, i32);
 
+/// The ledger event a settled payout is filed under. Both kinds pay down the
+/// same `payout_payable`, but the reason the pool owed the money is worth
+/// keeping in the event stream — a withdrawal is not a loan.
+fn settled_event_kind(kind: &str) -> &'static str {
+    match kind {
+        "deposit_withdrawal" => "withdrawal_paid",
+        _ => "loan_payout_paid",
+    }
+}
+
 async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     let cutoff = Utc::now().timestamp() - SUBMIT_AFTER_SECS;
     let rows: Vec<PendingRow> = sqlx::query_as(
@@ -79,9 +89,11 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     for (id, user_id, amount, payer_id, loan_id, attempts) in rows {
+        // Same wording the request handlers used on the first attempt, so a
+        // retry doesn't show the recipient a different transfer.
         let note = match loan_id {
             Some(loan_id) => format!("PrimeLendRow loan {loan_id}"),
-            None => "PrimeLendRow payout".to_string(),
+            None => "PrimeLendRow withdrawal".to_string(),
         };
         // Same id every time: this is a retry of ONE payout, not a new one.
         let result = paypal::create_payout(&id.to_string(), &payer_id, amount, &note).await;
@@ -123,8 +135,8 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let rows: Vec<(Uuid, Uuid, i64, Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT id, user_id, amount, loan_id, batch_id
+    let rows: Vec<(Uuid, Uuid, i64, Option<Uuid>, String, String)> = sqlx::query_as(
+        "SELECT id, user_id, amount, loan_id, batch_id, kind
            FROM public.payouts
           WHERE status IN ('sent', 'unclaimed') AND batch_id IS NOT NULL
           ORDER BY sent_at
@@ -134,7 +146,7 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
     .fetch_all(pool)
     .await?;
 
-    for (id, user_id, amount, loan_id, batch_id) in rows {
+    for (id, user_id, amount, loan_id, batch_id, kind) in rows {
         let outcome = match paypal::payout_status(&batch_id).await {
             Ok(outcome) => outcome,
             Err(reason) => {
@@ -145,7 +157,17 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
 
         match outcome {
             PayoutOutcome::Paid { item_id, transaction_id } => {
-                settle(pool, id, user_id, amount, loan_id, &item_id, transaction_id).await?;
+                settle(
+                    pool,
+                    id,
+                    user_id,
+                    amount,
+                    loan_id,
+                    settled_event_kind(&kind),
+                    &item_id,
+                    transaction_id,
+                )
+                .await?;
             }
             PayoutOutcome::Unclaimed { item_id } => {
                 set_status(pool, id, "unclaimed", item_id, None).await?;
@@ -190,12 +212,14 @@ async fn set_status(
 }
 
 /// The only place a payout moves the books.
+#[allow(clippy::too_many_arguments)]
 async fn settle(
     pool: &PgPool,
     id: Uuid,
     user_id: Uuid,
     amount: i64,
     loan_id: Option<Uuid>,
+    event_kind: &'static str,
     item_id: &str,
     transaction_id: Option<String>,
 ) -> Result<(), sqlx::Error> {
@@ -230,7 +254,7 @@ async fn settle(
     let posted = commit_event(
         &mut tx,
         EventDraft {
-            kind: "loan_payout_paid",
+            kind: event_kind,
             user_id: Some(user_id),
             loan_id,
             deposit_id: None,

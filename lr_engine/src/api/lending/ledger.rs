@@ -94,10 +94,12 @@ pub async fn commit_event(
 /// Cash the pool may actually commit: what it holds, less what it has already
 /// promised to members and not yet sent (migration 028).
 ///
-/// Disbursing a loan raises `payout_payable` rather than lowering `cash` —
-/// the pesos really are still in the platform's PayPal balance until a payout
-/// settles. Reading raw `cash` after that would let the same peso fund two
-/// loans, so every liquidity decision reads THIS, never `cash` alone.
+/// Disbursing a loan — or promising a member their withdrawal (029) — raises
+/// `payout_payable` rather than lowering `cash`: the pesos really are still in
+/// the platform's PayPal balance until a payout settles. Reading raw `cash`
+/// after that would let the same peso fund two loans, or be lent out from
+/// under a withdrawal in flight, so every liquidity decision reads THIS, never
+/// `cash` alone.
 /// `payout_payable` is credit-normal, so its balance is negative and adding
 /// it subtracts the promise.
 /// Summed in ONE query rather than two reads added together: the two accounts

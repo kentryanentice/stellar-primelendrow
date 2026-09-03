@@ -3,9 +3,13 @@
 //! GET  /payouts      — the caller's transfers and where each one got to.
 //!
 //! Disbursement makes the pool *owe* the borrower (`payout_payable`, 028);
-//! this is where that promise is actually settled. The order of operations is
-//! the entire safety argument, and it is the same shape as the collateral
-//! outbox:
+//! this is where that promise is actually settled. `withdraw.rs` settles the
+//! depositor's equivalent promise through the same three steps below (029) —
+//! `submit` and `read_one` are shared with it rather than reimplemented, so
+//! there is one description of "hand money to PayPal" in the engine.
+//!
+//! The order of operations is the entire safety argument, and it is the same
+//! shape as the collateral outbox:
 //!
 //!   1. write the payout row, and COMMIT it — its primary key is the
 //!      idempotency key PayPal will be given, so the key must exist before
@@ -38,6 +42,10 @@ pub struct PayoutInput {
 pub struct PayoutView {
     pub id: Uuid,
     pub loan_id: Option<Uuid>,
+    /// 'loan_proceeds' or 'deposit_withdrawal' — the two reasons money leaves,
+    /// so the UI can file a transfer under the right card without guessing
+    /// from a null loan_id.
+    pub kind: String,
     pub amount: i64,
     pub status: String,
     /// PayPal's own reference, once there is one to look up.
@@ -55,12 +63,15 @@ pub struct PayoutResponse {
     pub message: &'static str,
 }
 
-pub async fn request(
-    Extension(pool): Extension<PgPool>,
-    headers: HeaderMap,
-    Json(p): Json<PayoutInput>,
-) -> Result<Json<PayoutResponse>, E> {
-    let user_id = require_verified_user(&pool, &headers).await?;
+/// Where a member's money goes, resolved once at request time and then pinned
+/// to the payout row. Disconnecting or relinking a PayPal account afterwards
+/// must not redirect a transfer already in flight, so no later code path reads
+/// `paypal_accounts` again for a payout that already exists.
+///
+/// Shared with `withdraw.rs`: both money-out paths need exactly this check, in
+/// this order — a deployment without credentials fails before a row is written
+/// rather than leaving a promise nothing can ever send.
+pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<String, E> {
     if !paypal::is_configured() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -68,20 +79,28 @@ pub async fn request(
         ));
     }
 
-    // Where the money is going, pinned now. Disconnecting or relinking a
-    // PayPal account later must not redirect a transfer already in flight.
     let payer_id: Option<String> = sqlx::query_scalar(
         "SELECT payer_id FROM public.paypal_accounts
           WHERE user_id = $1 AND status = 'active'",
     )
     .bind(user_id)
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await
     .map_err(|e| db_err(e, "paypal account"))?;
-    let payer_id = payer_id.ok_or((
+
+    payer_id.ok_or((
         StatusCode::UNPROCESSABLE_ENTITY,
         "Connect your PayPal account first — Settings → PayPal",
-    ))?;
+    ))
+}
+
+pub async fn request(
+    Extension(pool): Extension<PgPool>,
+    headers: HeaderMap,
+    Json(p): Json<PayoutInput>,
+) -> Result<Json<PayoutResponse>, E> {
+    let user_id = require_verified_user(&pool, &headers).await?;
+    let payer_id = destination(&pool, user_id).await?;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin payout"))?;
 
@@ -135,7 +154,14 @@ pub async fn request(
     // PayPal would have no way to recognise the duplicate.
     tx.commit().await.map_err(|e| db_err(e, "commit payout"))?;
 
-    let (status, message) = submit(&pool, payout_id, &payer_id, principal, p.loan_id).await;
+    let (status, message) = submit(
+        &pool,
+        payout_id,
+        &payer_id,
+        principal,
+        &format!("PrimeLendRow loan {}", p.loan_id),
+    )
+    .await;
     let payout = read_one(&pool, payout_id, user_id).await?;
     tracing::info!(%user_id, %payout_id, principal, status, "loan payout requested");
 
@@ -145,17 +171,19 @@ pub async fn request(
 /// Hands the payout to PayPal and records the answer. Never returns an error:
 /// a submission that couldn't be made is a row left `pending` for the worker
 /// to retry, not a failed request — the member's money claim already exists.
-async fn submit(
+///
+/// `note` is what the recipient sees on the transfer; the caller supplies it
+/// because only the caller knows why the money is moving.
+pub(super) async fn submit(
     pool: &PgPool,
     payout_id: Uuid,
     payer_id: &str,
     amount: i64,
-    loan_id: Uuid,
+    note: &str,
 ) -> (&'static str, &'static str) {
-    let note = format!("PrimeLendRow loan {loan_id}");
     let now = Utc::now().timestamp();
 
-    match paypal::create_payout(&payout_id.to_string(), payer_id, amount, &note).await {
+    match paypal::create_payout(&payout_id.to_string(), payer_id, amount, note).await {
         Ok(batch_id) => {
             mark(pool, payout_id, "sent", Some(&batch_id), Some(now), None).await;
             ("sent", "Sent to PayPal — it usually lands in a few minutes")
@@ -231,24 +259,43 @@ fn note_for(status: &str, last_error: Option<String>) -> Option<String> {
     }
 }
 
-async fn read_one(pool: &PgPool, payout_id: Uuid, user_id: Uuid) -> Result<PayoutView, E> {
-    let row: (Uuid, Option<Uuid>, i64, String, Option<String>, Option<String>, i64, Option<i64>, Option<String>) =
-        sqlx::query_as(
-            "SELECT id, loan_id, amount, status, batch_id, transaction_id,
-                    created_at, settled_at, last_error
-               FROM public.payouts WHERE id = $1 AND user_id = $2",
-        )
-        .bind(payout_id)
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| db_err(e, "payout read"))?;
+/// One payouts row in `SELECT` order, shared by the single read and the list
+/// so the two can't drift into disagreeing about column positions.
+type PayoutRow = (
+    Uuid,
+    Option<Uuid>,
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+    Option<i64>,
+    Option<String>,
+);
 
-    let (id, loan_id, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
-    Ok(PayoutView {
+const PAYOUT_COLUMNS: &str = "id, loan_id, kind, amount, status, batch_id, transaction_id,
+                              created_at, settled_at, last_error";
+
+fn view(row: PayoutRow) -> PayoutView {
+    let (id, loan_id, kind, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
+    PayoutView {
         note: note_for(&status, last_error),
-        id, loan_id, amount, status, batch_id, transaction_id, created_at, settled_at,
-    })
+        id, loan_id, kind, amount, status, batch_id, transaction_id, created_at, settled_at,
+    }
+}
+
+pub(super) async fn read_one(pool: &PgPool, payout_id: Uuid, user_id: Uuid) -> Result<PayoutView, E> {
+    let row: PayoutRow = sqlx::query_as(&format!(
+        "SELECT {PAYOUT_COLUMNS} FROM public.payouts WHERE id = $1 AND user_id = $2"
+    ))
+    .bind(payout_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| db_err(e, "payout read"))?;
+
+    Ok(view(row))
 }
 
 #[derive(Serialize)]
@@ -262,27 +309,16 @@ pub async fn list(
 ) -> Result<Json<PayoutsResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
 
-    let rows: Vec<(Uuid, Option<Uuid>, i64, String, Option<String>, Option<String>, i64, Option<i64>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT id, loan_id, amount, status, batch_id, transaction_id,
-                    created_at, settled_at, last_error
-               FROM public.payouts WHERE user_id = $1
-              ORDER BY created_at DESC LIMIT 50",
-        )
-        .bind(user_id)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| db_err(e, "payouts"))?;
+    let rows: Vec<PayoutRow> = sqlx::query_as(&format!(
+        "SELECT {PAYOUT_COLUMNS} FROM public.payouts WHERE user_id = $1
+          ORDER BY created_at DESC LIMIT 50"
+    ))
+    .bind(user_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| db_err(e, "payouts"))?;
 
     Ok(Json(PayoutsResponse {
-        payouts: rows
-            .into_iter()
-            .map(|(id, loan_id, amount, status, batch_id, transaction_id, created_at, settled_at, last_error)| {
-                PayoutView {
-                    note: note_for(&status, last_error),
-                    id, loan_id, amount, status, batch_id, transaction_id, created_at, settled_at,
-                }
-            })
-            .collect(),
+        payouts: rows.into_iter().map(view).collect(),
     }))
 }
