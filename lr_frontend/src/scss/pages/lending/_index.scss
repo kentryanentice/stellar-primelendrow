@@ -12,17 +12,6 @@
     display: flex;
     flex-direction: column;
     gap: 18px;
-
-    /* Reference links — explorer hashes, contract ids, PayPal references —
-       sit in muted prose on a dark panel, where the raw accent (#2563eb on
-       the default palette) lands around 3.3:1 against the card: technically a
-       link, practically a smudge, and short of the 4.5:1 these need at 11-13px.
-       Mixing the accent toward white takes the same hue to roughly 6.4:1 and
-       keeps whichever accent is active. Declared here rather than per-class so
-       the movement links, the transaction list and the inline contract id can
-       never drift into three different blues. */
-    --lending-link: color-mix(in srgb, var(--auth-primary) 62%, #fff);
-    --lending-link-hover: #eef1f6;
 }
 
 /* ---- skeleton loading ---- */

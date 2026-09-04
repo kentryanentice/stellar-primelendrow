@@ -1,5 +1,6 @@
 import { AlertTriangle, ExternalLink, ShieldCheck } from 'lucide-react'
 import { formatDate, pesos, xlm, xlmRate } from '../../functions/Lending/money'
+import { contractLink, shortId, txLink } from '../../functions/Lending/explorer'
 import type { CollateralMovement, CollateralRecord } from '../../functions/Lending/types'
 
 /**
@@ -14,10 +15,6 @@ import type { CollateralMovement, CollateralRecord } from '../../functions/Lendi
  * every number here is the engine's.
  */
 
-const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'public' ? 'public' : 'testnet'
-const txLink = (hash: string) => `https://stellar.expert/explorer/${NETWORK}/tx/${hash}`
-const contractLink = (id: string) => `https://stellar.expert/explorer/${NETWORK}/contract/${id}`
-
 const MOVEMENT_LABEL: Record<CollateralMovement['kind'], string> = {
     lock: 'Locked into the vault',
     mark_repaid: 'Repayment recorded on-chain',
@@ -26,8 +23,7 @@ const MOVEMENT_LABEL: Record<CollateralMovement['kind'], string> = {
     seize: 'Seized to the treasury',
 }
 
-/** "GABC…WXYZ" — enough to recognise a wallet, short enough to sit in a row. */
-const shortKey = (key: string) => `${key.slice(0, 5)}…${key.slice(-4)}`
+const shortKey = shortId
 
 export default function CollateralRecordCard({ record }: { record: CollateralRecord }) {
     const { price } = record

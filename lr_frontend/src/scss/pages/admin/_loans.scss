@@ -1,0 +1,290 @@
+/* The lending console (LoansPanel).
+
+   Deliberately built out of the lending pages' own classes — .lending-loan,
+   .lending-schedule, .lending-pager, .lending-tab — rather than a parallel set
+   of admin ones. An operator looking at a loan should see the same rows the
+   borrower sees, because that is what makes "installment 2 is unpaid" the same
+   fact on both screens. Only the pieces that exist nowhere else are defined
+   here. */
+
+.admin-loans {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.admin-loans-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    h2 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 600;
+        color: #eef1f6;
+    }
+}
+
+.admin-loans-filters {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .04);
+}
+
+/* Section switch in the page header — same pill treatment as the filters, so
+   "which console am I in" and "which slice am I looking at" read as the same
+   kind of control. */
+.admin-sections {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .04);
+    align-self: flex-start;
+}
+
+/* ---- the vault outbox ---- */
+
+/* Amber, not accent: these are the only controls in the product that move
+   coins out of the vault, and they should not look like a routine button. */
+.admin-outbox {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 15px;
+    border-radius: 14px;
+    border: 1px solid rgba(245, 185, 66, .28);
+    background: rgba(245, 185, 66, .06);
+}
+
+.admin-outbox-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+
+    h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: #eef1f6;
+    }
+}
+
+.admin-outbox-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.admin-outbox-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .06);
+
+    &:last-child { border-bottom: 0; }
+
+    .lending-btn-primary {
+        flex-shrink: 0;
+        width: auto;
+        padding: 8px 16px;
+        font-size: 13px;
+    }
+}
+
+/* The "already signed?" escape hatch. Quiet on purpose — signing is the
+   ordinary path, and this one only exists for a movement the chain accepted
+   but the engine failed to record. */
+.admin-outbox-alt {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #8492ac;
+    font-size: 12px;
+    padding: 8px 2px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+
+    &:hover { color: #dfe6f2; }
+}
+
+.admin-outbox-paste {
+    flex: 1 1 100%;
+    display: flex;
+    gap: 8px;
+    padding-top: 4px;
+
+    .lending-input {
+        flex: 1;
+        min-width: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+    }
+
+    .lending-btn {
+        flex-shrink: 0;
+        width: auto;
+        padding: 0 18px;
+    }
+}
+
+.admin-outbox-what {
+    flex: 1 1 240px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    b { font-size: 13.5px; color: #eef1f6; }
+    span { font-size: 12px; }
+}
+
+/* ---- recovery waterfall ---- */
+
+.admin-recoveries {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .03);
+
+    p { font-size: 12.5px; }
+    b { color: #8492ac; margin-right: 2px; }
+}
+
+/* ---- a loan's transaction record ---- */
+
+/* Same shape as the recovery block above it, but this one is the loan's whole
+   life rather than one default's settlement — so it gets the row treatment,
+   with the proof pinned to the right of each line. */
+.admin-movements {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .03);
+
+    > .lending-stat-label { margin-bottom: 4px; }
+}
+
+.admin-movement {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+
+    &:last-child { border-bottom: 0; }
+}
+
+.admin-movement-what {
+    flex: 1 1 220px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    b { font-size: 12.5px; font-weight: 600; color: #dfe6f2; }
+    span { font-size: 11.5px; }
+}
+
+/* A reference with nowhere to link — a PayPal id, or nothing at all. Sized to
+   match .lending-inline-link so the column doesn't jitter between rows that
+   have a hash and rows that don't. */
+.admin-movement-ref {
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    color: #66748d;
+}
+
+/* ---- the default control ---- */
+
+/* Destructive, and per installment rather than per loan: the row is what makes
+   it concrete — this is the payment that was missed. Ghosted until hover so a
+   column of them doesn't turn the schedule into a wall of red. */
+.admin-default-btn {
+    padding: 4px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 125, 125, .3);
+    background: transparent;
+    color: #ff8f8f;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease;
+
+    &:hover:not(:disabled) {
+        background: rgba(255, 125, 125, .14);
+        border-color: rgba(255, 125, 125, .5);
+    }
+
+    &:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* the confirm step's commit button — the same colour, filled in, because
+       by then it is the primary action of the dialog */
+    &.is-solid {
+        padding: 10px 18px;
+        font-size: 12px;
+        background: rgba(255, 125, 125, .16);
+        border-color: rgba(255, 125, 125, .45);
+    }
+}
+
+.admin-default-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(6, 9, 17, .72);
+    backdrop-filter: blur(3px);
+}
+
+.admin-default-card {
+    width: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 22px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .1);
+    background: var(--auth-panel-bg, #141b2d);
+    box-shadow: 0 26px 60px -20px rgba(0, 0, 0, .8);
+
+    h3 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 600;
+        color: #eef1f6;
+    }
+}
+
+.admin-default-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+
+    .lending-btn { width: auto; padding: 10px 18px; }
+}

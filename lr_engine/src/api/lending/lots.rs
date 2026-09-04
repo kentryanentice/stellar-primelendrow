@@ -46,6 +46,75 @@ pub async fn lock_available_for_user(
     Ok(rows.into_iter().map(|(id, user_id, amount)| Lot { id, user_id, amount }).collect())
 }
 
+/// Locks and returns the lots wearing `badge` against one loan, oldest first.
+/// The badge is the whole authorization story: 'collateral' is the borrower's
+/// own money, 'pledged' is a guarantor's, and 'lent' is an uninvolved saver's
+/// — a recovery that mixed them up would take the wrong person's deposit.
+pub async fn lock_backing_lots(
+    tx: &mut Transaction<'_, Postgres>,
+    loan_id: Uuid,
+    badge: &str,
+) -> Result<Vec<Lot>, E> {
+    let rows: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
+        "SELECT id, user_id, amount FROM public.deposits
+          WHERE backing_loan = $1 AND badge = $2
+          ORDER BY created_at, id
+          FOR UPDATE",
+    )
+    .bind(loan_id)
+    .bind(badge)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "lock backing lots"))?;
+    Ok(rows.into_iter().map(|(id, user_id, amount)| Lot { id, user_id, amount }).collect())
+}
+
+/// Consumes up to `limit` centavos of the given (already locked) lots, FIFO —
+/// whole lots deleted, the partial tail shrunk in place, exactly as a
+/// withdrawal consumes them. This is the destructive half of a default: the
+/// money stops being the member's, so the lot stops existing.
+///
+/// Returns what was actually taken, per owner, so the caller can post one
+/// ledger entry per member rather than one per lot — a guarantor whose pledge
+/// spans four lots lost one amount, not four.
+pub async fn seize_lots(
+    tx: &mut Transaction<'_, Postgres>,
+    lots: &[Lot],
+    limit: i64,
+) -> Result<Vec<(Uuid, i64)>, E> {
+    let now = Utc::now().timestamp();
+    let mut remaining = limit;
+    let mut taken: Vec<(Uuid, i64)> = Vec::new();
+
+    for lot in lots {
+        if remaining == 0 {
+            break;
+        }
+        let amount = lot.amount.min(remaining);
+        if lot.amount <= remaining {
+            sqlx::query("DELETE FROM public.deposits WHERE id = $1")
+                .bind(lot.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| db_err(e, "seize lot"))?;
+        } else {
+            sqlx::query("UPDATE public.deposits SET amount = amount - $1, updated_at = $2 WHERE id = $3")
+                .bind(amount)
+                .bind(now)
+                .bind(lot.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| db_err(e, "shrink seized lot"))?;
+        }
+        remaining -= amount;
+        match taken.iter_mut().find(|(user_id, _)| *user_id == lot.user_id) {
+            Some((_, total)) => *total += amount,
+            None => taken.push((lot.user_id, amount)),
+        }
+    }
+    Ok(taken)
+}
+
 /// Re-badges `amount` centavos out of the given (already locked) lots FIFO,
 /// splitting the last lot if only part of it is needed. Returns the lot ids
 /// now wearing `badge`. Caller must have verified the lots sum to >= amount.

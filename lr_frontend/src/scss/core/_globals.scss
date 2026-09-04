@@ -140,6 +140,18 @@
 	--auth-pill-border: #e4ebf6;
 	--auth-pill-ink: #1b3a6b;
 
+	/* Reference links — explorer hashes, contract ids, PayPal references — sit
+	   in muted prose on a dark panel, where the raw accent (#2563eb here)
+	   lands around 3.3:1 against a card: technically a link, practically a
+	   smudge, and short of the 4.5:1 these need at 11-13px. Mixing the accent
+	   toward white takes the same hue to roughly 6.4:1 and follows whichever
+	   accent is active, since it resolves against --auth-primary on whatever
+	   element declares it. Global rather than per-page: the lending pages and
+	   the admin loan book both render these, and two different blues for the
+	   same affordance would be worse than one imperfect one. */
+	--lending-link: color-mix(in srgb, var(--auth-primary) 62%, #fff);
+	--lending-link-hover: #eef1f6;
+
 	--auth-star: #ffc857;
 	--auth-success: #3cc45a;
 	--auth-danger: #ef5d5d;

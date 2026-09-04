@@ -1,14 +1,9 @@
 import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react'
 import type useTransactions from '../../functions/Lending/useTransactions'
 import { formatDate, pesos, xlm } from '../../functions/Lending/money'
+import { shortId, txLink } from '../../functions/Lending/explorer'
 import type { Transaction, TransactionKind, TransactionStatus } from '../../functions/Lending/types'
 import { TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
-
-const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'public' ? 'public' : 'testnet'
-const txLink = (hash: string) => `https://stellar.expert/explorer/${NETWORK}/tx/${hash}`
-
-/** "a1b2c3…9f8e" — enough to recognise a reference, short enough for a row. */
-const shortRef = (ref: string) => (ref.length > 16 ? `${ref.slice(0, 6)}…${ref.slice(-4)}` : ref)
 
 const KIND_LABEL: Record<TransactionKind, string> = {
     deposit: 'Deposit',
@@ -16,6 +11,7 @@ const KIND_LABEL: Record<TransactionKind, string> = {
     collateral_lock: 'Collateral locked',
     collateral_release: 'Collateral released',
     collateral_seize: 'Collateral seized',
+    deposit_seized: 'Deposit seized',
 }
 
 /**
@@ -50,12 +46,12 @@ function Reference({ tx }: { tx: Transaction }) {
                 target='_blank'
                 rel='noopener noreferrer'
             >
-                <span>{shortRef(tx.reference)}</span>
+                <span>{shortId(tx.reference)}</span>
                 <ExternalLink aria-hidden='true' />
             </a>
         )
     }
-    return <span className='lending-tx-ref'>{shortRef(tx.reference)}</span>
+    return <span className='lending-tx-ref'>{shortId(tx.reference)}</span>
 }
 
 /**
