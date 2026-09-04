@@ -12,6 +12,17 @@
     display: flex;
     flex-direction: column;
     gap: 18px;
+
+    /* Reference links — explorer hashes, contract ids, PayPal references —
+       sit in muted prose on a dark panel, where the raw accent (#2563eb on
+       the default palette) lands around 3.3:1 against the card: technically a
+       link, practically a smudge, and short of the 4.5:1 these need at 11-13px.
+       Mixing the accent toward white takes the same hue to roughly 6.4:1 and
+       keeps whichever accent is active. Declared here rather than per-class so
+       the movement links, the transaction list and the inline contract id can
+       never drift into three different blues. */
+    --lending-link: color-mix(in srgb, var(--auth-primary) 62%, #fff);
+    --lending-link-hover: #eef1f6;
 }
 
 /* ---- skeleton loading ---- */
@@ -901,8 +912,30 @@ select.lending-input option {
 
     svg { width: 11px; height: 11px; }
 
-    /* only the on-chain half is a link — see Reference() */
-    &:is(a):hover { color: var(--auth-primary); }
+    /* Only the on-chain half is a link — see Reference(). It carries the same
+       treatment as the inline contract id: the lifted accent, semibold, and a
+       resting underline scoped to the reference rather than the icon after
+       it. A row that CAN be checked on an explorer should look different from
+       one whose reference only means anything inside PayPal, and colour alone
+       doesn't carry that at 11px. */
+    &:is(a) {
+        color: var(--lending-link);
+        font-weight: 600;
+
+        > span {
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-decoration-color: color-mix(in srgb, var(--lending-link) 55%, transparent);
+            text-underline-offset: 3px;
+        }
+
+        &:hover,
+        &:focus-visible {
+            color: var(--lending-link-hover);
+
+            > span { text-decoration-color: currentColor; }
+        }
+    }
 }
 
 /* Same pill shape as .lending-lot-badge, keyed to how settled a movement is
@@ -1732,11 +1765,66 @@ select.lending-input option {
     gap: 5px;
     font-size: 12px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: var(--auth-primary);
+    font-weight: 600;
+    color: var(--lending-link);
     text-decoration: none;
 
     svg { width: 12px; height: 12px; }
-    &:hover { text-decoration: underline; }
+
+    &:hover,
+    &:focus-visible {
+        color: var(--lending-link-hover);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+}
+
+/* A reference sitting inside a line of muted prose (the vault contract id) —
+   the only link on these pages that isn't a standalone row of its own.
+   Unstyled it fell back to the browser's default anchor colour, a near-black
+   purple on this background that reads as damaged text rather than as
+   something to click. It gets the same accent as the movement links beside
+   it, monospace because it is always an id, and an underline that is the
+   design's rather than the user agent's: offset clear of the descenders and
+   dimmed until hover, so the emphasis lands on the id and not on the rule
+   under it. */
+.lending-inline-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .94em;
+    font-weight: 600;
+    color: var(--lending-link);
+    text-decoration: none;
+    white-space: nowrap;
+
+    /* Unlike the standalone movement links, this one is embedded mid-sentence,
+       so it keeps a resting underline — colour alone doesn't mark a link
+       inside a paragraph. The underline belongs to the id, not to the icon
+       after it, and sits clear of the descenders. */
+    > span {
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-decoration-color: color-mix(in srgb, var(--lending-link) 55%, transparent);
+        text-underline-offset: 3px;
+    }
+
+    /* wins over `.lending-muted svg` (same specificity, later in the file):
+       that rule sizes warning glyphs at the start of a line, not a trailing
+       affordance inside a link. */
+    svg {
+        width: 11px;
+        height: 11px;
+        margin: 0;
+    }
+
+    &:hover,
+    &:focus-visible {
+        color: var(--lending-link-hover);
+
+        > span { text-decoration-color: currentColor; }
+    }
 }
 
 /* Queued = the engine has recorded the intent, the chain hasn't seen it yet.

@@ -120,6 +120,70 @@ export function PagerSkeleton() {
     )
 }
 
+/* Four labelled figures (Locked / Covering / Worth now / From wallet) and
+   three movements: the shape a locked position actually has. A pending one is
+   smaller, but it's also the case the record is rarely opened in — guessing at
+   the common shape beats guessing at the small one and jumping on load. */
+const CUSTODY_TERM_WIDTHS = [48, 62, 68, 78]
+const CUSTODY_VALUE_WIDTHS = [86, 104, 118, 92]
+const CUSTODY_MOVE_WIDTHS = [150, 196, 168]
+
+/**
+ * The collateral custody record (CollateralRecordCard) while GET
+ * /loans/{id}/collateral is in flight. Composed inside the same
+ * `.lending-custody` wrapper, grid and movement rows as the loaded card, so
+ * the padding, gaps and column rules that decide its real dimensions are
+ * shared rather than re-approximated — the panel opens at its final size and
+ * the content fills in.
+ *
+ * Labelled rather than aria-hidden like the row fragments above: this replaces
+ * a sentence that used to be read out ("Loading the collateral record…"), and
+ * hiding it outright would leave a screen reader with silence where there was
+ * an announcement. The bones themselves are empty, so the label is all there
+ * is to read.
+ */
+export function CollateralRecordSkeleton() {
+    return (
+        <div className='lending-custody' role='status' aria-label='Loading the collateral record'>
+            <div className='lending-custody-head'>
+                <span className='lending-card-icon is-accent' />
+                <h3><SkeletonBone width={124} height={14} /></h3>
+                <span className='lending-custody-status'><SkeletonBone width={54} height={17} radius={999} /></span>
+            </div>
+
+            <dl className='lending-custody-grid'>
+                {CUSTODY_TERM_WIDTHS.map((termWidth, i) => (
+                    <div key={i}>
+                        <dt><SkeletonBone width={termWidth} height={10} /></dt>
+                        <dd><SkeletonBone width={CUSTODY_VALUE_WIDTHS[i]} height={14} /></dd>
+                    </div>
+                ))}
+            </dl>
+
+            <div className='lending-custody-price'>
+                <p className='lending-muted' style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <SkeletonBone width='88%' height={13} />
+                    <SkeletonBone width='46%' height={13} />
+                </p>
+            </div>
+
+            <ul className='lending-moves'>
+                {CUSTODY_MOVE_WIDTHS.map((width, i) => (
+                    <li key={i} className='lending-move'>
+                        <span className='lending-move-what'><SkeletonBone width={width} height={13} /></span>
+                        <span className='lending-move-link'><SkeletonBone width={92} height={12} /></span>
+                    </li>
+                ))}
+            </ul>
+
+            <p className='lending-muted' style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <SkeletonBone width='96%' height={13} />
+                <SkeletonBone width='62%' height={13} />
+            </p>
+        </div>
+    )
+}
+
 /**
  * Modeled on OpenLoanCard's *active*-loan shape (next payment + outstanding/
  * rate rows + Pay button + schedule toggle) rather than its slimmer pending-

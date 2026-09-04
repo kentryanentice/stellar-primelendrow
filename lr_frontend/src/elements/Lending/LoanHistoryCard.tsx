@@ -10,7 +10,7 @@ import { PAYOUT_ALERT, PAYOUT_LABEL, PRODUCT_LABEL, type Loan, type PoolResponse
 import useCollateralRecord from '../../functions/Lending/useCollateralRecord'
 import usePayouts from '../../functions/Lending/usePayouts'
 import CollateralRecordCard from './CollateralRecordCard'
-import { LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
+import { CollateralRecordSkeleton, LoanRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',
@@ -171,7 +171,7 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                 custody.record && custody.record.loan_id === loan.id ? (
                                                     <CollateralRecordCard record={custody.record} />
                                                 ) : custody.loading ? (
-                                                    <p className='lending-muted'>Loading the collateral record…</p>
+                                                    <CollateralRecordSkeleton />
                                                 ) : (
                                                     <p className={`lending-muted${loan.collateral.liquidatable ? ' lending-liquidation' : ''}`}>
                                                         {loan.collateral.liquidatable && <AlertTriangle />}

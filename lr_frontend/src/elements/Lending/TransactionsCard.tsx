@@ -50,7 +50,8 @@ function Reference({ tx }: { tx: Transaction }) {
                 target='_blank'
                 rel='noopener noreferrer'
             >
-                {shortRef(tx.reference)} <ExternalLink aria-hidden='true' />
+                <span>{shortRef(tx.reference)}</span>
+                <ExternalLink aria-hidden='true' />
             </a>
         )
     }

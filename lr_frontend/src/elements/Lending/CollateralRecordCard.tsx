@@ -152,8 +152,14 @@ export default function CollateralRecordCard({ record }: { record: CollateralRec
             {record.contract_id && (
                 <p className='lending-muted'>
                     Held by vault{' '}
-                    <a href={contractLink(record.contract_id)} target='_blank' rel='noreferrer noopener'>
-                        {shortKey(record.contract_id)}
+                    <a
+                        className='lending-inline-link'
+                        href={contractLink(record.contract_id)}
+                        target='_blank'
+                        rel='noreferrer noopener'
+                    >
+                        <span>{shortKey(record.contract_id)}</span>
+                        <ExternalLink aria-hidden='true' />
                     </a>
                     . Only the platform key can release or seize it, and only after the outcome is recorded
                     on-chain — both movements show up in this list when they happen.
