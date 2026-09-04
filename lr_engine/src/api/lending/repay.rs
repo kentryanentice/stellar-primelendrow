@@ -263,19 +263,20 @@ pub async fn repay(
         .map_err(|e| db_err(e, "release guarantors"))?;
 
         if product == "xlm_collateral" {
-            // The DB claim flips now; the on-chain release is queued for the
-            // admin key (the contract refuses anyone else) — backend gated
-            // end to end.
+            // The position stays `locked` until the chain says otherwise (030).
+            // It used to flip to 'released' right here, which claimed coins had
+            // gone home while they were still sitting in the vault — the DB and
+            // the contract disagreeing, with nothing to reconcile them. The
+            // lock path has always waited for Horizon; so does this one now.
+            // `actions::confirm` moves the status when the release is verified.
             let collateral_id: Option<Uuid> = sqlx::query_scalar(
-                "UPDATE public.xlm_collateral SET status = 'released', updated_at = $1
-                  WHERE loan_id = $2 AND status = 'locked'
-                  RETURNING id",
+                "SELECT id FROM public.xlm_collateral
+                  WHERE loan_id = $1 AND status = 'locked'",
             )
-            .bind(now)
             .bind(p.loan_id)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| db_err(e, "release collateral"))?;
+            .map_err(|e| db_err(e, "collateral position"))?;
             if let Some(cid) = collateral_id {
                 // Two steps, in this order: the contract refuses to release
                 // coins from a position with no repayment recorded against

@@ -333,16 +333,78 @@ immediately, split into principal and interest. On the final payment the loan
 closes, collateral and pledges release (on-chain `release` for XLM), and only
 **closed** loans are eligible for a credit-score increase.
 
-### 5.9 Default handling → README §11
+### 5.9 Default handling → README §11 (migration 030)
 
-Missed obligations move a loan `Active` → `Overdue` → `Defaulted`. Recovery runs
-in a fixed order and never reaches ordinary savers' deposits:
+A default is **declared by an administrator**, not by a clock:
+`POST /lending/admin/loans/default` against a running loan. There is no
+unattended overdue sweep — calling a loan is a judgement about a borrower, and
+a job that did it on a timer would be a different feature with a different
+risk. The declaration marks the loan `defaulted` (with `defaulted_at`, distinct
+from `closed_at`), defaults every unpaid installment, drops the borrower's
+credit score by 25 — the mirror of the +5 a clean repayment earns, logged the
+same way — and records a `loan_defaulted` event carrying no postings, because a
+declaration is not a transfer.
+
+Recovery then runs in a fixed order and never reaches ordinary savers'
+deposits — the `lent` badge appears in none of its selectors:
 
 ```
 1. borrower deposit   2. borrower XLM (seize)   3. guarantor deposit   4. guarantor XLM (seize)
 ```
 
-After liquidation the loan is `Closed` and credit penalties are applied.
+Each step that recovers anything writes a balanced posting against
+`loans_receivable` and a `loan_recoveries` row saying whose money it was, so
+"who paid for this default, in what order" is a query rather than an
+archaeology exercise over event payloads.
+
+**It runs in two passes, and has to.** Step 2 cannot complete inside the
+request that declares the default: seizing coins is an on-chain movement the
+vault admin has to sign, and how much debt those coins cover is decided by the
+price the *contract* checks at seizure time. So `recovery::advance` takes the
+borrower's own deposits, then stops at a locked position rather than charging a
+guarantor for a debt the coins may yet cover. When the seizure confirms, the
+recorded value is applied and the waterfall resumes from step 3. A default with
+no XLM behind it runs straight through on the first pass.
+
+**Seized coins usually exceed the debt.** The vault demands 120% coverage and
+sends the whole position, so the surplus is the normal case. The debt takes
+what it is owed and the remainder returns to the borrower as a withdrawable
+deposit lot (`seizure_surplus_returned`) — keeping it would be the platform
+helping itself to the gap between a borrower's collateral and what they owed.
+Whatever no step covers is written off against `reserve_fund`: leaving a
+receivable standing against a settled loan would overstate the pool's assets by
+exactly the amount it just lost.
+
+**Step 4 is not implemented, and is not faked.** `xlm_collateral` is one row
+per loan owned by the borrower (`loan_id` is `UNIQUE`), so there is nowhere a
+guarantor's XLM could be recorded — guarantors back loans with pledged deposits
+only. Implementing the step means giving guarantors a collateral position of
+their own first.
+
+**Executing the on-chain half.** `collateral_actions` has been a queue of
+admin-only vault movements since 022 and nothing drained it, so before 030 a
+repaid loan's release sat queued forever and a seizure had no path at all. It
+is drained through `/lending/admin/actions` — `prepare` (the engine pins a
+freshly agreed seizure quote onto the row and supplies the treasury address
+from its own environment), the operator signs in **their own wallet**, then
+`confirm` verifies the transaction on Horizon and moves the books. The key that
+can take coins out of the vault never reaches the server. `confirm` reads the
+price and destination back off the row, so the figure a seizure applies to a
+borrower's debt is one the engine agreed and the contract checked, never one an
+administrator typed.
+
+`mark_repaid` and `mark_defaulted` move no coins, so Horizon's JSON cannot say
+which entry point a successful invocation called — but it does not need to.
+The contract refuses `release` without a recorded repayment and `seize` without
+a recorded default, so a mark that never happened cannot be followed by a
+movement that did: the pair verifies itself.
+
+**The database follows the chain.** A position stays `locked` until a
+transaction hash is verified; only then does it become `released` or `seized`.
+Repayment used to flip it to `released` immediately, which claimed coins had
+gone home while they were still in the vault — the books and the ledger
+disagreeing with nothing to reconcile them. The lock path always waited for
+Horizon; every movement does now.
 
 ### 5.10 On-chain record registries & anchoring → README §12
 

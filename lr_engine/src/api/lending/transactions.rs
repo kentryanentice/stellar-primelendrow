@@ -9,14 +9,17 @@
 //! previously show that the withdrawal ever happened.
 //!
 //! Assembled from what already exists rather than a new mirror table, the same
-//! call `custody` makes. Four sources, one ordered list:
+//! call `custody` makes. Five sources, one ordered list:
 //!
 //!   * deposits and withdrawals from `ledger_events` + `ledger_postings` —
 //!     the amount is read from the POSTING, never from the payload, so the
 //!     number in the record is the number in the books;
 //!   * the lock from `xlm_collateral`, which holds the borrower's own
-//!     transaction hash and the moment it was verified on-chain; and
-//!   * releases and seizures from `collateral_actions`.
+//!     transaction hash and the moment it was verified on-chain;
+//!   * releases and seizures from `collateral_actions`; and
+//!   * deposits lost to a default from `loan_recoveries` (030) — which reach
+//!     guarantors too, so this is the one source where a row on a member's
+//!     record belongs to somebody else's loan.
 //!
 //! Only movements are listed. `mark_repaid` and `mark_defaulted` are on-chain
 //! state changes that move no coins, so they stay in the per-loan custody
@@ -157,6 +160,23 @@ const MOVEMENTS: &str = "
       JOIN public.xlm_collateral c ON c.id = a.collateral_id
       JOIN public.loans l ON l.id = c.loan_id
      WHERE l.borrower_id = $1 AND a.action IN ('release', 'seize')
+
+    UNION ALL
+
+    -- pesos lost to a default (030): the member's own deposit taken to cover
+    -- their loan, or a guarantor's pledge taken to cover somebody else's. The
+    -- XLM leg is already listed above as its own on-chain movement, so it is
+    -- excluded here rather than counted twice.
+    SELECT r.created_at,
+           'deposit_seized',
+           'php',
+           r.amount,
+           'completed',
+           NULL,
+           r.loan_id,
+           'recovery:' || r.id::text
+      FROM public.loan_recoveries r
+     WHERE r.user_id = $1 AND r.source <> 'borrower_xlm'
 ";
 
 type MovementRow = (i64, String, String, i64, String, Option<String>, Option<Uuid>, String);

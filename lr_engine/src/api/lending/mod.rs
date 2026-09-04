@@ -10,10 +10,13 @@
 //!   shared   — error mapping + the single disburse routine
 //!   the rest — one file per endpoint, same as api::wallets
 
+mod actions;
 mod admin;
+mod admin_loans;
 mod apply;
 mod collateral;
 mod custody;
+mod default_loan;
 mod deposit;
 mod deposits_list;
 mod domain;
@@ -27,12 +30,16 @@ mod policy;
 mod pool;
 mod pricing;
 mod quote;
+mod recovery;
 mod repay;
 pub(crate) mod shared;
 mod transactions;
 mod withdraw;
 
+pub use actions::{confirm as action_confirm, list as actions_list, prepare as action_prepare};
 pub use admin::set_fx_rate;
+pub use admin_loans::list as admin_loans;
+pub use default_loan::declare as loan_default;
 pub use apply::apply;
 pub use collateral::confirm as collateral_confirm;
 pub use custody::record as collateral_record;

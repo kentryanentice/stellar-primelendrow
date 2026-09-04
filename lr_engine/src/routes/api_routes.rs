@@ -124,6 +124,29 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/lending/admin/fx-rate",
             post(lending::set_fx_rate).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // The operator's lending console: every loan, declaring a default, and
+        // draining the vault outbox. All four are `require_admin` inside the
+        // handler — the route table is a map, never the authorization.
+        .route(
+            "/lending/admin/loans",
+            post(lending::admin_loans).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/loans/default",
+            post(lending::loan_default).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/actions",
+            post(lending::actions_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/actions/prepare",
+            post(lending::action_prepare).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/actions/confirm",
+            post(lending::action_confirm).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/wallets", get(wallets::list))
         .route(
             "/wallets/challenge",

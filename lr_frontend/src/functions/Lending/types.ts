@@ -84,6 +84,9 @@ export type TransactionKind =
     | 'collateral_lock'
     | 'collateral_release'
     | 'collateral_seize'
+    /** A deposit taken to cover a default — the member's own, or a pledge
+     *  they made for somebody else's loan (030). */
+    | 'deposit_seized'
 
 /**
  * Where a movement got to. Withdrawals carry their PayPal payout's own status
