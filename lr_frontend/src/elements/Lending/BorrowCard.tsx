@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { HandCoins, Plus, Trash2, ShieldCheck } from 'lucide-react'
 import useWallets from '../../functions/Wallet/useWallets'
 import { truncateAddress } from '../../functions/Wallet/wallet'
@@ -23,7 +23,6 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
         amountInput, setAmountInput,
         term, setTerm,
         guarantorRows, setGuarantorRows,
-        walletId, setWalletId,
         consented, setConsented,
         amountCentavos,
         productQuote, overCap,
@@ -34,6 +33,13 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
     } = form
 
     const activeWallets = useMemo(() => wallets.filter(w => w.status === 'active'), [wallets])
+
+    // Only what the member has actively picked. The effective choice below
+    // falls back to the first wallet — which is what the <select> shows — so
+    // a member with exactly one wallet doesn't have to change a dropdown that
+    // has nothing to change to before Apply will enable.
+    const [chosenWallet, setChosenWallet] = useState('')
+    const walletId = chosenWallet || activeWallets[0]?.id || ''
     const lockWallet = activeWallets.find(w => w.id === walletId) ?? activeWallets[0]
 
     // A fresh XLM application: the wizard's last step is the on-chain lock.
@@ -178,8 +184,8 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                 <select
                                     id='lending-borrow-wallet'
                                     className='lending-input'
-                                    value={walletId || activeWallets[0].id}
-                                    onChange={e => setWalletId(e.target.value)}
+                                    value={walletId}
+                                    onChange={e => setChosenWallet(e.target.value)}
                                 >
                                     {activeWallets.map(w => (
                                         <option key={w.id} value={w.id}>
@@ -252,7 +258,14 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                         </span>
                     </label>
 
-                    <button type='button' className='lending-btn-primary' disabled={!canSubmit} onClick={submit}>
+                    {/* The wallet gate lives here, not in the form: this is
+                        the only place that knows whether the member has one. */}
+                    <button
+                        type='button'
+                        className='lending-btn-primary'
+                        disabled={!canSubmit || (product === 'xlm_collateral' && !walletId)}
+                        onClick={() => void submit(walletId)}
+                    >
                         {applying ? 'Submitting…' : 'Apply for this loan'}
                     </button>
                 </div>

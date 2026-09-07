@@ -23,7 +23,6 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
     const [amountInput, setAmountInput] = useState('')
     const [term, setTerm] = useState(params.term_months.min)
     const [guarantorRows, setGuarantorRows] = useState<GuarantorRow[]>([{ username: '', pledge: '' }])
-    const [walletId, setWalletId] = useState('')
     const [consented, setConsented] = useState(false)
 
     const amountCentavos = parsePesoInput(amountInput)
@@ -58,11 +57,20 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         && amountCentavos >= params.min_loan
         && productQuote?.eligible === true
         && !overCap
-        && (product !== 'xlm_collateral' || walletId !== '')
         && (product !== 'guarantor' || (guarantorAsks !== null && guarantorAsks.length > 0 && !pledgesShort))
 
-    const submit = async () => {
+    /**
+     * `walletId` is passed in rather than held here: the wallet list lives in
+     * BorrowCard, because reading it drags in the wallet kit and that card is
+     * lazy-loaded to keep the kit out of the initial bundle. Holding an id
+     * here that only the card can resolve is what produced the bug this
+     * replaced — the form stored '' while the card's <select> displayed the
+     * one wallet a member had, so Apply stayed disabled until they changed
+     * the dropdown, which with a single wallet they could never do.
+     */
+    const submit = async (walletId: string) => {
         if (!canSubmit || amountCentavos === null) return
+        if (product === 'xlm_collateral' && !walletId) return
         const applied = await borrow.apply({
             product,
             amount: amountCentavos,
@@ -84,7 +92,6 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         amountInput, setAmountInput,
         term, setTerm,
         guarantorRows, setGuarantorRows,
-        walletId, setWalletId,
         consented, setConsented,
         amountCentavos,
         productQuote, overCap,
