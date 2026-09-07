@@ -21,6 +21,10 @@ export type PolicyParams = {
     xlm_liquidation_pct: number
     guarantor_cap_multiple: number
     guarantors_max: number
+    /** Guarantor loans: the share of the principal the borrower must carry
+     *  themselves, from their own deposit and/or their own XLM, before any
+     *  guarantor is asked for anything. Policy data — read, never assumed. */
+    borrower_cover_min_pct: number
     term_months: { min: number; max: number }
     min_deposit: number
     min_loan: number
@@ -160,6 +164,14 @@ export type ProductQuote = {
     required_deposit: number | null
     required_stroops: number | null
     required_pledges: number | null
+    /** guarantor: the least the borrower must carry themselves. */
+    cover_required: number | null
+    /** guarantor: how much of that their withdrawable deposit could absorb —
+     *  already capped by what they actually have. */
+    cover_max_from_deposit: number | null
+    /** guarantor: stroops to lock if the whole cover is carried in XLM, at the
+     *  policy ratio. The engine's number; the screen never derives it. */
+    cover_stroops_if_all_xlm: number | null
 }
 
 export type QuoteResponse = {
@@ -202,6 +214,13 @@ export type ApplyResponse = PinnedQuote & {
     price_method: string | null
     /** The collateral ratio the contract enforces, in basis points. */
     collateral_ratio_bps: number | null
+    /** guarantor: how the engine settled the backing — the policy floor, the
+     *  two legs the borrower actually carries, and what the guarantors must
+     *  pledge between them. Null on the other products. */
+    cover_required: number | null
+    cover_deposit: number | null
+    cover_xlm: number | null
+    guarantor_gap: number | null
     message: string
 }
 

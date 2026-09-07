@@ -62,6 +62,11 @@ export default function useBorrow(onChanged: () => void) {
         term_months: number
         wallet_id?: string
         guarantors?: GuarantorAsk[]
+        /** guarantor: how much of the borrower's own half each leg carries.
+         *  Intent only — the engine settles it against the policy floor and
+         *  derives the stroops itself. */
+        deposit_cover?: number
+        xlm_cover?: number
     }) => {
         setApplying(true)
         try {
@@ -74,8 +79,11 @@ export default function useBorrow(onChanged: () => void) {
             if (!res.ok) throw new Error(await res.text() || 'Unable to submit your application')
             const data = await res.json() as ApplyResponse
             toast.success(data.message)
-            if (input.product === 'xlm_collateral') {
-                // The loan is pending until the wallet locks the collateral.
+            // Keyed off the response, not the product: since the 50% rule a
+            // guarantor loan can carry part of the borrower's own half in
+            // coins, and that leg needs the same lock step. The engine says
+            // whether there is one by returning a requirement.
+            if (data.required_stroops && data.collateral_contract) {
                 setPendingLock(data)
             }
             onChanged()

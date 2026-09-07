@@ -7,9 +7,11 @@ export type GuarantorRow = { username: string; pledge: string }
 
 /**
  * The apply wizard's state and derived numbers: product -> amount/term ->
- * the ENGINE's quote (rate, cap, collateral requirement — displayed
- * verbatim, never computed here) -> product-specific backing (wallet for
- * XLM, invitees for guarantor) -> recorded consent -> submit.
+ * the ENGINE's quote (rate, cap, collateral requirement, and the borrower's
+ * own cover floor — displayed verbatim, never computed here) ->
+ * product-specific backing (a wallet for either coin leg, the borrower's own
+ * deposit/XLM split and invitees for guarantor) -> recorded consent ->
+ * submit.
  *
  * Lifted out of BorrowCard (rather than owned there) so the Borrow page's
  * sibling "Your eligibility" card can read the same live product/quote
@@ -23,8 +25,11 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
     const [amountInput, setAmountInput] = useState('')
     const [term, setTerm] = useState(params.term_months.min)
     const [guarantorRows, setGuarantorRows] = useState<GuarantorRow[]>([{ username: '', pledge: '' }])
-    const [walletId, setWalletId] = useState('')
     const [consented, setConsented] = useState(false)
+    /** Guarantor loans: how much of the borrower's own half each of their two
+     *  legs carries. Peso text, parsed the same way the amount is. */
+    const [depositCoverInput, setDepositCoverInput] = useState('')
+    const [xlmCoverInput, setXlmCoverInput] = useState('')
 
     const amountCentavos = parsePesoInput(amountInput)
 
@@ -48,8 +53,35 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         return asks
     }, [product, guarantorRows])
 
+    // ---- the borrower's own half (SOW §4.1, the 50% rule) ----
+    //
+    // Every rule below is re-derived by the engine at apply time; these are
+    // the screen's copy, so the member is told what is wrong before they
+    // submit rather than by a 422. `cover_required` itself is never computed
+    // here — it is the engine's number, read off the quote.
+    const depositCover = parsePesoInput(depositCoverInput) ?? 0
+    const xlmCover = parsePesoInput(xlmCoverInput) ?? 0
+    const coverTotal = depositCover + xlmCover
+    const coverRequired = productQuote?.cover_required ?? null
+
+    const coverShort =
+        product === 'guarantor' && coverRequired !== null && coverTotal < coverRequired
+    // Covering the whole loan is a deposit or XLM loan, not a guarantor one —
+    // the engine refuses it, so the screen says so first.
+    const coverLeavesNoGap =
+        product === 'guarantor' && amountCentavos !== null && coverTotal >= amountCentavos
+    /** What the guarantors are being asked for: the rest. */
+    const guarantorGap =
+        product === 'guarantor' && amountCentavos !== null
+            ? Math.max(amountCentavos - coverTotal, 0)
+            : null
+
     const pledgesTotal = (guarantorAsks ?? []).reduce((sum, g) => sum + g.pledge_amount, 0)
-    const pledgesShort = product === 'guarantor' && amountCentavos !== null && pledgesTotal < amountCentavos
+    const pledgesShort = product === 'guarantor' && guarantorGap !== null && pledgesTotal < guarantorGap
+
+    /** A guarantor loan with a coin leg needs a wallet, exactly as an XLM loan
+     *  does. BorrowCard owns the wallet list, so it gates on this. */
+    const needsWallet = product === 'xlm_collateral' || (product === 'guarantor' && xlmCover > 0)
 
     const canSubmit =
         !borrow.applying
@@ -58,22 +90,45 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         && amountCentavos >= params.min_loan
         && productQuote?.eligible === true
         && !overCap
-        && (product !== 'xlm_collateral' || walletId !== '')
-        && (product !== 'guarantor' || (guarantorAsks !== null && guarantorAsks.length > 0 && !pledgesShort))
+        && (product !== 'guarantor' || (
+            guarantorAsks !== null
+            && guarantorAsks.length > 0
+            && !pledgesShort
+            && !coverShort
+            && !coverLeavesNoGap
+        ))
 
-    const submit = async () => {
+    /**
+     * `walletId` is passed in rather than held here: the wallet list lives in
+     * BorrowCard, because reading it drags in the wallet kit and that card is
+     * lazy-loaded to keep the kit out of the initial bundle. Holding an id
+     * here that only the card can resolve is what produced the bug this
+     * replaced — the form stored '' while the card's <select> displayed the
+     * one wallet a member had, so Apply stayed disabled until they changed
+     * the dropdown, which with a single wallet they could never do.
+     */
+    const submit = async (walletId: string) => {
         if (!canSubmit || amountCentavos === null) return
+        if (needsWallet && !walletId) return
         const applied = await borrow.apply({
             product,
             amount: amountCentavos,
             term_months: term,
-            ...(product === 'xlm_collateral' ? { wallet_id: walletId } : {}),
-            ...(product === 'guarantor' ? { guarantors: guarantorAsks ?? [] } : {}),
+            // A wallet goes with either coin leg — the whole of an XLM loan,
+            // or the borrower's own XLM share of a guarantor loan.
+            ...(needsWallet ? { wallet_id: walletId } : {}),
+            ...(product === 'guarantor' ? {
+                guarantors: guarantorAsks ?? [],
+                deposit_cover: depositCover,
+                xlm_cover: xlmCover,
+            } : {}),
         })
         if (applied) {
             setAmountInput('')
             setConsented(false)
             setGuarantorRows([{ username: '', pledge: '' }])
+            setDepositCoverInput('')
+            setXlmCoverInput('')
         }
         return applied
     }
@@ -84,11 +139,14 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         amountInput, setAmountInput,
         term, setTerm,
         guarantorRows, setGuarantorRows,
-        walletId, setWalletId,
         consented, setConsented,
+        depositCoverInput, setDepositCoverInput,
+        xlmCoverInput, setXlmCoverInput,
         amountCentavos,
         productQuote, overCap,
         guarantorAsks, pledgesTotal, pledgesShort,
+        depositCover, xlmCover, coverTotal, coverRequired,
+        coverShort, coverLeavesNoGap, guarantorGap, needsWallet,
         canSubmit, submit,
     }
 }
