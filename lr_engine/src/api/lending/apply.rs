@@ -3,17 +3,22 @@
 //!   L0 transport   require_verified_user (+ CSRF middleware, rate limits)
 //!   L1 input       product whitelist, centavos > 0, term in range
 //!   L2 domain      PURE checks on locked snapshots: band cap, 90% LTV,
-//!                  120% collateral, one-open-loan, pledge coverage
+//!                  120% collateral, one-open-loan, the 50% borrower-cover
+//!                  floor, pledge coverage
 //!   L3 database    row locks + the walls: one-open-loan unique index,
-//!                  badge/backing CHECKs, 3-guarantor trigger, balance trigger
+//!                  badge/backing CHECKs, guarantor-cap trigger, balance
+//!                  trigger, borrower-cover CHECK
 //!
-//! The client posts INTENT (product, amount, term, guarantors); the engine
-//! decides legality and price from its own data. Nothing the client sends
-//! is believed about money.
+//! The client posts INTENT (product, amount, term, guarantors, and which of
+//! its own legs should carry how much); the engine decides legality and price
+//! from its own data. Nothing the client sends is believed about money — the
+//! cover it asks for is settled against policy by `domain::plan_cover`, the
+//! stroops behind an XLM leg are derived from the engine's own agreed rate,
+//! and a deposit leg is only real once the lots actually freeze.
 
 use axum::{Extension, Json, http::{HeaderMap, StatusCode}};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::domain;
@@ -38,12 +43,24 @@ pub struct ApplyInput {
     /// Whole centavos.
     amount: i64,
     term_months: i16,
-    /// xlm_collateral only: which of the caller's connected wallets will lock.
+    /// Which of the caller's connected wallets will lock, when a leg of this
+    /// loan rests on XLM — the whole of an xlm_collateral loan, or the
+    /// borrower's own XLM share of a guarantor loan.
     #[serde(default)]
     wallet_id: Option<Uuid>,
-    /// guarantor only: 1..=3 people to invite.
+    /// guarantor only: 1..=`guarantors_max` people to invite.
     #[serde(default)]
     guarantors: Vec<GuarantorAsk>,
+    /// guarantor only, INTENT: how much of the principal the borrower wants
+    /// their own deposit to carry. Centavos.
+    #[serde(default)]
+    deposit_cover: i64,
+    /// guarantor only, INTENT: how much of the principal the borrower wants
+    /// their own XLM to carry. Centavos — NOT stroops, and not the
+    /// over-collateralized figure. The engine prices it and derives the
+    /// stroops that must be locked to carry it at the policy ratio.
+    #[serde(default)]
+    xlm_cover: i64,
 }
 
 #[derive(Serialize)]
@@ -73,7 +90,169 @@ pub struct ApplyResponse {
     pub priced_usd_per_xlm_e8: Option<i64>,
     pub priced_usd_php_centavos: Option<i64>,
     pub collateral_ratio_bps: Option<i32>,
+    /// guarantor: how the loan ended up backed, as the engine settled it.
+    /// `cover_required` is the policy floor, the two legs are what the
+    /// borrower actually carries, and `guarantor_gap` is what the invitees
+    /// must pledge between them. Echoed so the screen shows the engine's
+    /// arithmetic rather than repeating its own.
+    pub cover_required: Option<i64>,
+    pub cover_deposit: Option<i64>,
+    pub cover_xlm: Option<i64>,
+    pub guarantor_gap: Option<i64>,
     pub message: &'static str,
+}
+
+/// What the borrower must lock on chain, and the pinned numbers the wallet
+/// submits with the lock.
+struct XlmLeg {
+    required_stroops: i64,
+    contract: String,
+    ratio_bps: i32,
+    usd_per_xlm_e8: i64,
+    usd_php_centavos: i64,
+}
+
+/// Opens the borrower's XLM position for `covered_centavos` of principal.
+///
+/// Extracted because two products now take a leg on coins: an xlm_collateral
+/// loan, where the leg carries the whole principal, and a guarantor loan,
+/// where it carries whatever share of the borrower's own 50% they chose to
+/// put in XLM. The over-collateralization applies to the leg, not to the
+/// loan — 120% of what these coins are standing behind — so passing the
+/// covered amount is the whole difference between the two callers.
+async fn open_xlm_position(
+    tx: &mut Transaction<'_, Postgres>,
+    loan_id: Uuid,
+    user_id: Uuid,
+    wallet_id: Option<Uuid>,
+    covered_centavos: i64,
+    params: &policy::PolicyParams,
+    priced: &pricing::Priced,
+) -> Result<XlmLeg, E> {
+    let contract = stellar::contract_id().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "XLM collateral is not enabled on this deployment yet",
+    ))?;
+    let wallet_id = wallet_id.ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Choose which connected wallet will lock the collateral",
+    ))?;
+    // Only a KYC-anchored, ownership-proven wallet may collateralize.
+    let address: Option<String> = sqlx::query_scalar(
+        "SELECT address FROM public.wallets
+          WHERE id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(wallet_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "wallet lookup"))?;
+    let address = address.ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "That wallet isn't connected to your account",
+    ))?;
+
+    // Both legs, or no loan: the vault contract measures the dollar leg
+    // against Reflector and refuses a peso rate the legs don't support, so a
+    // quote missing one is a lock the chain would bounce. `for_issuance` has
+    // already refused this case — this is the wall behind it, not a second
+    // opinion.
+    let (usd_per_xlm_e8, usd_php_centavos) = priced.checkable_legs().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "XLM pricing is unavailable — no independent price feeds agree right now",
+    ))?;
+    let required_stroops = domain::required_collateral_stroops(
+        covered_centavos,
+        params.xlm_min_collateral_pct,
+        priced.centavos_per_xlm,
+    );
+    // The contract counts the ratio in basis points; policy states it in whole
+    // percent. The vault enforces its OWN configured ratio, so if policy is
+    // raised without reconfiguring the contract the engine simply asks for
+    // more than the chain requires — never less. Lowering policy below the
+    // vault's ratio is what would strand borrowers at the lock, and the vault
+    // is the wall there by design.
+    let ratio_bps = (params.xlm_min_collateral_pct * 100) as i32;
+
+    // The rate is pinned with the position, not looked up again later:
+    // "priced at issuance" (SOW §3.8) means a later price move never rewrites
+    // what this borrower was asked to lock.
+    let collateral_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO public.xlm_collateral
+            (loan_id, user_id, wallet_address, required_stroops, status,
+             priced_centavos_per_xlm, priced_at,
+             priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
+         RETURNING id",
+    )
+    .bind(loan_id)
+    .bind(user_id)
+    .bind(&address)
+    .bind(required_stroops)
+    .bind(priced.centavos_per_xlm)
+    .bind(priced.as_of)
+    .bind(usd_per_xlm_e8)
+    .bind(usd_php_centavos)
+    .bind(ratio_bps)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "insert collateral"))?;
+
+    // Which feed said what, one row each (027). This is the evidence the
+    // borrower's custody record and the proof page read back, and it is kept
+    // queryable — "how often did this feed sit outside the band" is a question
+    // the database should be able to answer, not one that needs every row
+    // unpacked in application code.
+    for source in &priced.sources {
+        sqlx::query(
+            "INSERT INTO public.collateral_price_sources
+                (collateral_id, name, centavos_per_xlm, leg, deviation_bps, used)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(collateral_id)
+        .bind(&source.name)
+        .bind(source.centavos_per_xlm)
+        .bind(source.leg)
+        .bind(source.deviation_bps)
+        .bind(source.used)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| db_err(e, "insert price source"))?;
+    }
+
+    // The summary in the notebook (D9): the agreed number, when it was read,
+    // and how much of the principal these coins are standing behind — which on
+    // a guarantor loan is a share, not the whole.
+    commit_event(
+        tx,
+        EventDraft {
+            kind: "collateral_priced",
+            user_id: Some(user_id),
+            loan_id: Some(loan_id),
+            deposit_id: None,
+            rail_ref: None,
+            payload: serde_json::json!({
+                "centavos_per_xlm": priced.centavos_per_xlm,
+                "usd_php_centavos": priced.usd_php_centavos,
+                "usd_per_xlm_e8": usd_per_xlm_e8,
+                "as_of": priced.as_of,
+                "method": priced.method,
+                "covered_centavos": covered_centavos,
+                "min_collateral_pct": params.xlm_min_collateral_pct,
+                "collateral_ratio_bps": ratio_bps,
+                "required_stroops": required_stroops,
+                "sources_used": priced.sources.iter().filter(|s| s.used).count(),
+                "sources_read": priced.sources.len(),
+                "unavailable": priced.failures.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            }),
+            actor_id: Some(user_id),
+        },
+        &[],
+    )
+    .await
+    .map_err(|e| ledger_err(e, "collateral_priced"))?;
+
+    Ok(XlmLeg { required_stroops, contract, ratio_bps, usd_per_xlm_e8, usd_php_centavos })
 }
 
 pub async fn apply(
@@ -102,9 +281,16 @@ pub async fn apply(
     // (blueprint §3.3, the same rule the Horizon call in collateral.rs
     // follows). Fails closed — no agreement between independent feeds, no
     // loan, rather than a loan struck at a price nobody can vouch for.
-    let priced = if product == "xlm_collateral" {
+    //
+    // Two products can rest on XLM now: the whole of an xlm_collateral loan,
+    // and the borrower's own share of a guarantor loan when they choose to
+    // carry part of it in coins. Both need a price agreed before the
+    // transaction opens, and both refuse the loan if no feeds agree.
+    let needs_xlm_leg =
+        product == "xlm_collateral" || (product == "guarantor" && p.xlm_cover > 0);
+    let priced = if needs_xlm_leg {
         // Cheap refusals first: no point asking six providers for a price
-        // for a product this deployment can't issue anyway.
+        // for a leg this deployment can't issue anyway.
         stellar::contract_id().ok_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "XLM collateral is not enabled on this deployment yet",
@@ -154,10 +340,42 @@ pub async fn apply(
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Amount exceeds your credit-score cap for this product"));
     }
 
+    // The 50% rule (SOW §4.1), settled before the loan row exists because the
+    // borrower's own share is part of what the loan IS. Pure arithmetic on
+    // policy and the client's stated intent — the client says how much each of
+    // its legs should carry, and every consequence below is derived from the
+    // plan this returns, never from a number the client sent.
+    let cover = if product == "guarantor" {
+        Some(
+            domain::plan_cover(amount, p.deposit_cover, p.xlm_cover, params.borrower_cover_min_pct)
+                .map_err(|e| match e {
+                    // The numbers themselves stay out of the message, as with
+                    // the guarantor cap above: the floor is policy data and the
+                    // quote endpoint already shows the live figure.
+                    domain::CoverError::BelowFloor { .. } => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "You must cover at least half of this loan yourself, from your own deposit or your own XLM",
+                    ),
+                    domain::CoverError::NoGapLeft => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "You're covering the whole loan yourself — apply for a deposit-backed or XLM loan instead",
+                    ),
+                    domain::CoverError::Invalid => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Your cover can't be negative or add up to more than the loan",
+                    ),
+                })?,
+        )
+    } else {
+        None
+    };
+    let cover_total = cover.as_ref().map(|c| c.total).unwrap_or(0);
+
     let loan_id: Uuid = sqlx::query_scalar(
         "INSERT INTO public.loans
-            (borrower_id, product, principal, rate_bps, term_months, policy_version, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+            (borrower_id, product, principal, rate_bps, term_months, policy_version,
+             borrower_cover_centavos, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
          RETURNING id",
     )
     .bind(user_id)
@@ -166,6 +384,7 @@ pub async fn apply(
     .bind(rate)
     .bind(p.term_months)
     .bind(rules.id)
+    .bind(cover_total)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
@@ -222,148 +441,72 @@ pub async fn apply(
                 priced_usd_per_xlm_e8: None,
                 priced_usd_php_centavos: None,
                 collateral_ratio_bps: None,
+                cover_required: None,
+                cover_deposit: None,
+                cover_xlm: None,
+                guarantor_gap: None,
                 message: "Loan approved and disbursed — your backing deposit is locked until it's repaid",
             }
         }
         "xlm_collateral" => {
-            let contract = stellar::contract_id().ok_or((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "XLM collateral is not enabled on this deployment yet",
-            ))?;
-            let wallet_id = p.wallet_id.ok_or((
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Choose which connected wallet will lock the collateral",
-            ))?;
-            // Only a KYC-anchored, ownership-proven wallet may collateralize.
-            let address: Option<String> = sqlx::query_scalar(
-                "SELECT address FROM public.wallets
-                  WHERE id = $1 AND user_id = $2 AND status = 'active'",
-            )
-            .bind(wallet_id)
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| db_err(e, "wallet lookup"))?;
-            let address = address.ok_or((StatusCode::UNPROCESSABLE_ENTITY, "That wallet isn't connected to your account"))?;
-
             let priced = priced.expect("xlm_collateral is priced before the transaction opens");
-            // Both legs, or no loan: the vault contract measures the dollar
-            // leg against Reflector and refuses a peso rate the legs don't
-            // support, so a quote missing one is a lock the chain would
-            // bounce. `for_issuance` has already refused this case — this is
-            // the wall behind it, not a second opinion.
-            let (usd_per_xlm_e8, usd_php_centavos) = priced.checkable_legs().ok_or((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "XLM pricing is unavailable — no independent price feeds agree right now",
-            ))?;
-            let required = domain::required_collateral_stroops(
-                amount,
-                params.xlm_min_collateral_pct,
-                priced.centavos_per_xlm,
-            );
-            // The contract counts the ratio in basis points; policy states it
-            // in whole percent. The vault enforces its OWN configured ratio,
-            // so if policy is raised without reconfiguring the contract the
-            // engine simply asks for more than the chain requires — never
-            // less. Lowering policy below the vault's ratio is what would
-            // strand borrowers at the lock, and the vault is the wall there
-            // by design.
-            let ratio_bps = (params.xlm_min_collateral_pct * 100) as i32;
-
-            // The rate is pinned with the position, not looked up again later:
-            // "priced at issuance" (SOW §3.8) means a later price move never
-            // rewrites what this borrower was asked to lock.
-            let collateral_id: Uuid = sqlx::query_scalar(
-                "INSERT INTO public.xlm_collateral
-                    (loan_id, user_id, wallet_address, required_stroops, status,
-                     priced_centavos_per_xlm, priced_at,
-                     priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)
-                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
-                 RETURNING id",
+            // The leg carries the whole principal on this product.
+            let leg = open_xlm_position(
+                &mut tx, loan_id, user_id, p.wallet_id, amount, &params, &priced,
             )
-            .bind(loan_id)
-            .bind(user_id)
-            .bind(&address)
-            .bind(required)
-            .bind(priced.centavos_per_xlm)
-            .bind(priced.as_of)
-            .bind(usd_per_xlm_e8)
-            .bind(usd_php_centavos)
-            .bind(ratio_bps)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| db_err(e, "insert collateral"))?;
-
-            // Which feed said what, one row each (027). This is the evidence
-            // the borrower's custody record and the proof page read back, and
-            // it is kept queryable — "how often did this feed sit outside the
-            // band" is a question the database should be able to answer, not
-            // one that needs every row unpacked in application code.
-            for source in &priced.sources {
-                sqlx::query(
-                    "INSERT INTO public.collateral_price_sources
-                        (collateral_id, name, centavos_per_xlm, leg, deviation_bps, used)
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                )
-                .bind(collateral_id)
-                .bind(&source.name)
-                .bind(source.centavos_per_xlm)
-                .bind(source.leg)
-                .bind(source.deviation_bps)
-                .bind(source.used)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| db_err(e, "insert price source"))?;
-            }
-
-            // The summary in the notebook (D9): the agreed number and when it
-            // was read. The per-feed detail is no longer duplicated here — it
-            // is rows in collateral_price_sources, keyed to this position.
-            commit_event(
-                &mut tx,
-                EventDraft {
-                    kind: "collateral_priced",
-                    user_id: Some(user_id),
-                    loan_id: Some(loan_id),
-                    deposit_id: None,
-                    rail_ref: None,
-                    payload: serde_json::json!({
-                        "centavos_per_xlm": priced.centavos_per_xlm,
-                        "usd_php_centavos": priced.usd_php_centavos,
-                        "usd_per_xlm_e8": usd_per_xlm_e8,
-                        "as_of": priced.as_of,
-                        "method": priced.method,
-                        "min_collateral_pct": params.xlm_min_collateral_pct,
-                        "collateral_ratio_bps": ratio_bps,
-                        "required_stroops": required,
-                        "sources_used": priced.sources.iter().filter(|s| s.used).count(),
-                        "sources_read": priced.sources.len(),
-                        "unavailable": priced.failures.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
-                    }),
-                    actor_id: Some(user_id),
-                },
-                &[],
-            )
-            .await
-            .map_err(|e| ledger_err(e, "collateral_priced"))?;
+            .await?;
 
             ApplyResponse {
                 loan_id,
                 status: "pending",
                 rate_bps: rate,
                 principal: amount,
-                required_stroops: Some(required),
-                collateral_contract: Some(contract),
+                required_stroops: Some(leg.required_stroops),
+                collateral_contract: Some(leg.contract),
                 priced_centavos_per_xlm: Some(priced.centavos_per_xlm),
                 priced_at: Some(priced.as_of),
-                priced_usd_per_xlm_e8: Some(usd_per_xlm_e8),
-                priced_usd_php_centavos: Some(usd_php_centavos),
-                collateral_ratio_bps: Some(ratio_bps),
+                priced_usd_per_xlm_e8: Some(leg.usd_per_xlm_e8),
+                priced_usd_php_centavos: Some(leg.usd_php_centavos),
+                collateral_ratio_bps: Some(leg.ratio_bps),
                 price_method: Some(priced.method),
+                cover_required: None,
+                cover_deposit: None,
+                cover_xlm: None,
+                guarantor_gap: None,
                 message: "Lock the required XLM from your wallet, then confirm — the loan disburses once the chain shows it",
             }
         }
         "guarantor" => {
+            let cover = cover.expect("guarantor cover is planned before the loan row is written");
+
+            // ---- the borrower's own half, before anyone is asked to vouch --
+            //
+            // Deposit leg first: it settles synchronously, so a borrower who
+            // cannot actually cover what they claimed is refused here rather
+            // than after invitations have gone out.
+            if cover.deposit > 0 {
+                lots::freeze_user_lots(&mut tx, user_id, cover.deposit, "collateral", loan_id)
+                    .await
+                    .map_err(|_| (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Not enough withdrawable deposit for the share you're covering yourself",
+                    ))?;
+            }
+            // Coin leg: priced and pinned now, locked on chain afterwards. The
+            // 120% ratio applies to this leg alone — the share it stands
+            // behind — not to the whole loan.
+            let xlm_leg = if cover.xlm > 0 {
+                let priced = priced
+                    .as_ref()
+                    .expect("an XLM cover leg is priced before the transaction opens");
+                Some(open_xlm_position(
+                    &mut tx, loan_id, user_id, p.wallet_id, cover.xlm, &params, priced,
+                )
+                .await?)
+            } else {
+                None
+            };
+
             if p.guarantors.is_empty() || p.guarantors.len() as i64 > params.guarantors_max {
                 // Deliberately doesn't name the exact number: the cap is
                 // policy data (D8) and can change (guarantors_max 3 -> 2 in
@@ -411,12 +554,12 @@ pub async fn apply(
                 .await
                 .map_err(|e| db_err(e, "insert guarantor"))?;
             }
-            // Guarantors carry the default, so their pledges must cover the
-            // whole principal before the loan can fund.
-            if total_pledged < amount {
+            // Guarantors carry only what the borrower did not: the gap left
+            // after their own deposit and coins, never the whole principal.
+            if total_pledged < cover.guarantor_gap {
                 return Err((
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "Guarantor pledges must add up to at least the loan amount",
+                    "Guarantor pledges must add up to the share you aren't covering yourself",
                 ));
             }
 
@@ -425,15 +568,23 @@ pub async fn apply(
                 status: "pending",
                 rate_bps: rate,
                 principal: amount,
-                required_stroops: None,
-                collateral_contract: None,
-                priced_centavos_per_xlm: None,
-                priced_at: None,
-                price_method: None,
-                priced_usd_per_xlm_e8: None,
-                priced_usd_php_centavos: None,
-                collateral_ratio_bps: None,
-                message: "Invitations sent — the loan disburses once your guarantors accept and their pledges cover it",
+                required_stroops: xlm_leg.as_ref().map(|l| l.required_stroops),
+                collateral_contract: xlm_leg.as_ref().map(|l| l.contract.clone()),
+                priced_centavos_per_xlm: priced.as_ref().map(|q| q.centavos_per_xlm),
+                priced_at: priced.as_ref().map(|q| q.as_of),
+                price_method: priced.as_ref().map(|q| q.method.clone()),
+                priced_usd_per_xlm_e8: xlm_leg.as_ref().map(|l| l.usd_per_xlm_e8),
+                priced_usd_php_centavos: xlm_leg.as_ref().map(|l| l.usd_php_centavos),
+                collateral_ratio_bps: xlm_leg.as_ref().map(|l| l.ratio_bps),
+                cover_required: Some(cover.required),
+                cover_deposit: Some(cover.deposit),
+                cover_xlm: Some(cover.xlm),
+                guarantor_gap: Some(cover.guarantor_gap),
+                message: if xlm_leg.is_some() {
+                    "Invitations sent — lock your XLM, and the loan disburses once that and your guarantors' pledges are both in"
+                } else {
+                    "Invitations sent — the loan disburses once your guarantors accept and their pledges cover the rest"
+                },
             }
         }
         _ => unreachable!("validate_product whitelists"),
