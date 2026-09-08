@@ -8,6 +8,9 @@ import { TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
 const KIND_LABEL: Record<TransactionKind, string> = {
     deposit: 'Deposit',
     withdrawal: 'Withdrawal',
+    // Named for what it is rather than "Deposit", so it reads as the partner
+    // of the failed withdrawal above it instead of looking like fresh money.
+    withdrawal_refund: 'Withdrawal returned',
     collateral_lock: 'Collateral locked',
     collateral_release: 'Collateral released',
     collateral_seize: 'Collateral seized',

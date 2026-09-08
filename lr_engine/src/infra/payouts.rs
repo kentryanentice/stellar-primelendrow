@@ -60,6 +60,9 @@ pub fn spawn(pool: PgPool) {
             if let Err(e) = reconcile_sent(&pool).await {
                 tracing::error!("payout reconcile sweep: {e}");
             }
+            if let Err(e) = refund_stranded_withdrawals(&pool).await {
+                tracing::error!("withdrawal refund sweep: {e}");
+            }
         }
     });
 }
@@ -144,6 +147,57 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
         .bind(id)
         .execute(pool)
         .await?;
+
+        // A withdrawal that ran out of road goes back into the member's
+        // deposits. No-op for loan proceeds, and for anything not terminal.
+        if status == "failed" {
+            crate::api::lending::refund_failed_withdrawal(pool, id).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Gives back every withdrawal that died without its money being returned.
+///
+/// The two sweeps above only look at rows still in motion (`pending`, `sent`,
+/// `unclaimed`), so a withdrawal that reached `failed` or `returned` is seen by
+/// neither. That leaves two ways for a member's deposit to go missing, and this
+/// closes both:
+///
+///   * rows that failed **before this refund existed** — the money was consumed
+///     into a payable that nothing was ever going to pay down;
+///   * rows where the refund itself couldn't be written at the time (the
+///     database was briefly unavailable, the process died between marking the
+///     row and reversing the postings).
+///
+/// The `NOT EXISTS` is the whole guard, and it reads the same fact the refund
+/// writes: the ledger event's unique `rail_ref`. So this can run every minute
+/// forever, find nothing, and cost one indexed lookup — and if it ever does
+/// find something, `refund_if_failed` is itself idempotent, so a race with the
+/// request handler still refunds exactly once.
+///
+/// This is the money-in mirror of what the payout retry already does for money
+/// out: no member's balance is left depending on a single request going well.
+async fn refund_stranded_withdrawals(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT p.id
+           FROM public.payouts p
+          WHERE p.kind = 'deposit_withdrawal'
+            AND p.status IN ('failed', 'returned')
+            AND NOT EXISTS (
+                SELECT 1 FROM public.ledger_events e
+                 WHERE e.rail_ref = 'withdrawal_refund:' || p.id::text
+            )
+          ORDER BY p.created_at
+          LIMIT $1",
+    )
+    .bind(BATCH)
+    .fetch_all(pool)
+    .await?;
+
+    for (id,) in ids {
+        tracing::warn!(payout = %id, "stranded withdrawal found — refunding to deposits");
+        crate::api::lending::refund_failed_withdrawal(pool, id).await?;
     }
     Ok(())
 }
@@ -210,13 +264,18 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
             }
             PayoutOutcome::Returned { item_id, reason } => {
                 // The money is ours again and the member is still owed it, so
-                // the payable stays exactly where it is. They can ask again.
+                // the payable stays exactly where it is — for loan proceeds,
+                // which they can ask for again. A withdrawal has nothing left
+                // to ask with (its lots were consumed at request time), so
+                // `refund_failed_withdrawal` gives that one its deposit back.
                 tracing::warn!(payout = %id, reason, "payout returned");
                 set_status(pool, id, "returned", item_id, Some(reason)).await?;
+                crate::api::lending::refund_failed_withdrawal(pool, id).await?;
             }
             PayoutOutcome::Failed { reason } => {
                 tracing::warn!(payout = %id, reason, "payout failed");
                 set_status(pool, id, "failed", None, Some(reason)).await?;
+                crate::api::lending::refund_failed_withdrawal(pool, id).await?;
             }
             PayoutOutcome::Pending { .. } => {}
         }

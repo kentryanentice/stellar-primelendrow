@@ -85,6 +85,9 @@ export type LotsPage = {
 export type TransactionKind =
     | 'deposit'
     | 'withdrawal'
+    /** A withdrawal the provider refused, given back. Pesos IN, like a
+     *  deposit — it's the reversal of the withdrawal above it, not a new one. */
+    | 'withdrawal_refund'
     | 'collateral_lock'
     | 'collateral_release'
     | 'collateral_seize'
@@ -442,3 +445,26 @@ export const PROVIDER_LABEL: Record<Payout['provider'], string> = {
 
 /** The states worth pulling the member's eye to. */
 export const PAYOUT_ALERT = new Set<Payout['status']>(['unclaimed', 'returned', 'failed'])
+
+/**
+ * Does this transfer still need the member to do something about it?
+ *
+ * Status alone used to answer this, and for loan proceeds it still does: a
+ * failed payout means the borrower's money is sitting in a promise they have
+ * to ask for again, which is worth an alarm.
+ *
+ * A **withdrawal** that fails is different, because the engine now undoes it —
+ * the deposit goes straight back to `available` (see `withdraw::refund_if_failed`).
+ * By the time the member reads the row, there is nothing left for them to do,
+ * and rendering resolved history in alarm red teaches people to distrust the
+ * colour. The row stays visible — it really happened, and the reason still
+ * tells them why — but it reads as a record, not a warning.
+ */
+export const payoutNeedsAttention = (payout: Payout): boolean => {
+    if (!PAYOUT_ALERT.has(payout.status)) return false
+    // Refused or returned withdrawals are already back in the balance.
+    if (payout.kind === 'deposit_withdrawal') {
+        return payout.status !== 'failed' && payout.status !== 'returned'
+    }
+    return true
+}

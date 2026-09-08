@@ -129,6 +129,27 @@ const MOVEMENTS: &str = "
 
     UNION ALL
 
+    -- pesos back in: a withdrawal the provider refused, undone. Without this
+    -- branch the record shows money leaving on a failed transfer and never
+    -- coming back, while the balance quietly rises — the member would have to
+    -- take our word for it. The refund is a real movement and says so.
+    -- member_deposits is credit-normal and the reversal debits it, so the
+    -- posting is negative and the sign flip matches the deposit branch.
+    SELECT e.created_at,
+           'withdrawal_refund',
+           'php',
+           -p.amount,
+           'completed',
+           e.rail_ref::text,
+           NULL::uuid,
+           'refund:' || e.id::text
+      FROM public.ledger_events e
+      JOIN public.ledger_postings p
+        ON p.event_id = e.id AND p.account = 'member_deposits'
+     WHERE e.user_id = $1 AND e.kind = 'withdrawal_refunded'
+
+    UNION ALL
+
     -- XLM into the vault: the borrower's own transaction, dated when the
     -- engine verified it on Horizon rather than when the row was written.
     SELECT c.locked_at,
