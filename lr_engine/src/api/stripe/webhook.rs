@@ -67,6 +67,20 @@ struct EventObject {
     payouts_enabled: Option<bool>,
     #[serde(default)]
     details_submitted: Option<bool>,
+    /// checkout.session.completed: the member the session was created for.
+    #[serde(default)]
+    client_reference_id: Option<String>,
+    #[serde(default)]
+    metadata: SessionMetadata,
+}
+
+/// What `create_checkout_session` stamped on, so this endpoint can tell a pool
+/// deposit from a loan repayment. A session without it predates the stamping
+/// and is left to the redirect rather than guessed at.
+#[derive(Deserialize, Default)]
+struct SessionMetadata {
+    #[serde(default)]
+    purpose: Option<String>,
 }
 
 pub async fn handle(
@@ -117,6 +131,63 @@ pub async fn handle(
 
 async fn dispatch(pool: &PgPool, event: &Event) -> Result<(), sqlx::Error> {
     match event.kind.as_str() {
+        // The member paid. Normally the redirect back to the app confirms it
+        // moments later — but a member who closes the tab, loses signal, or
+        // never returns has money at Stripe and nothing in the pool, and the
+        // only way back used to be an operator pasting the session id into a
+        // URL by hand.
+        //
+        // This does not weaken the "one credit path" rule the module note
+        // describes so much as it reroutes it: both the redirect and this
+        // event land in `deposit::credit`, and both get there through
+        // `capture_session`, which re-reads the session from Stripe and
+        // re-checks paid/currency/owner. The event is a prompt to go and look,
+        // never itself the evidence. Two prompts, one verified read, and the
+        // ledger's unique rail_ref decides which one credits.
+        "checkout.session.completed" => {
+            let Some(session_id) = event.data.object.id.as_deref() else {
+                return Ok(());
+            };
+            let Some(user) = event.data.object.client_reference_id.as_deref() else {
+                tracing::warn!(session_id, "stripe session completed with no member on it");
+                return Ok(());
+            };
+            let purpose = event.data.object.metadata.purpose.as_deref().unwrap_or("");
+            // A repayment has to be applied against a schedule, not dropped
+            // into the pool. Until that path is wired here, saying so is the
+            // only safe thing: crediting it as a deposit would put a
+            // borrower's payment in their savings and leave the loan open.
+            if purpose != "deposit" {
+                tracing::info!(session_id, purpose, "stripe session not a deposit — left to the redirect");
+                return Ok(());
+            }
+            let Ok(user_id) = user.parse::<uuid::Uuid>() else {
+                tracing::warn!(session_id, user, "stripe session carries an unreadable member id");
+                return Ok(());
+            };
+
+            match crate::infra::stripe::capture_session(session_id, user).await {
+                Ok(captured) => {
+                    match crate::api::lending::credit_deposit(pool, user_id, "stripe", captured).await {
+                        Ok(done) => {
+                            tracing::info!(%user_id, session_id, amount = done.amount, "deposit credited from webhook");
+                        }
+                        // The redirect got there first. That is the system
+                        // working, not a failure — the rail_ref wall is
+                        // exactly what makes two prompts safe.
+                        Err((status, message)) if status == StatusCode::CONFLICT => {
+                            tracing::info!(session_id, message, "deposit already credited");
+                        }
+                        Err((status, message)) => {
+                            tracing::error!(session_id, %status, message, "webhook deposit credit failed");
+                        }
+                    }
+                }
+                Err(message) => {
+                    tracing::error!(session_id, message, "webhook could not verify the session");
+                }
+            }
+        }
         "account.updated" => {
             let Some(account_id) = event.data.object.id.as_deref() else {
                 return Ok(());
