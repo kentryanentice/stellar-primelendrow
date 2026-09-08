@@ -12,6 +12,8 @@
 
 mod account;
 mod connect;
+mod order;
 
 pub use account::{disconnect, status};
 pub use connect::{callback, start};
+pub use order::create as create_order;

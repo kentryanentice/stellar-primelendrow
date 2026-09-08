@@ -12,6 +12,15 @@ use super::shared::{MAX_REASON_LEN, audit};
 use crate::api::users::shared::{E, MessageResponse, require_admin};
 use crate::infra::{crypto, storage::SupabaseStorage};
 
+/// One row of the review queue, in SELECT order: id, user_id, id_type,
+/// face_match_score, liveness_passed, created_at, id_image_path,
+/// selfie_image_path.
+type QueueRow = (Uuid, Uuid, String, Option<i16>, bool, i64, Option<String>, Option<String>);
+
+/// What a decision returns: user_id, id_image_path, selfie_image_path,
+/// wallet_address.
+type DecidedRow = (Uuid, Option<String>, Option<String>, Option<String>);
+
 /// How long an admin's signed image URL stays valid. Long enough to review,
 /// short enough that a leaked URL from a screen-share is soon worthless.
 const SIGNED_URL_TTL_SECS: u32 = 5 * 60;
@@ -84,7 +93,7 @@ pub async fn pending(
         (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load queue")
     })?;
 
-    let rows: Vec<(Uuid, Uuid, String, Option<i16>, bool, i64, Option<String>, Option<String>)> = sqlx::query_as(
+    let rows: Vec<QueueRow> = sqlx::query_as(
         "SELECT id, user_id, id_type, face_match_score, liveness_passed, created_at,
                 id_image_path, selfie_image_path
            FROM public.kyc_submissions
@@ -339,7 +348,7 @@ pub async fn review(
 
     // status guard in the WHERE clause makes the decision idempotent and
     // race-safe: two admins deciding at once — exactly one wins
-    let row: Option<(Uuid, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+    let row: Option<DecidedRow> = sqlx::query_as(
         "UPDATE public.kyc_submissions
             SET status = $1, reviewed_by = $2, reviewed_at = $3,
                 rejection_reason = $4, updated_at = $3
@@ -437,8 +446,9 @@ pub async fn review(
     // DO NOTHING (no target) absorbs a conflict against either of that
     // table's unique indexes: a resubmission reusing the same (user,
     // address), or the address already being someone else's active wallet.
-    if approve && let Some(wallet_address) = &wallet_address {
-        if let Err(e) = sqlx::query(
+    if approve
+        && let Some(wallet_address) = &wallet_address
+        && let Err(e) = sqlx::query(
             "INSERT INTO public.wallets
                 (user_id, address, source, status, connected_at, created_at, updated_at)
              VALUES ($1, $2, 'kyc_verified', 'active', $3, $3, $3)
@@ -449,9 +459,8 @@ pub async fn review(
         .bind(now)
         .execute(&pool)
         .await
-        {
-            tracing::error!(%user_id, "kyc wallet seed failed: {e}");
-        }
+    {
+        tracing::error!(%user_id, "kyc wallet seed failed: {e}");
     }
 
     if !approve {

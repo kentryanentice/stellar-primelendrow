@@ -112,6 +112,12 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         // and is redirected back to /paypal/callback, which is a GET (so the
         // CSRF guard passes it) and identifies them from the single-use
         // `state` row rather than from a cookie the redirect may not carry.
+        // The order is created here, not in the browser, so it carries the
+        // engine's amount and the caller's ownership stamp (`custom_id`).
+        .route(
+            "/paypal/order",
+            post(paypal::create_order).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/paypal/connect", get(paypal::start))
         .route("/paypal/callback", get(paypal::callback))
         .route("/paypal/account", get(paypal::status))

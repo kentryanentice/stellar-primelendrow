@@ -13,6 +13,10 @@ use super::shared::{
 };
 use crate::api::users::shared::{E, require_verified_user};
 
+/// The wallet row the upsert returns: id, address, label, source, status,
+/// connected_at.
+type ConnectedRow = (Uuid, String, Option<String>, String, String, i64);
+
 #[derive(Deserialize)]
 pub struct ConnectInput {
     nonce: String,
@@ -120,8 +124,7 @@ pub async fn connect(
     // (idx_wallets_address_active — someone else's account already holds
     // this address active) isn't this statement's target, so it surfaces
     // as a real unique-violation error instead of silently upserting.
-    let row: Result<(Uuid, String, Option<String>, String, String, i64), sqlx::Error> =
-        sqlx::query_as(
+    let row: Result<ConnectedRow, sqlx::Error> = sqlx::query_as(
             "INSERT INTO public.wallets
                 (user_id, address, label, source, status, connected_at, created_at, updated_at)
              VALUES ($1, $2, $3, 'user_added', 'active', $4, $4, $4)

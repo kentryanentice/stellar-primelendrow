@@ -108,6 +108,19 @@ pub struct CollateralRecord {
     pub movements: Vec<MovementView>,
 }
 
+/// One `collateral_actions` row in SELECT order: action, status, tx_hash,
+/// created_at, done_at, and the three legs of the quote it carried.
+type ActionRow = (
+    String,
+    String,
+    Option<String>,
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
+
 #[derive(sqlx::FromRow)]
 struct PositionRow {
     id: Uuid,
@@ -173,19 +186,18 @@ pub async fn record(
     .await
     .map_err(|e| db_err(e, "price sources"))?;
 
-    let actions: Vec<(String, String, Option<String>, i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>)> =
-        sqlx::query_as(
-            "SELECT action, status, tx_hash, created_at, done_at,
-                    quote_php_per_xlm_centavos, quote_usd_per_xlm_e8,
-                    quote_php_per_usd_centavos
-               FROM public.collateral_actions
-              WHERE collateral_id = $1
-              ORDER BY id",
-        )
-        .bind(position.id)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| db_err(e, "collateral movements"))?;
+    let actions: Vec<ActionRow> = sqlx::query_as(
+        "SELECT action, status, tx_hash, created_at, done_at,
+                quote_php_per_xlm_centavos, quote_usd_per_xlm_e8,
+                quote_php_per_usd_centavos
+           FROM public.collateral_actions
+          WHERE collateral_id = $1
+          ORDER BY id",
+    )
+    .bind(position.id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| db_err(e, "collateral movements"))?;
 
     // Display numbers only, at the live rate — `for_display` degrades rather
     // than failing, because a screen is not money.

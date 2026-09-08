@@ -17,6 +17,10 @@ use uuid::Uuid;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
+/// One repayment in SELECT order: id, loan_id, product, amount_received,
+/// interest_paid, principal_paid, excess, paid_at.
+type PaymentRow = (i64, Uuid, String, i64, i64, i64, i64, i64);
+
 fn default_page() -> i64 {
     1
 }
@@ -88,7 +92,7 @@ pub async fn list(
     .await
     .map_err(|e| db_err(e, "payment totals"))?;
 
-    let rows: Vec<(i64, Uuid, String, i64, i64, i64, i64, i64)> = sqlx::query_as(
+    let rows: Vec<PaymentRow> = sqlx::query_as(
         "SELECT p.id, p.loan_id, l.product,
                 p.amount_received, p.interest_paid, p.principal_paid, p.excess, p.paid_at
            FROM public.loan_payments p

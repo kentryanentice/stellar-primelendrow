@@ -21,6 +21,21 @@ use super::pricing;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
+/// An `xlm_collateral` row in SELECT order: wallet_address, required_stroops,
+/// locked_stroops, status, the three pinned price legs with their timestamp,
+/// and the ratio the position was struck at.
+type PositionRow = (
+    String,
+    i64,
+    i64,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    i32,
+);
+
 #[derive(Serialize)]
 pub struct ScheduleView {
     pub installment: i16,
@@ -113,7 +128,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     // one. The query already returns None when there is no position, so the
     // product test only ever hid rows that exist.
     let collateral = {
-        let row: Option<(String, i64, i64, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i32)> = sqlx::query_as(
+        let row: Option<PositionRow> = sqlx::query_as(
             "SELECT wallet_address, required_stroops, locked_stroops, status,
                     priced_centavos_per_xlm, priced_at,
                     priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps

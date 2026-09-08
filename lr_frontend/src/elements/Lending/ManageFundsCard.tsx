@@ -126,7 +126,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     )}
                     <PayPalButton
                         amountCentavos={depositTooSmall ? null : depositCentavos}
-                        description='PrimeLendRow pool deposit'
+                        purpose='deposit'
                         onApproved={orderId => {
                             setDepositInput('')
                             return confirmDeposit({ order_id: orderId })

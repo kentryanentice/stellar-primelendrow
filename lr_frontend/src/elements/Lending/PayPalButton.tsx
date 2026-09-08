@@ -1,11 +1,15 @@
 import { useEffect, useRef } from 'react'
 import usePayPal from '../../functions/Lending/usePayPal'
+import usePayPalOrder, { type OrderPurpose } from '../../functions/Lending/usePayPalOrder'
 import { useToast } from '../../providers/useToast'
 
 type PayPalButtonProps = {
     /** Whole centavos to charge; null disables the button (nothing valid typed yet). */
     amountCentavos: number | null
-    description: string
+    /** What the payment is for — describes the order PayPal shows the member. */
+    purpose?: OrderPurpose
+    /** repay only: which loan the order describes. */
+    loanId?: string
     /** Fires with the approved PayPal order id — the engine captures and verifies it server-side. */
     onApproved: (orderId: string) => void | Promise<void>
 }
@@ -20,40 +24,40 @@ type PayPalButtonProps = {
  * actually paid is decided by the engine's server-side capture — a tampered
  * amount here changes the PayPal sheet, not what gets credited.
  */
-function PayPalButton({ amountCentavos, description, onApproved }: PayPalButtonProps) {
+function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved }: PayPalButtonProps) {
     const { paypal, failed, configured } = usePayPal()
+    const { createOrder } = usePayPalOrder()
     const toast = useToast()
     const containerRef = useRef<HTMLDivElement>(null)
 
     const amountRef = useRef(amountCentavos)
     const onApprovedRef = useRef(onApproved)
-    const descriptionRef = useRef(description)
+    const createOrderRef = useRef((centavos: number) => createOrder(centavos, purpose, loanId))
     // Refs are synced in an effect, not during render — required by the
     // React Compiler this repo builds with (a render-time ref write can be
     // memoized away silently).
     useEffect(() => {
         amountRef.current = amountCentavos
         onApprovedRef.current = onApproved
-        descriptionRef.current = description
+        createOrderRef.current = (centavos: number) => createOrder(centavos, purpose, loanId)
     })
 
     useEffect(() => {
         if (!paypal || !containerRef.current) return
         const buttons = paypal.Buttons({
             style: { layout: 'horizontal', height: 40, label: 'pay' },
-            createOrder: (_data, actions) => {
+            // The engine creates the order, not this page. That is what puts
+            // the caller's ownership stamp on it (`custom_id`), which the
+            // capture then checks — without it an order id is a bearer
+            // reference and whoever presents it gets the money. It also means
+            // the amount charged is the engine's, not this component's.
+            createOrder: () => {
                 const centavos = amountRef.current
                 if (!centavos || centavos <= 0) {
                     toast.error('Enter a valid amount first')
                     return Promise.reject(new Error('no amount'))
                 }
-                return actions.order.create({
-                    intent: 'CAPTURE',
-                    purchase_units: [{
-                        amount: { currency_code: 'PHP', value: (centavos / 100).toFixed(2) },
-                        description: descriptionRef.current,
-                    }],
-                })
+                return createOrderRef.current(centavos)
             },
             onApprove: async data => {
                 await onApprovedRef.current(data.orderID)

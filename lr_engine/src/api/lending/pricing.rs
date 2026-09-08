@@ -233,20 +233,20 @@ async fn persist(pool: &PgPool, priced: &Priced) {
 /// aged out. Never call this inside a transaction — it holds a mutex across
 /// network I/O, and a database round trip must never wait behind Binance.
 async fn current(pool: &PgPool) -> Result<Priced, E> {
-    if let Some(p) = cache().read().await.clone() {
-        if Utc::now().timestamp() - p.as_of < FRESH_SECS {
-            return Ok(p);
-        }
+    if let Some(p) = cache().read().await.clone()
+        && Utc::now().timestamp() - p.as_of < FRESH_SECS
+    {
+        return Ok(p);
     }
 
     let _gate = refresh_gate().lock().await;
     // Someone may have refreshed while we queued on the gate.
     let cached = cache().read().await.clone();
     let now = Utc::now().timestamp();
-    if let Some(p) = &cached {
-        if now - p.as_of < FRESH_SECS {
-            return Ok(p.clone());
-        }
+    if let Some(p) = &cached
+        && now - p.as_of < FRESH_SECS
+    {
+        return Ok(p.clone());
     }
     // One attempt per window even when it fails, so an outage costs one round
     // of timeouts rather than one per waiting request.

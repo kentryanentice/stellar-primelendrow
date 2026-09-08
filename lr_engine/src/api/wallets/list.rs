@@ -5,6 +5,10 @@ use uuid::Uuid;
 
 use crate::api::users::shared::{E, require_verified_user};
 
+/// One wallet in SELECT order: id, address, label, source, status,
+/// connected_at, disconnected_at.
+type WalletRow = (Uuid, String, Option<String>, String, String, i64, Option<i64>);
+
 #[derive(Serialize)]
 pub struct WalletItem {
     pub id: Uuid,
@@ -32,7 +36,7 @@ pub async fn list(
 ) -> Result<Json<WalletsResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
 
-    let rows: Vec<(Uuid, String, Option<String>, String, String, i64, Option<i64>)> = sqlx::query_as(
+    let rows: Vec<WalletRow> = sqlx::query_as(
         "SELECT id, address, label, source, status, connected_at, disconnected_at
            FROM public.wallets
           WHERE user_id = $1
