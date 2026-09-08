@@ -6,7 +6,7 @@ import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral, quoteFromPinned } from '../../functions/Lending/stellarLock'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
-import { PAYOUT_ALERT, PAYOUT_LABEL, PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import { PAYOUT_LABEL, PRODUCT_LABEL, payoutNeedsAttention, type Loan, type PoolResponse } from '../../functions/Lending/types'
 import useCollateralRecord from '../../functions/Lending/useCollateralRecord'
 import usePayouts from '../../functions/Lending/usePayouts'
 import CollateralRecordCard from './CollateralRecordCard'
@@ -151,8 +151,8 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                     )
                                                 }
                                                 return (
-                                                    <p className={`lending-muted${PAYOUT_ALERT.has(payout.status) ? ' lending-liquidation' : ''}`}>
-                                                        {PAYOUT_ALERT.has(payout.status) && <AlertTriangle />}
+                                                    <p className={`lending-muted${payoutNeedsAttention(payout) ? ' lending-liquidation' : ''}`}>
+                                                        {payoutNeedsAttention(payout) && <AlertTriangle />}
                                                         {PAYOUT_LABEL[payout.status]}
                                                         {payout.status === 'paid' && payout.settled_at !== null && (
                                                             <> on {formatDate(payout.settled_at)}</>

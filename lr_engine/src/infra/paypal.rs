@@ -671,7 +671,88 @@ pub async fn create_payout(
     if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(SubmitError::Retryable(format!("PayPal returned {status}")));
     }
-    Err(SubmitError::Refused(format!("PayPal refused the payout ({status})")))
+    // Carry PayPal's own words, not just the status code. "422 Unprocessable
+    // Entity" is true of a payout the sandbox account can't fund, of a
+    // recipient who can't receive PHP, and of an amount over the account's
+    // limit — three different problems with three different fixes, and a bare
+    // status number tells the operator none of them.
+    Err(SubmitError::Refused(refusal_reason(status, &detail)))
+}
+
+/// PayPal's error envelope, reduced to the part worth showing.
+///
+/// Shape is `{"name": "...", "message": "...", "details": [{"issue": "..."}]}`.
+/// The `issue` is the specific machine-readable cause and the most useful
+/// thing in the body, so it wins when present.
+fn refusal_reason(status: reqwest::StatusCode, body: &str) -> String {
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        details: Vec<ErrorDetail>,
+    }
+    #[derive(Deserialize)]
+    struct ErrorDetail {
+        #[serde(default)]
+        issue: Option<String>,
+    }
+
+    let parsed: Option<ErrorBody> = serde_json::from_str(body).ok();
+    let specific = parsed.as_ref().and_then(|e| {
+        e.details
+            .iter()
+            .find_map(|d| d.issue.clone())
+            .or_else(|| e.name.clone())
+    });
+
+    match specific {
+        Some(issue) => {
+            let explained = explain_issue(&issue);
+            let message = parsed
+                .and_then(|e| e.message)
+                .unwrap_or_else(|| "PayPal refused the payout".to_string());
+            match explained {
+                Some(plain) => format!("{plain} ({issue})"),
+                None => format!("PayPal refused the payout: {issue} — {message}"),
+            }
+        }
+        // Unparseable body: the status plus whatever came back beats a bare
+        // code, and the full body is already in the logs above.
+        None => format!(
+            "PayPal refused the payout ({status}): {}",
+            body.chars().take(120).collect::<String>()
+        ),
+    }
+}
+
+/// The refusals an operator actually hits, in words that say what to do.
+/// Anything unrecognised falls through to PayPal's own message rather than
+/// being flattened into a generic line.
+fn explain_issue(issue: &str) -> Option<&'static str> {
+    Some(match issue {
+        // Overwhelmingly the first one a sandbox deployment meets: the
+        // business account simply doesn't hold the amount being sent.
+        "INSUFFICIENT_FUNDS" => "The platform's PayPal balance can't cover this payout",
+        "RECEIVER_UNREGISTERED" | "RECEIVER_ACCOUNT_INVALID" | "RECEIVER_UNCONFIRMED" => {
+            "The recipient's PayPal account can't receive this payout"
+        }
+        "RECEIVER_ACCOUNT_LOCKED" | "RECEIVER_ACCOUNT_RESTRICTED" => {
+            "The recipient's PayPal account is restricted"
+        }
+        "SENDER_RESTRICTED" | "SENDER_ACCOUNT_LOCKED" => {
+            "The platform's PayPal account is restricted from sending payouts"
+        }
+        "CURRENCY_NOT_SUPPORTED" | "TRANSACTION_CURRENCY_NOT_SUPPORTED" => {
+            "PayPal won't send this currency to that account"
+        }
+        "AMOUNT_LIMIT_EXCEEDED" | "TRANSACTION_LIMIT_EXCEEDED" => {
+            "The amount is over PayPal's limit for this account"
+        }
+        _ => return None,
+    })
 }
 
 /// The latest word on a submitted batch.
@@ -735,7 +816,45 @@ pub async fn payout_status(batch_id: &str) -> Result<PayoutOutcome, &'static str
 
 #[cfg(test)]
 mod tests {
-    use super::{UserInfo, format_centavos, parse_centavos};
+    use super::{UserInfo, format_centavos, parse_centavos, refusal_reason};
+
+    /// The exact body PayPal returns when the sandbox business account can't
+    /// fund the payout — the refusal a large test withdrawal actually hits.
+    #[test]
+    fn a_refusal_says_what_went_wrong_not_just_422() {
+        let status = reqwest::StatusCode::UNPROCESSABLE_ENTITY;
+
+        let insufficient = r#"{
+            "name": "UNPROCESSABLE_ENTITY",
+            "message": "The requested action could not be performed.",
+            "details": [{"issue": "INSUFFICIENT_FUNDS"}]
+        }"#;
+        let reason = refusal_reason(status, insufficient);
+        assert!(reason.contains("balance can't cover"), "{reason}");
+        assert!(reason.contains("INSUFFICIENT_FUNDS"), "{reason}");
+        // the thing it must NOT be any more
+        assert_ne!(reason, "PayPal refused the payout (422 Unprocessable Entity)");
+
+        // An issue we don't have a plain-words mapping for still carries
+        // PayPal's own name and message rather than being flattened away.
+        let unknown = r#"{
+            "name": "VALIDATION_ERROR",
+            "message": "Something specific happened.",
+            "details": [{"issue": "SOME_NEW_ISSUE"}]
+        }"#;
+        let reason = refusal_reason(status, unknown);
+        assert!(reason.contains("SOME_NEW_ISSUE"), "{reason}");
+        assert!(reason.contains("Something specific happened"), "{reason}");
+
+        // No details array: fall back to the top-level name.
+        let named = r#"{"name": "SENDER_RESTRICTED", "message": "nope"}"#;
+        assert!(refusal_reason(status, named).contains("restricted from sending"));
+
+        // Unparseable body still beats a bare status code.
+        let garbage = "<html>502 upstream</html>";
+        let reason = refusal_reason(status, garbage);
+        assert!(reason.contains("502 upstream"), "{reason}");
+    }
 
     /// PayPal quotes its booleans in the paypalv1.1 schema. This is the exact
     /// shape that broke a live connect: 200 from PayPal, and a decode failure

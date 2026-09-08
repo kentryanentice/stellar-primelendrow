@@ -346,7 +346,16 @@ async fn mark(
     }
 }
 
-fn note_for(status: &str, last_error: Option<String>) -> Option<String> {
+/// What to tell the member about a transfer, in their language.
+///
+/// Takes `kind` because a failure means two different things. Loan proceeds
+/// that don't send are still owed and still waiting — "ask again" is true. A
+/// withdrawal that doesn't send has already been undone by
+/// `withdraw::refund_if_failed`, so the money is back in their balance and
+/// telling them to ask again would send them looking for something that is
+/// already where it should be.
+fn note_for(status: &str, kind: &str, last_error: Option<String>) -> Option<String> {
+    let withdrawal = kind == "deposit_withdrawal";
     match status {
         // Only the PayPal rail can produce `unclaimed` — a Stripe transfer has
         // nothing for a recipient to accept — so naming PayPal here is
@@ -355,7 +364,19 @@ fn note_for(status: &str, last_error: Option<String>) -> Option<String> {
             "Sent, but not accepted yet — check the email PayPal sent you. It returns to us after 30 days."
                 .to_string(),
         ),
+        "returned" if withdrawal => {
+            Some("Came back to us — the money is in your withdrawable balance again.".to_string())
+        }
         "returned" => Some("Came back to us — you can request it again.".to_string()),
+        // The provider's reason still leads: it is the only thing that says
+        // what to fix. The reassurance follows it rather than replacing it.
+        "failed" if withdrawal => Some(match last_error {
+            Some(reason) => {
+                format!("{reason}. Your money is back in your withdrawable balance.")
+            }
+            None => "Couldn't be sent — your money is back in your withdrawable balance."
+                .to_string(),
+        }),
         "failed" => last_error,
         _ => None,
     }
@@ -383,7 +404,7 @@ const PAYOUT_COLUMNS: &str = "id, loan_id, kind, provider, amount, status, batch
 fn view(row: PayoutRow) -> PayoutView {
     let (id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
     PayoutView {
-        note: note_for(&status, last_error),
+        note: note_for(&status, &kind, last_error),
         id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at,
     }
 }

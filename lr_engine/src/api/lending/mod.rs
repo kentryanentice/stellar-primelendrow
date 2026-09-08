@@ -63,3 +63,7 @@ pub use quote::quote as loan_quote;
 pub use repay::repay;
 pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
+// The sweep calls this whenever a payout reaches a terminal state it never
+// arrived from. It no-ops for loan proceeds, so both call sites can call it
+// unconditionally rather than each deciding what a failure means.
+pub(crate) use withdraw::refund_if_failed as refund_failed_withdrawal;

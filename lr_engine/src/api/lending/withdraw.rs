@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::ledger::{EventDraft, Posting, commit_event, free_cash};
+use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash};
 use super::lots;
 use super::payout::{self, PayoutView};
 use super::shared::{db_err, ledger_err, validate_centavos};
@@ -169,8 +169,136 @@ pub async fn withdraw(
 
     let (status, message) =
         payout::submit(&pool, payout_id, &destination, amount, "PrimeLendRow withdrawal").await;
+
+    // Refused on the spot — give the money back before answering, so the
+    // member sees their balance intact rather than a hole they have to ask
+    // about. A no-op for any other status.
+    if let Err(e) = refund_if_failed(&pool, payout_id).await {
+        // The books are unchanged and the payout row is still terminal, so
+        // the sweep in `infra::payouts` will pick this up on its next tick.
+        tracing::error!(%payout_id, "withdrawal refund failed, leaving for the sweep: {e}");
+    }
+
     let payout = payout::read_one(&pool, payout_id, user_id).await?;
     tracing::info!(%user_id, %payout_id, amount, status, "withdrawal confirmed");
 
     Ok(Json(WithdrawResponse { payout, message }))
+}
+
+/// Gives back a withdrawal that never left.
+///
+/// A failed payout leaves `payout_payable` standing, and for **loan proceeds**
+/// that is right: the borrower is still owed their loan, the promise survives,
+/// and they can ask for it again. For a **withdrawal** it is wrong, and this is
+/// the difference the original rail missed. Requesting a withdrawal consumes
+/// the member's deposit lots. If the transfer is then refused, there is nothing
+/// left to ask again *with* — the lots are gone, the payable stands forever,
+/// and because `free_cash` nets the payable out, the pool loses that peso of
+/// lending capacity permanently too. The money goes missing from both sides at
+/// once.
+///
+/// So a refused withdrawal is undone rather than remembered: the deposit comes
+/// back as a fresh `available` lot and the postings are reversed, putting the
+/// member exactly where they stood before they pressed the button.
+///
+/// **Idempotent by the same wall as everything else.** The reversal carries
+/// `withdrawal_refund:<payout id>` as its `rail_ref`, so the unique index
+/// refuses a second refund of the same payout however many times this is
+/// called — from the request handler, from the retry sweep, or from both at
+/// once. There is no path that pays the money back twice.
+///
+/// Deliberately takes no view on *why* it failed. A refused payout and a
+/// returned one are the same fact from the pool's side: the pesos never
+/// reached the member.
+pub(crate) async fn refund_if_failed(pool: &PgPool, payout_id: Uuid) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Locked first: the request handler and the sweep can both arrive here for
+    // the same row, and the loser must see the winner's status change.
+    let row: Option<(Uuid, i64, String, String)> = sqlx::query_as(
+        "SELECT user_id, amount, kind, status FROM public.payouts
+          WHERE id = $1 FOR UPDATE",
+    )
+    .bind(payout_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((user_id, amount, kind, status)) = row else {
+        tx.rollback().await?;
+        return Ok(());
+    };
+
+    // Loan proceeds keep their payable — the borrower is still owed the loan.
+    if kind != "deposit_withdrawal" {
+        tx.rollback().await?;
+        return Ok(());
+    }
+    // Only terminal, never-arrived states. `unclaimed` is still in flight and
+    // PayPal returns it on its own after 30 days, at which point it becomes
+    // `returned` and comes back through here.
+    if status != "failed" && status != "returned" {
+        tx.rollback().await?;
+        return Ok(());
+    }
+
+    // A whole new lot rather than an attempt to rebuild the ones consumed:
+    // withdrawal deletes lots FIFO and shrinks the partial tail, so the
+    // originals are not recoverable and pretending otherwise would invent a
+    // deposit history that never happened. One lot for the refunded sum is the
+    // honest shape, and it is `available` because that is what it was.
+    let lot_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(amount)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let posted = commit_event(
+        &mut tx,
+        EventDraft {
+            kind: "withdrawal_refunded",
+            user_id: Some(user_id),
+            loan_id: None,
+            deposit_id: Some(lot_id),
+            rail_ref: Some(format!("withdrawal_refund:{payout_id}")),
+            payload: serde_json::json!({
+                "amount": amount, "payout_id": payout_id, "reason": status,
+            }),
+            actor_id: None,
+        },
+        // The exact inverse of what `withdraw` posted: the promise is
+        // cancelled and the member's deposit claim is restored.
+        &[
+            Posting { account: "payout_payable", amount },
+            Posting { account: "member_deposits", amount: -amount },
+        ],
+    )
+    .await;
+
+    match posted {
+        Ok(_) => {
+            tx.commit().await?;
+            tracing::info!(%user_id, %payout_id, amount, "withdrawal refunded to deposits");
+            Ok(())
+        }
+        Err(LedgerError::DuplicateRail) => {
+            // Already refunded by an earlier call. The lot inserted above rolls
+            // back with everything else, so no second deposit survives.
+            tx.rollback().await?;
+            Ok(())
+        }
+        Err(LedgerError::Db(e)) => {
+            tx.rollback().await?;
+            Err(e)
+        }
+        Err(LedgerError::Unbalanced(net)) => {
+            tx.rollback().await?;
+            // Not reachable — the two postings above are inverses — but a
+            // silent swallow here would be a silent loss of the member's money.
+            tracing::error!(%payout_id, net, "withdrawal refund unbalanced");
+            Ok(())
+        }
+    }
 }

@@ -5,7 +5,7 @@ import usePayouts from '../../functions/Lending/usePayouts'
 import { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
 import { useToast } from '../../providers/useToast'
 import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
-import { PAYOUT_ALERT, PAYOUT_LABEL, type PoolResponse } from '../../functions/Lending/types'
+import { PAYOUT_LABEL, payoutNeedsAttention, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
 import StripeButton from './StripeButton'
 
@@ -203,9 +203,9 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                             {withdrawals.slice(0, RECENT_WITHDRAWALS).map(payout => (
                                 <p
                                     key={payout.id}
-                                    className={`lending-muted${PAYOUT_ALERT.has(payout.status) ? ' lending-liquidation' : ''}`}
+                                    className={`lending-muted${payoutNeedsAttention(payout) ? ' lending-liquidation' : ''}`}
                                 >
-                                    {PAYOUT_ALERT.has(payout.status) && <AlertTriangle />}
+                                    {payoutNeedsAttention(payout) && <AlertTriangle />}
                                     <b>{pesos(payout.amount)}</b> · {PAYOUT_LABEL[payout.status]}
                                     {payout.status === 'paid' && payout.settled_at !== null && (
                                         <> on {formatDate(payout.settled_at)}</>
