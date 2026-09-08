@@ -45,6 +45,9 @@ pub use apply::apply;
 pub use collateral::confirm as collateral_confirm;
 pub use custody::record as collateral_record;
 pub use deposit::deposit;
+// The Stripe webhook credits through the same routine the redirect does, so a
+// member who never comes back to the app is still credited.
+pub(crate) use deposit::credit as credit_deposit;
 pub use deposits_list::list as deposits_list;
 pub use guarantors::{invites as guarantor_invites, respond as guarantor_respond};
 pub use loans::{history as loans_history, list as loans_list};

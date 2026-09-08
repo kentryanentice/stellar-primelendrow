@@ -41,11 +41,28 @@ pub async fn deposit(
 ) -> Result<Json<DepositResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
 
-    let rules = policy::active(&pool).await?;
-
     // Network call happens BEFORE the transaction — no DB locks are ever
     // held across a round-trip to a payment provider.
     let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
+
+    credit(&pool, user_id, rail, captured).await.map(Json)
+}
+
+/// Turns a verified payment into a deposit lot and the postings behind it.
+///
+/// Split out from the handler because the Stripe webhook credits through here
+/// too: a member who pays and never comes back through the redirect would
+/// otherwise have money at the provider and nothing in the pool. Both callers
+/// arrive with a payment the provider itself confirmed, and both rely on the
+/// same wall — the ledger's unique `rail_ref` — so whichever gets here first
+/// wins and the second bounces off the schema.
+pub(crate) async fn credit(
+    pool: &PgPool,
+    user_id: Uuid,
+    rail: &'static str,
+    captured: rails::CapturedPayment,
+) -> Result<DepositResponse, E> {
+    let rules = policy::active(pool).await?;
 
     if captured.centavos < rules.params.min_deposit {
         // The money was really captured; refusing the lot would strand it.
@@ -55,6 +72,7 @@ pub async fn deposit(
     }
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin deposit"))?;
+
 
     let lot_id: Uuid = sqlx::query_scalar(
         "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
@@ -95,11 +113,11 @@ pub async fn deposit(
     }
 
     tx.commit().await.map_err(|e| db_err(e, "commit deposit"))?;
-    tracing::info!(%user_id, %lot_id, amount, "deposit confirmed");
+    tracing::info!(%user_id, %lot_id, amount, rail, "deposit confirmed");
 
-    Ok(Json(DepositResponse {
+    Ok(DepositResponse {
         lot_id,
         amount,
         message: "Deposit received — it's in the pool and withdrawable until it funds a loan",
-    }))
+    })
 }

@@ -17,7 +17,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::api::users::shared::E;
-use crate::infra::rails::CapturedPayment;
+// Re-exported: `deposit::credit` takes one of these, and the Stripe webhook
+// builds one without going through `capture` below.
+pub use crate::infra::rails::CapturedPayment;
 use crate::infra::{paypal, stripe};
 
 /// The reference a member presents to say "I paid". Exactly one of these is

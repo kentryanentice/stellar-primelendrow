@@ -300,13 +300,22 @@ pub struct CheckoutSession {
 /// it, a member could confirm a deposit against somebody else's paid session
 /// id and have it credited to their own lots.
 ///
-/// `success_path`/`cancel_path` are app paths (e.g. "/lend"), not full URLs:
+/// `success_path`/`cancel_path` are app paths (e.g. "/lending"), not full URLs:
 /// the origin comes from CLIENT_URL so a caller can't redirect a paying member
 /// off-site.
+///
+/// `purpose` and `loan_id` go into the session's metadata because the webhook
+/// has no other way to know them. The redirect path is told what it is
+/// confirming by which page the member came back to; a `checkout.session.
+/// completed` event arrives with no such context, and crediting a repayment as
+/// a pool deposit would be a real money bug. Stamping it at creation is what
+/// lets the webhook route the payment instead of guessing.
 pub async fn create_checkout_session(
     user_id: &str,
     centavos: i64,
     description: &str,
+    purpose: &str,
+    loan_id: Option<&str>,
     success_path: &str,
     cancel_path: &str,
 ) -> Result<CheckoutSession, &'static str> {
@@ -328,12 +337,13 @@ pub async fn create_checkout_session(
     );
     let cancel_url = format!("{origin}{cancel_path}{cancel_sep}stripe=cancelled");
 
-    let form: Form = vec![
+    let mut form: Form = vec![
         ("mode", "payment".to_string()),
         ("success_url", success_url),
         ("cancel_url", cancel_url),
         ("client_reference_id", user_id.to_string()),
         ("metadata[user_id]", user_id.to_string()),
+        ("metadata[purpose]", purpose.to_string()),
         // Also on the PaymentIntent, so the ownership stamp survives on the
         // object the ledger's rail_ref actually names.
         ("payment_intent_data[metadata][user_id]", user_id.to_string()),
@@ -347,6 +357,9 @@ pub async fn create_checkout_session(
             description.chars().take(120).collect(),
         ),
     ];
+    if let Some(loan_id) = loan_id {
+        form.push(("metadata[loan_id]", loan_id.to_string()));
+    }
 
     let body = post("/v1/checkout/sessions", &form, None)
         .await

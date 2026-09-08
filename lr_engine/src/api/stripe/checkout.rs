@@ -69,10 +69,14 @@ pub async fn start(
     // are decided here from a whitelisted purpose — never assembled from
     // anything the client sent, or the success URL becomes an open redirect.
     let (description, success_path, cancel_path) = match p.purpose.as_str() {
+        // These must be real client routes. The app's catch-all redirects an
+        // unknown path to /auth WITHOUT its query string, so a wrong path here
+        // doesn't 404 visibly — it silently drops the session id, and a member
+        // who has already paid is never credited.
         "deposit" => (
             "PrimeLendRow pool deposit".to_string(),
-            "/lend".to_string(),
-            "/lend".to_string(),
+            "/lending".to_string(),
+            "/lending".to_string(),
         ),
         "repay" => {
             let loan_id = p.loan_id.ok_or((
@@ -119,6 +123,8 @@ pub async fn start(
         &user_id.to_string(),
         amount,
         &description,
+        &p.purpose,
+        p.loan_id.map(|id| id.to_string()).as_deref(),
         &success_path,
         &cancel_path,
     )
