@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, Lock } from 'lucide-react'
 import useMyFunds from '../../functions/Lending/useMyFunds'
 import usePayouts from '../../functions/Lending/usePayouts'
+import { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
+import { useToast } from '../../providers/useToast'
 import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
 import { PAYOUT_ALERT, PAYOUT_LABEL, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
+import StripeButton from './StripeButton'
 
 type Tab = 'deposit' | 'withdraw'
 
@@ -32,6 +35,23 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const { me, params } = data
     const { confirmDeposit, confirming } = useMyFunds(onChanged)
     const { requestWithdrawal, withdrawing, withdrawals } = usePayouts()
+    const toast = useToast()
+
+    // Coming back from Stripe Checkout. Unlike PayPal — where approval happens
+    // in an iframe and `onApprove` fires without the page ever unloading — a
+    // Stripe deposit is confirmed on page *load*, because the member has been
+    // away paying on stripe.com. `stripeCheckoutResult` consumes the query
+    // parameter on its first read, so React's development double-invoke can't
+    // submit the same session twice.
+    useEffect(() => {
+        const result = stripeCheckoutResult()
+        if (!result) return
+        if ('cancelled' in result) {
+            toast.error('Payment cancelled — nothing was charged')
+            return
+        }
+        void confirmDeposit({ session_id: result.sessionId })
+    }, [confirmDeposit, toast])
 
     const [tab, setTab] = useState<Tab>('deposit')
     const [depositInput, setDepositInput] = useState('')
@@ -109,8 +129,21 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                         description='PrimeLendRow pool deposit'
                         onApproved={orderId => {
                             setDepositInput('')
-                            return confirmDeposit(orderId)
+                            return confirmDeposit({ order_id: orderId })
                         }}
+                    />
+                    {/* The card rail. Not an alternative *destination* — both
+                        land in the same pool and the same books — just a
+                        second way to pay in, for members without PayPal. The
+                        input isn't cleared here: this navigates away, and
+                        clearing it would leave a blank form behind if they
+                        cancel and come back. */}
+                    <StripeButton
+                        amountCentavos={depositTooSmall ? null : depositCentavos}
+                        purpose='deposit'
+                        label={depositCentavos && !depositTooSmall
+                            ? `Pay ${pesos(depositCentavos)} by card`
+                            : 'Pay by card'}
                     />
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}
                 </div>

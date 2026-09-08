@@ -83,10 +83,24 @@ async fn main() {
 
     // Lending rails fail closed the same way KYC storage does: unconfigured
     // means refused, not degraded — these warnings are the operator's heads-up.
-    if !infra::paypal::is_configured() {
+    if !infra::paypal::is_configured() && !infra::stripe::is_configured() {
         tracing::warn!(
-            "PAYPAL_CLIENT_ID / PAYPAL_SECRET not set; pool deposits and loan repayments will be refused"
+            "No payment rail configured (PAYPAL_CLIENT_ID / PAYPAL_SECRET, or STRIPE_SECRET_KEY); pool deposits, loan repayments and payouts will all be refused"
         );
+    }
+    if infra::stripe::is_configured() {
+        // Worth one line at boot: Stripe's test and live keys hit the same
+        // host, so nothing else in the logs distinguishes a sandbox
+        // deployment from a real one.
+        tracing::info!(
+            "Stripe rail configured ({})",
+            if infra::stripe::is_live() { "LIVE" } else { "test" }
+        );
+        if infra::stripe::webhook_secret().is_none() {
+            tracing::warn!(
+                "STRIPE_WEBHOOK_SECRET not set; /stripe/webhook refuses every event, so Connect onboarding completing later won't be noticed until the member reloads Settings"
+            );
+        }
     }
     if infra::stellar::contract_id().is_none() {
         tracing::warn!(

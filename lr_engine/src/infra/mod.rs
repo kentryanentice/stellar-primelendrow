@@ -7,6 +7,8 @@ pub mod login_guard;
 pub mod oracle;
 pub mod payouts;
 pub mod paypal;
+pub mod rails;
 pub mod rate;
 pub mod stellar;
 pub mod storage;
+pub mod stripe;

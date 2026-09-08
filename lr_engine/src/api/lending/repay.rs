@@ -18,9 +18,9 @@ use super::domain;
 use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
 use super::policy;
+use super::rails::{self, Captured, PaymentRef};
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
-use crate::infra::paypal;
 
 /// Score movement on a fully repaid loan. Kept here (not policy JSON) until
 /// scoring gets its own policy slice — it's one number, and the log records
@@ -30,7 +30,10 @@ const SCORE_BUMP_ON_CLOSE: i16 = 5;
 #[derive(Deserialize)]
 pub struct RepayInput {
     loan_id: Uuid,
-    order_id: String,
+    /// Flattened, so the PayPal client's `{"loan_id": …, "order_id": …}` still
+    /// parses unchanged and `session_id` is the Stripe equivalent.
+    #[serde(flatten)]
+    payment: PaymentRef,
 }
 
 #[derive(Serialize)]
@@ -62,10 +65,8 @@ pub async fn repay(
 
     let rules = policy::active(&pool).await?;
 
-    // Capture before the transaction: no locks held across PayPal.
-    let captured = paypal::capture_order(p.order_id.trim())
-        .await
-        .map_err(|m| (StatusCode::UNPROCESSABLE_ENTITY, m))?;
+    // Verify before the transaction: no locks held across a payment provider.
+    let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
     let received = captured.centavos;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin repay"))?;
@@ -184,6 +185,7 @@ pub async fn repay(
             deposit_id: None,
             rail_ref: Some(captured.capture_id.clone()),
             payload: serde_json::json!({
+                "rail": rail,
                 "received": received, "interest": interest_total,
                 "principal": principal_total, "excess": excess
             }),

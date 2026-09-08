@@ -28,7 +28,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::api::lending::ledger::{EventDraft, Posting, commit_event};
-use crate::infra::paypal::{self, PayoutOutcome, SubmitError};
+use crate::infra::rails::{PayoutOutcome, SubmitError};
+use crate::infra::{paypal, stripe};
 
 const TICK: Duration = Duration::from_secs(60);
 /// Don't re-submit a row the request handler is still working on.
@@ -40,11 +41,13 @@ const MAX_ATTEMPTS: i32 = 8;
 /// drain is better than a burst against a rate-limited provider.
 const BATCH: i64 = 20;
 
-/// Spawns the worker. Does nothing at all when PayPal isn't configured, so a
-/// deployment without credentials doesn't log an error every minute.
+/// Spawns the worker. Does nothing at all when neither rail is configured, so
+/// a deployment without credentials doesn't log an error every minute. One
+/// rail is enough: rows belonging to the unconfigured one simply fail their
+/// own `is_configured` check and stay visible as `pending`.
 pub fn spawn(pool: PgPool) {
-    if !paypal::is_configured() {
-        tracing::info!("payout worker not started — PayPal is not configured");
+    if !paypal::is_configured() && !stripe::is_configured() {
+        tracing::info!("payout worker not started — no payment rail is configured");
         return;
     }
     tokio::spawn(async move {
@@ -61,7 +64,9 @@ pub fn spawn(pool: PgPool) {
     });
 }
 
-type PendingRow = (Uuid, Uuid, i64, String, Option<Uuid>, i32);
+type PendingRow = (Uuid, Uuid, i64, String, Option<Uuid>, i32, String);
+/// id, user_id, amount, loan_id, batch_id, kind, provider — in SELECT order.
+type SentRow = (Uuid, Uuid, i64, Option<Uuid>, String, String, String);
 
 /// The ledger event a settled payout is filed under. Both kinds pay down the
 /// same `payout_payable`, but the reason the pool owed the money is worth
@@ -76,7 +81,7 @@ fn settled_event_kind(kind: &str) -> &'static str {
 async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     let cutoff = Utc::now().timestamp() - SUBMIT_AFTER_SECS;
     let rows: Vec<PendingRow> = sqlx::query_as(
-        "SELECT id, user_id, amount, payer_id, loan_id, attempts
+        "SELECT id, user_id, amount, payer_id, loan_id, attempts, provider
            FROM public.payouts
           WHERE status = 'pending' AND created_at <= $1 AND attempts < $2
           ORDER BY created_at
@@ -88,7 +93,13 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     .fetch_all(pool)
     .await?;
 
-    for (id, user_id, amount, payer_id, loan_id, attempts) in rows {
+    for (id, user_id, amount, payer_id, loan_id, attempts, provider) in rows {
+        // A rail this deployment has no credentials for can't be retried, and
+        // burning an attempt on it would quietly exhaust MAX_ATTEMPTS and
+        // abandon the row. Skip instead: it stays pending and visible.
+        if !rail_configured(&provider) {
+            continue;
+        }
         // Same wording the request handlers used on the first attempt, so a
         // retry doesn't show the recipient a different transfer.
         let note = match loan_id {
@@ -96,7 +107,10 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
             None => "PrimeLendRow withdrawal".to_string(),
         };
         // Same id every time: this is a retry of ONE payout, not a new one.
-        let result = paypal::create_payout(&id.to_string(), &payer_id, amount, &note).await;
+        // Both providers refuse a duplicate under that id, which is the whole
+        // reason a retry here is safe.
+        let result =
+            crate::api::lending::submit_payout(&provider, id, &payer_id, amount, &note).await;
         let now = Utc::now().timestamp();
 
         let (status, batch_id, sent_at, error) = match result {
@@ -108,7 +122,7 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
                 "sent",
                 None,
                 Some(now),
-                Some("PayPal already had this payout — reconciling".to_string()),
+                Some("The provider already had this payout — reconciling".to_string()),
             ),
             Err(SubmitError::Refused(reason)) => ("failed", None, None, Some(reason)),
             Err(SubmitError::Retryable(reason)) => ("pending", None, None, Some(reason)),
@@ -134,9 +148,27 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Can this deployment talk to the rail a row was submitted over? Checked per
+/// row rather than once, because a deployment may run one rail and still hold
+/// history from the other.
+fn rail_configured(provider: &str) -> bool {
+    match provider {
+        "stripe" => stripe::is_configured(),
+        _ => paypal::is_configured(),
+    }
+}
+
+/// The latest word on a submitted transfer, from whichever provider sent it.
+async fn rail_status(provider: &str, reference: &str) -> Result<PayoutOutcome, &'static str> {
+    match provider {
+        "stripe" => stripe::transfer_status(reference).await,
+        _ => paypal::payout_status(reference).await,
+    }
+}
+
 async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let rows: Vec<(Uuid, Uuid, i64, Option<Uuid>, String, String)> = sqlx::query_as(
-        "SELECT id, user_id, amount, loan_id, batch_id, kind
+    let rows: Vec<SentRow> = sqlx::query_as(
+        "SELECT id, user_id, amount, loan_id, batch_id, kind, provider
            FROM public.payouts
           WHERE status IN ('sent', 'unclaimed') AND batch_id IS NOT NULL
           ORDER BY sent_at
@@ -146,8 +178,11 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
     .fetch_all(pool)
     .await?;
 
-    for (id, user_id, amount, loan_id, batch_id, kind) in rows {
-        let outcome = match paypal::payout_status(&batch_id).await {
+    for (id, user_id, amount, loan_id, batch_id, kind, provider) in rows {
+        if !rail_configured(&provider) {
+            continue;
+        }
+        let outcome = match rail_status(&provider, &batch_id).await {
             Ok(outcome) => outcome,
             Err(reason) => {
                 tracing::warn!(payout = %id, reason, "payout status unavailable");
@@ -164,6 +199,7 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
                     amount,
                     loan_id,
                     settled_event_kind(&kind),
+                    &provider,
                     &item_id,
                     transaction_id,
                 )
@@ -220,6 +256,7 @@ async fn settle(
     amount: i64,
     loan_id: Option<Uuid>,
     event_kind: &'static str,
+    provider: &str,
     item_id: &str,
     transaction_id: Option<String>,
 ) -> Result<(), sqlx::Error> {
@@ -246,9 +283,13 @@ async fn settle(
     }
 
     // The transfer's own reference is the rail_ref, so this credit can only
-    // ever be posted once — the same wall a re-sent PayPal capture hits.
+    // ever be posted once — the same wall a re-sent capture hits.
+    //
+    // Namespaced by provider: the two issue reference ids from separate spaces
+    // and a bare id from one could in principle collide with the other's,
+    // which on a UNIQUE index would silently refuse a legitimate settlement.
     let rail_ref = format!(
-        "paypal_payout:{}",
+        "{provider}_payout:{}",
         transaction_id.as_deref().unwrap_or(item_id)
     );
     let posted = commit_event(
@@ -261,7 +302,7 @@ async fn settle(
             rail_ref: Some(rail_ref),
             payload: serde_json::json!({
                 "payout_id": id, "amount": amount, "item_id": item_id,
-                "transaction_id": transaction_id, "rail": "paypal_payouts",
+                "transaction_id": transaction_id, "rail": provider,
             }),
             actor_id: None,
         },

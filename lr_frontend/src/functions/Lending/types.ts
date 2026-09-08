@@ -240,9 +240,31 @@ export type PaypalAccount = {
 }
 
 /**
+ * GET /stripe/account — the Stripe connected account payouts are sent to.
+ *
+ * Three states, not two, and the distinction matters. PayPal linking is
+ * instant; Stripe onboarding is a form the member can abandon and that Stripe
+ * may take time to clear afterwards. `onboarding` is "started, can't be paid
+ * yet" — showing it as connected is how someone finds out at withdrawal.
+ */
+export type StripeAccount = {
+    /** True only when money can actually arrive. */
+    connected: boolean
+    /** Started but not payable — offer "Finish setting up", not "Connect". */
+    onboarding: boolean
+    /** "j•••@gmail.com" — enough to recognise, never the full address. */
+    email_masked: string | null
+    /** Stripe's own word on whether it will accept a transfer to this account. */
+    payouts_enabled: boolean
+    connected_at: number | null
+    /** False when this deployment has no Stripe credentials at all. */
+    stripe_ready: boolean
+}
+
+/**
  * A transfer of money out to a member.
  *
- * `sent` means PayPal accepted it, not that it arrived — only `paid` moves
+ * `sent` means the provider accepted it, not that it arrived — only `paid` moves
  * the books. `unclaimed` means the recipient hasn't accepted it yet; PayPal
  * returns those to us after 30 days.
  */
@@ -252,7 +274,12 @@ export type Payout = {
     /** Why money is leaving: disbursed loan proceeds, or a depositor taking
      *  back withdrawable balance. Both ride the same rail (029). */
     kind: 'loan_proceeds' | 'deposit_withdrawal'
+    /** Which rail carried it. Pinned when the payout was created, so it stays
+     *  true even after the member relinks or the deployment switches rails. */
+    provider: 'paypal' | 'stripe'
     amount: number
+    /** `unclaimed` only ever occurs on the PayPal rail — a Stripe transfer has
+     *  nothing for a recipient to accept. */
     status: 'pending' | 'sent' | 'paid' | 'unclaimed' | 'returned' | 'failed'
     batch_id: string | null
     transaction_id: string | null
@@ -392,13 +419,25 @@ export const PRODUCT_LABEL: Record<Product, string> = {
 /** Where the member's money has actually got to, in their words. Shared by
  *  every card that shows a transfer (loan proceeds on Borrow, withdrawals on
  *  Lend) so one rail never gets described two different ways. */
+/**
+ * Provider-neutral on purpose. Money now leaves over either rail, and a member
+ * who connected Stripe should not be told about PayPal — "your account" is
+ * both accurate for everyone and the thing they actually care about. Where a
+ * screen genuinely needs to name the provider, `Payout['provider']` says which.
+ */
 export const PAYOUT_LABEL: Record<Payout['status'], string> = {
-    pending: 'Queued for PayPal — we’ll keep trying',
-    sent: 'Sent to PayPal — it usually lands within minutes',
-    paid: 'Paid to your PayPal',
-    unclaimed: 'Waiting for you to accept it in PayPal',
+    pending: 'Queued — we’ll keep trying',
+    sent: 'Sent — it usually lands within minutes',
+    paid: 'Paid to your account',
+    unclaimed: 'Waiting for you to accept it',
     returned: 'Came back to us',
-    failed: 'PayPal couldn’t send it',
+    failed: 'Couldn’t be sent',
+}
+
+/** How to name a rail when a screen does need to. */
+export const PROVIDER_LABEL: Record<Payout['provider'], string> = {
+    paypal: 'PayPal',
+    stripe: 'Stripe',
 }
 
 /** The states worth pulling the member's eye to. */
