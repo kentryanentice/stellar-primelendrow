@@ -25,6 +25,11 @@ const FALLBACK_POLICY: PolicyParams = {
     xlm_liquidation_pct: 0,
     guarantor_cap_multiple: 1,
     guarantors_max: 1,
+    // The other placeholders are 0 because a zero cap or ratio simply renders
+    // nothing useful. This one is a FLOOR, so a zero would read as "you need
+    // to cover nothing" for the frame before the real policy lands. It stands
+    // in at the value policy actually uses, and is replaced either way.
+    borrower_cover_min_pct: 50,
     term_months: { min: 3, max: 12 },
     min_deposit: 0,
     min_loan: 0,

@@ -24,9 +24,13 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
         term, setTerm,
         guarantorRows, setGuarantorRows,
         consented, setConsented,
+        depositCoverInput, setDepositCoverInput,
+        xlmCoverInput, setXlmCoverInput,
         amountCentavos,
         productQuote, overCap,
         pledgesTotal, pledgesShort,
+        coverTotal, coverRequired, coverShort, coverLeavesNoGap,
+        guarantorGap, needsWallet,
         canSubmit, submit,
         quote, quoting, applying,
         pendingLock, setPendingLock, lockAndConfirm, locking,
@@ -53,9 +57,22 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                 <p className='lending-muted'>
                     Your loan is approved pending collateral. Lock{' '}
                     <b>{xlm(pendingLock.required_stroops ?? 0)}</b> from your wallet into the vault contract —
-                    the engine verifies the transaction on the network, then disburses. Only the platform can
-                    release or seize the vault; your coins come back automatically when the loan is repaid.
+                    the engine verifies the transaction on the network
+                    {/* A guarantor loan is waiting on two legs, not one: say
+                        so rather than promising a disbursement this step
+                        alone will not trigger. */}
+                    {pendingLock.guarantor_gap !== null
+                        ? ', and disburses once your guarantors have accepted their share too'
+                        : ', then disburses'}. Only the platform can release or seize the vault; your coins come
+                    back automatically when the loan is repaid.
                 </p>
+                {pendingLock.guarantor_gap !== null && pendingLock.cover_xlm !== null && (
+                    <p className='lending-muted'>
+                        These coins carry <b>{pesos(pendingLock.cover_xlm)}</b> of your own share, locked at{' '}
+                        {params.policy.xlm_min_collateral_pct}% — your guarantors cover the remaining{' '}
+                        <b>{pesos(pendingLock.guarantor_gap)}</b>.
+                    </p>
+                )}
                 {/* The rate this requirement was struck at is pinned to the
                     loan, so it is worth naming here: a later price move will
                     not change the amount being asked for. */}
@@ -139,7 +156,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
             <p className='lending-muted'>
                 {product === 'deposit_backed' && `Borrow against your own deposit — up to ${params.policy.deposit_ltv_pct}% of what's withdrawable, at the secured rate.`}
                 {product === 'xlm_collateral' && `Lock XLM worth at least ${params.policy.xlm_min_collateral_pct}% of the loan in the vault contract. Falling under ${params.policy.xlm_liquidation_pct}% risks liquidation.`}
-                {product === 'guarantor' && `No deposit or collateral needed — up to ${params.policy.guarantors_max} verified members pledge their deposits for you, and your cap doubles.`}
+                {product === 'guarantor' && `You cover at least ${params.policy.borrower_cover_min_pct}% yourself — from your deposit, your XLM, or both — and up to ${params.policy.guarantors_max} verified members pledge for the rest. Your cap doubles.`}
             </p>
 
             <div className='lending-borrow-split'>
@@ -174,8 +191,11 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                         </div>
                     </div>
 
-                    {/* ---- product-specific backing ---- */}
-                    {product === 'xlm_collateral' && (
+                    {/* ---- product-specific backing ----
+                        The wallet select follows the coin leg, not the
+                        product: a guarantor loan needs one too once the
+                        borrower puts part of their own half in XLM. */}
+                    {needsWallet && (
                         <div className='lending-field'>
                             <label className='lending-label' htmlFor='lending-borrow-wallet'>Wallet that will lock the XLM</label>
                             {activeWallets.length === 0 ? (
@@ -199,7 +219,77 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
 
                     {product === 'guarantor' && (
                         <div className='lending-guarantor-asks'>
-                            <p className='lending-label'>Guarantors (up to {params.policy.guarantors_max})</p>
+                            {/* ---- the borrower's own half, before anyone is
+                                asked to vouch. The floor is the engine's
+                                number; the two legs are the member's choice
+                                of how to carry it. ---- */}
+                            <p className='lending-label'>
+                                Your own share
+                                {coverRequired !== null && <> — at least <b>{pesos(coverRequired)}</b></>}
+                            </p>
+                            <p className='lending-muted'>
+                                You cover {params.policy.borrower_cover_min_pct}% of this loan yourself before your
+                                guarantors are asked for anything, and you're always the first to be charged if it
+                                defaults. Split it however you like between the two.
+                            </p>
+                            <div className='lending-borrow-form'>
+                                <div className='lending-field'>
+                                    <label className='lending-label' htmlFor='lending-cover-deposit'>From your deposit</label>
+                                    <input
+                                        id='lending-cover-deposit'
+                                        className='lending-input'
+                                        inputMode='decimal'
+                                        placeholder='₱0'
+                                        value={depositCoverInput}
+                                        onChange={e => setDepositCoverInput(e.target.value)}
+                                    />
+                                    {productQuote?.cover_max_from_deposit != null && (
+                                        <small className='lending-muted'>
+                                            {productQuote.cover_max_from_deposit > 0
+                                                ? `Up to ${pesos(productQuote.cover_max_from_deposit)} withdrawable`
+                                                : 'No withdrawable deposit — cover it in XLM instead'}
+                                        </small>
+                                    )}
+                                </div>
+                                <div className='lending-field'>
+                                    <label className='lending-label' htmlFor='lending-cover-xlm'>From your XLM</label>
+                                    <input
+                                        id='lending-cover-xlm'
+                                        className='lending-input'
+                                        inputMode='decimal'
+                                        placeholder='₱0'
+                                        value={xlmCoverInput}
+                                        onChange={e => setXlmCoverInput(e.target.value)}
+                                    />
+                                    {/* The exact stroops depend on the split,
+                                        and the engine prices them at apply —
+                                        so this names the ratio and the
+                                        all-XLM endpoint rather than inventing
+                                        a figure for a partial leg. */}
+                                    <small className='lending-muted'>
+                                        Locked at {params.policy.xlm_min_collateral_pct}% of whatever you put here
+                                        {productQuote?.cover_stroops_if_all_xlm != null && coverRequired !== null
+                                            ? ` — ${xlm(productQuote.cover_stroops_if_all_xlm)} to carry all ${pesos(coverRequired)}`
+                                            : ''}.
+                                    </small>
+                                </div>
+                            </div>
+                            {coverShort && coverRequired !== null && (
+                                <p className='lending-field-error'>
+                                    Your share adds up to {pesos(coverTotal)} — it must be at least {pesos(coverRequired)}.
+                                </p>
+                            )}
+                            {coverLeavesNoGap && (
+                                <p className='lending-field-error'>
+                                    You're covering the whole loan yourself — apply for a deposit-backed or XLM loan
+                                    instead, and skip the guarantors.
+                                </p>
+                            )}
+
+                            <p className='lending-label'>
+                                Guarantors (up to {params.policy.guarantors_max})
+                                {guarantorGap !== null && !coverLeavesNoGap && <> — for the remaining <b>{pesos(guarantorGap)}</b></>}
+                            </p>
                             {guarantorRows.map((row, i) => (
                                 <div key={i} className='lending-guarantor-row'>
                                     <input
@@ -236,9 +326,9 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                     <Plus /> Add guarantor
                                 </button>
                             )}
-                            {pledgesShort && (
+                            {pledgesShort && !coverLeavesNoGap && (
                                 <p className='lending-field-error'>
-                                    Pledges add up to {pesos(pledgesTotal)} — they must cover the full {amountCentavos !== null ? pesos(amountCentavos) : 'amount'}.
+                                    Pledges add up to {pesos(pledgesTotal)} — they must cover the {guarantorGap !== null ? pesos(guarantorGap) : 'amount'} you aren't covering yourself.
                                 </p>
                             )}
                         </div>
@@ -254,7 +344,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                         <span>
                             {product === 'deposit_backed' && 'I authorize PrimeLendRow to hold the loan amount from my deposit as security until repayment.'}
                             {product === 'xlm_collateral' && 'I agree to lock my XLM in the vault contract and accept liquidation if coverage falls below the threshold.'}
-                            {product === 'guarantor' && 'I confirm my guarantors have agreed to pledge their deposits toward this loan.'}
+                            {product === 'guarantor' && 'I authorize PrimeLendRow to hold my own share as security, and confirm my guarantors have agreed to pledge their deposits for the rest. My own share is charged first if this loan defaults.'}
                         </span>
                     </label>
 
@@ -263,7 +353,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                     <button
                         type='button'
                         className='lending-btn-primary'
-                        disabled={!canSubmit || (product === 'xlm_collateral' && !walletId)}
+                        disabled={!canSubmit || (needsWallet && !walletId)}
                         onClick={() => void submit(walletId)}
                     >
                         {applying ? 'Submitting…' : 'Apply for this loan'}
@@ -307,7 +397,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                 independent public feeds, so the borrower can
                                 see which price they're being asked to lock at
                                 and how fresh it is. */}
-                            {product === 'xlm_collateral' && quote?.fx && (
+                            {needsWallet && quote?.fx && (
                                 <div className='lending-quote-row lending-quote-fx'>
                                     <span>
                                         Rate used
@@ -320,10 +410,26 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                     <b className={quote.fx.live ? undefined : 'is-warn'}>{xlmRate(quote.fx.centavos_per_xlm)}</b>
                                 </div>
                             )}
-                            {product === 'guarantor' && productQuote.required_pledges !== null && (
+                            {/* The 50% rule, as three rows: what the engine
+                                requires of the borrower, what they've said
+                                they'll carry, and what that leaves for the
+                                guarantors. */}
+                            {product === 'guarantor' && productQuote.cover_required !== null && (
+                                <div className='lending-quote-row'>
+                                    <span>Your share ({params.policy.borrower_cover_min_pct}% minimum)</span>
+                                    <b>{pesos(productQuote.cover_required)}</b>
+                                </div>
+                            )}
+                            {product === 'guarantor' && coverTotal > 0 && (
+                                <div className='lending-quote-row'>
+                                    <span>You're covering</span>
+                                    <b className={coverShort ? 'is-warn' : 'is-good'}>{pesos(coverTotal)}</b>
+                                </div>
+                            )}
+                            {product === 'guarantor' && guarantorGap !== null && !coverLeavesNoGap && (
                                 <div className='lending-quote-row'>
                                     <span>Pledges needed</span>
-                                    <b>{pesos(productQuote.required_pledges)}</b>
+                                    <b>{pesos(guarantorGap)}</b>
                                 </div>
                             )}
                         </div>

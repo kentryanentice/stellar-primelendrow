@@ -107,7 +107,12 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     .await
     .map_err(|e| db_err(e, "schedule"))?;
 
-    let collateral = if product == "xlm_collateral" {
+    // Keyed off the position rather than the product: a guarantor loan may
+    // carry part of the borrower's own half in coins since the 50% rule, and
+    // that position belongs on the loan view exactly like a pure collateral
+    // one. The query already returns None when there is no position, so the
+    // product test only ever hid rows that exist.
+    let collateral = {
         let row: Option<(String, i64, i64, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i32)> = sqlx::query_as(
             "SELECT wallet_address, required_stroops, locked_stroops, status,
                     priced_centavos_per_xlm, priced_at,
@@ -143,8 +148,6 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
                 collateral_ratio_bps: Some(collateral_ratio_bps),
             }
         })
-    } else {
-        None
     };
 
     let guarantors: Vec<(String, i64, String)> = sqlx::query_as(

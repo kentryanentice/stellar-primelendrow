@@ -262,7 +262,12 @@ pub async fn repay(
         .await
         .map_err(|e| db_err(e, "release guarantors"))?;
 
-        if product == "xlm_collateral" {
+        // Keyed off the position, not the product: since the 50% rule a
+        // guarantor loan can carry part of the borrower's own half in coins,
+        // and those have to come home on close exactly like a pure collateral
+        // loan's. Gating on `product == "xlm_collateral"` here would leave a
+        // guarantor borrower's XLM locked in the vault forever.
+        {
             // The position stays `locked` until the chain says otherwise (030).
             // It used to flip to 'released' right here, which claimed coins had
             // gone home while they were still sitting in the vault — the DB and
