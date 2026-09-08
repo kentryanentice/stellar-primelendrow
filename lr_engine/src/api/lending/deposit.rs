@@ -1,10 +1,11 @@
-//! POST /pool/deposit — PHP money-in via PayPal.
+//! POST /pool/deposit — PHP money-in, over either rail.
 //!
-//! The client sends nothing but the PayPal order id it just approved. The
-//! engine captures the order server-side (infra::paypal, secret never leaves
-//! the backend) and credits exactly what PayPal says was captured — the
-//! client's screen never decides a centavo. A re-sent order id bounces off
-//! the ledger's unique rail_ref (idempotent money-in, Lesson 9).
+//! The client sends nothing but the reference it just paid against — a PayPal
+//! order id, or a Stripe Checkout Session id. The engine verifies it
+//! server-side (`rails::capture`, provider secrets never leave the backend)
+//! and credits exactly what the provider says was collected — the client's
+//! screen never decides a centavo. A re-sent reference bounces off the
+//! ledger's unique rail_ref (idempotent money-in, Lesson 9).
 
 use axum::{Extension, Json, http::HeaderMap};
 use serde::{Deserialize, Serialize};
@@ -13,13 +14,17 @@ use uuid::Uuid;
 
 use super::ledger::{EventDraft, LedgerError, Posting, commit_event};
 use super::policy;
+use super::rails::{self, Captured, PaymentRef};
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
-use crate::infra::paypal;
 
 #[derive(Deserialize)]
 pub struct DepositInput {
-    order_id: String,
+    /// Flattened, so `{"order_id": "…"}` — what the PayPal client has always
+    /// sent — still parses unchanged, and `{"session_id": "…"}` is the Stripe
+    /// equivalent.
+    #[serde(flatten)]
+    payment: PaymentRef,
 }
 
 #[derive(Serialize)]
@@ -39,10 +44,8 @@ pub async fn deposit(
     let rules = policy::active(&pool).await?;
 
     // Network call happens BEFORE the transaction — no DB locks are ever
-    // held across a round-trip to PayPal.
-    let captured = paypal::capture_order(p.order_id.trim())
-        .await
-        .map_err(|m| (axum::http::StatusCode::UNPROCESSABLE_ENTITY, m))?;
+    // held across a round-trip to a payment provider.
+    let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
 
     if captured.centavos < rules.params.min_deposit {
         // The money was really captured; refusing the lot would strand it.
@@ -72,7 +75,7 @@ pub async fn deposit(
             loan_id: None,
             deposit_id: Some(lot_id),
             rail_ref: Some(captured.capture_id),
-            payload: serde_json::json!({ "rail": "paypal", "amount": amount }),
+            payload: serde_json::json!({ "rail": rail, "amount": amount }),
             actor_id: Some(user_id),
         },
         &[

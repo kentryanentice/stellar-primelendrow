@@ -31,7 +31,8 @@ use uuid::Uuid;
 
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
-use crate::infra::paypal::{self, SubmitError};
+use crate::infra::rails::SubmitError;
+use crate::infra::{paypal, stripe};
 
 #[derive(Deserialize)]
 pub struct PayoutInput {
@@ -46,6 +47,10 @@ pub struct PayoutView {
     /// so the UI can file a transfer under the right card without guessing
     /// from a null loan_id.
     pub kind: String,
+    /// Which rail carried it, 'paypal' or 'stripe'. Published so the UI can
+    /// name the member's own account rather than whichever provider the
+    /// wording happened to be written against.
+    pub provider: String,
     pub amount: i64,
     pub status: String,
     /// PayPal's own reference, once there is one to look up.
@@ -63,34 +68,99 @@ pub struct PayoutResponse {
     pub message: &'static str,
 }
 
-/// Where a member's money goes, resolved once at request time and then pinned
-/// to the payout row. Disconnecting or relinking a PayPal account afterwards
-/// must not redirect a transfer already in flight, so no later code path reads
-/// `paypal_accounts` again for a payout that already exists.
+/// Where a member's money goes, and over which rail.
+///
+/// Both are pinned to the payout row at request time. Disconnecting or
+/// relinking an account afterwards must not redirect a transfer already in
+/// flight, so no later code path resolves a destination for a payout that
+/// already exists — the worker reads `provider` and `payer_id` off the row.
+pub(super) struct Destination {
+    /// "paypal" or "stripe".
+    pub provider: &'static str,
+    /// The provider's own reference for the member: a PayPal payer id, or a
+    /// Stripe connected account id.
+    pub account: String,
+}
+
+/// Which rail this deployment prefers when a member has connected both.
+///
+/// Defaults to PayPal, which is the rail every existing member is already on —
+/// so installing the Stripe code changes nobody's destination until an
+/// operator says so. Set `PAYOUT_RAIL=stripe` to flip the preference; either
+/// way the other rail remains a fallback, because a member who has only
+/// connected one should be payable over that one.
+fn preferred_rail() -> &'static str {
+    match std::env::var("PAYOUT_RAIL").as_deref() {
+        Ok("stripe") => "stripe",
+        _ => "paypal",
+    }
+}
+
+/// Resolves the member's payout destination.
 ///
 /// Shared with `withdraw.rs`: both money-out paths need exactly this check, in
-/// this order — a deployment without credentials fails before a row is written
+/// this order — a deployment with no usable rail fails before a row is written
 /// rather than leaving a promise nothing can ever send.
-pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<String, E> {
-    if !paypal::is_configured() {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "PayPal isn't configured on this deployment yet",
-        ));
+///
+/// The two rails are not checked symmetrically, because they don't mean the
+/// same thing. A PayPal account is payable as soon as it is linked. A Stripe
+/// connected account is only payable once Stripe says `payouts_enabled` — an
+/// abandoned onboarding leaves a row that looks connected and would refuse
+/// every transfer, so it is filtered out here rather than discovered later by
+/// the worker.
+pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<Destination, E> {
+    let paypal_account: Option<String> = if paypal::is_configured() {
+        sqlx::query_scalar(
+            "SELECT payer_id FROM public.paypal_accounts
+              WHERE user_id = $1 AND status = 'active'",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| db_err(e, "paypal account"))?
+    } else {
+        None
+    };
+
+    let stripe_account: Option<String> = if stripe::is_configured() {
+        sqlx::query_scalar(
+            "SELECT account_id FROM public.stripe_accounts
+              WHERE user_id = $1 AND status = 'active' AND payouts_enabled",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| db_err(e, "stripe account"))?
+    } else {
+        None
+    };
+
+    let (first, second) = match preferred_rail() {
+        "stripe" => (
+            stripe_account.map(|a| Destination { provider: "stripe", account: a }),
+            paypal_account.map(|a| Destination { provider: "paypal", account: a }),
+        ),
+        _ => (
+            paypal_account.map(|a| Destination { provider: "paypal", account: a }),
+            stripe_account.map(|a| Destination { provider: "stripe", account: a }),
+        ),
+    };
+
+    if let Some(destination) = first.or(second) {
+        return Ok(destination);
     }
 
-    let payer_id: Option<String> = sqlx::query_scalar(
-        "SELECT payer_id FROM public.paypal_accounts
-          WHERE user_id = $1 AND status = 'active'",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| db_err(e, "paypal account"))?;
-
-    payer_id.ok_or((
+    // Nothing to pay to. Which of the two failures it is decides what the
+    // member should do about it, so they are not collapsed into one message.
+    if !paypal::is_configured() && !stripe::is_configured() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Payouts aren't configured on this deployment yet",
+        ));
+    }
+    Err((
         StatusCode::UNPROCESSABLE_ENTITY,
-        "Connect your PayPal account first — Settings → PayPal",
+        "Connect a payout account first — Settings → PayPal or Stripe",
     ))
 }
 
@@ -100,7 +170,7 @@ pub async fn request(
     Json(p): Json<PayoutInput>,
 ) -> Result<Json<PayoutResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
-    let payer_id = destination(&pool, user_id).await?;
+    let destination = destination(&pool, user_id).await?;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin payout"))?;
 
@@ -128,14 +198,15 @@ pub async fn request(
     }
 
     let payout_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id)
-         VALUES ($1, $2, 'loan_proceeds', $3, $4)
+        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider)
+         VALUES ($1, $2, 'loan_proceeds', $3, $4, $5)
          RETURNING id",
     )
     .bind(user_id)
     .bind(p.loan_id)
     .bind(principal)
-    .bind(&payer_id)
+    .bind(&destination.account)
+    .bind(destination.provider)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
@@ -157,7 +228,7 @@ pub async fn request(
     let (status, message) = submit(
         &pool,
         payout_id,
-        &payer_id,
+        &destination,
         principal,
         &format!("PrimeLendRow loan {}", p.loan_id),
     )
@@ -168,28 +239,56 @@ pub async fn request(
     Ok(Json(PayoutResponse { payout, message }))
 }
 
-/// Hands the payout to PayPal and records the answer. Never returns an error:
-/// a submission that couldn't be made is a row left `pending` for the worker
-/// to retry, not a failed request — the member's money claim already exists.
+/// Hands the payout to its provider, whichever that is.
+///
+/// The dispatch lives here and in `infra::payouts` and nowhere else — one
+/// place for a request-time submission, one for a retry — so a third rail
+/// would add two match arms and touch no handler.
+///
+/// Both providers key the submission on the payout id, and both refuse a
+/// duplicate: PayPal because it has seen the `sender_batch_id`, Stripe because
+/// `create_transfer` looks the `transfer_group` up before it posts. That is
+/// what makes this safe to call again after a timeout.
+pub(crate) async fn submit_to(
+    provider: &str,
+    payout_id: Uuid,
+    account: &str,
+    amount: i64,
+    note: &str,
+) -> Result<String, SubmitError> {
+    let key = payout_id.to_string();
+    match provider {
+        "stripe" => stripe::create_transfer(&key, account, amount, note).await,
+        _ => paypal::create_payout(&key, account, amount, note).await,
+    }
+}
+
+/// Submits and records the answer. Never returns an error: a submission that
+/// couldn't be made is a row left `pending` for the worker to retry, not a
+/// failed request — the member's money claim already exists.
 ///
 /// `note` is what the recipient sees on the transfer; the caller supplies it
 /// because only the caller knows why the money is moving.
+///
+/// The member-facing wording deliberately says "your account" rather than
+/// naming the provider: which rail carried it is an operational detail, and a
+/// member who connected Stripe should not be told about PayPal.
 pub(super) async fn submit(
     pool: &PgPool,
     payout_id: Uuid,
-    payer_id: &str,
+    destination: &Destination,
     amount: i64,
     note: &str,
 ) -> (&'static str, &'static str) {
     let now = Utc::now().timestamp();
 
-    match paypal::create_payout(&payout_id.to_string(), payer_id, amount, note).await {
-        Ok(batch_id) => {
-            mark(pool, payout_id, "sent", Some(&batch_id), Some(now), None).await;
-            ("sent", "Sent to PayPal — it usually lands in a few minutes")
+    match submit_to(destination.provider, payout_id, &destination.account, amount, note).await {
+        Ok(reference) => {
+            mark(pool, payout_id, "sent", Some(&reference), Some(now), None).await;
+            ("sent", "Sent — it usually lands in a few minutes")
         }
         Err(SubmitError::AlreadySubmitted) => {
-            // PayPal has seen this batch id, so a transfer may already exist.
+            // The provider has seen this key, so a transfer may already exist.
             // Marking it sent (not retrying) is the safe reading; the worker
             // will pick up the real status, and the books stay unposted until
             // it does.
@@ -199,18 +298,18 @@ pub(super) async fn submit(
                 "sent",
                 None,
                 Some(now),
-                Some("PayPal already had this payout — reconciling"),
+                Some("Already submitted — reconciling"),
             )
             .await;
-            ("sent", "Already sent to PayPal — checking on it")
+            ("sent", "Already sent — checking on it")
         }
         Err(SubmitError::Refused(reason)) => {
             mark(pool, payout_id, "failed", None, None, Some(&reason)).await;
-            ("failed", "PayPal refused the transfer — check your connected account")
+            ("failed", "The transfer was refused — check your connected account")
         }
         Err(SubmitError::Retryable(reason)) => {
             mark(pool, payout_id, "pending", None, None, Some(&reason)).await;
-            ("pending", "Queued — PayPal was unreachable, we'll keep trying")
+            ("pending", "Queued — the payment provider was unreachable, we'll keep trying")
         }
     }
 }
@@ -249,6 +348,9 @@ async fn mark(
 
 fn note_for(status: &str, last_error: Option<String>) -> Option<String> {
     match status {
+        // Only the PayPal rail can produce `unclaimed` — a Stripe transfer has
+        // nothing for a recipient to accept — so naming PayPal here is
+        // accurate rather than a leftover.
         "unclaimed" => Some(
             "Sent, but not accepted yet — check the email PayPal sent you. It returns to us after 30 days."
                 .to_string(),
@@ -265,6 +367,7 @@ type PayoutRow = (
     Uuid,
     Option<Uuid>,
     String,
+    String,
     i64,
     String,
     Option<String>,
@@ -274,14 +377,14 @@ type PayoutRow = (
     Option<String>,
 );
 
-const PAYOUT_COLUMNS: &str = "id, loan_id, kind, amount, status, batch_id, transaction_id,
-                              created_at, settled_at, last_error";
+const PAYOUT_COLUMNS: &str = "id, loan_id, kind, provider, amount, status, batch_id,
+                              transaction_id, created_at, settled_at, last_error";
 
 fn view(row: PayoutRow) -> PayoutView {
-    let (id, loan_id, kind, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
+    let (id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
     PayoutView {
         note: note_for(&status, last_error),
-        id, loan_id, kind, amount, status, batch_id, transaction_id, created_at, settled_at,
+        id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at,
     }
 }
 

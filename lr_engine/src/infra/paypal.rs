@@ -28,12 +28,9 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-pub struct CapturedPayment {
-    /// PayPal's capture id — the ledger's `rail_ref`, unique by schema.
-    pub capture_id: String,
-    /// Whole centavos actually captured, parsed without ever touching floats.
-    pub centavos: i64,
-}
+// The three money shapes are shared with the Stripe rail rather than owned
+// here: `infra::payouts` settles a transfer without knowing who carried it.
+use super::rails::{CapturedPayment, PayoutOutcome, SubmitError};
 
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -469,21 +466,6 @@ pub fn format_centavos(centavos: i64) -> String {
     format!("{}.{:02}", centavos / 100, (centavos % 100).abs())
 }
 
-/// Where a payout has got to. Only `Paid` is allowed to move the books.
-pub enum PayoutOutcome {
-    /// PayPal has the money and the recipient has it.
-    Paid { item_id: String, transaction_id: Option<String> },
-    /// Accepted, still moving.
-    Pending { item_id: Option<String> },
-    /// Sent, but the recipient hasn't accepted it. PayPal returns these
-    /// automatically after 30 days.
-    Unclaimed { item_id: Option<String> },
-    /// Came back — refused, returned or reversed. The money is ours again.
-    Returned { item_id: Option<String>, reason: String },
-    /// PayPal refused it outright.
-    Failed { reason: String },
-}
-
 #[derive(Deserialize)]
 struct PayoutBatchResponse {
     batch_header: BatchHeader,
@@ -515,19 +497,6 @@ struct PayoutItemError {
     name: Option<String>,
     #[serde(default)]
     message: Option<String>,
-}
-
-/// Submitting a payout can fail in two very different ways, and the caller
-/// must not treat them alike.
-pub enum SubmitError {
-    /// Nothing was sent — safe to retry with the same batch id.
-    Retryable(String),
-    /// PayPal refused this payout for good; retrying changes nothing.
-    Refused(String),
-    /// PayPal has already seen this batch id, so the money may well be on its
-    /// way. NEVER retry with a new id: look the batch up by its sender batch
-    /// id in the PayPal dashboard and reconcile.
-    AlreadySubmitted,
 }
 
 /// Sends `centavos` to `payer_id`, keyed by `sender_batch_id`.

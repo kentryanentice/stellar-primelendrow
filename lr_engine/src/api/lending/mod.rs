@@ -30,6 +30,7 @@ mod policy;
 mod pool;
 mod pricing;
 mod quote;
+mod rails;
 mod recovery;
 mod repay;
 pub(crate) mod shared;
@@ -49,6 +50,11 @@ pub use guarantors::{invites as guarantor_invites, respond as guarantor_respond}
 pub use loans::{history as loans_history, list as loans_list};
 pub use payments::list as payments_list;
 pub use payout::{list as payouts_list, request as payout_request};
+// The retry sweep in `infra::payouts` submits over whichever rail a row was
+// created for, and this is the one description of how to do that — exported
+// rather than reimplemented so a request-time submission and a retry can never
+// disagree about which provider, or which idempotency key, a payout uses.
+pub(crate) use payout::submit_to as submit_payout;
 pub use pool::summary as pool_summary;
 pub use quote::quote as loan_quote;
 pub use repay::repay;

@@ -6,10 +6,14 @@ use axum::{
     routing::{get, post},
 };
 
-use crate::api::{credit, kyc, lending, paypal, users, wallets};
+use crate::api::{credit, kyc, lending, paypal, stripe, users, wallets};
 use crate::infra::rate::{RateLimiter, enforce_rate_limit};
 
 const AUTH_BODY_LIMIT: usize = 16 * 1024;
+/// Stripe event bodies are small JSON, but a few (a fully expanded account)
+/// run larger than a lending request. Generous enough not to reject a real
+/// event, tight enough that an unsigned post can't be used to buffer size.
+const WEBHOOK_BODY_LIMIT: usize = 256 * 1024;
 /// Lending mutations are small JSON bodies (an order id, an amount, up to
 /// three guarantor asks) — same ceiling as the auth endpoints.
 const LENDING_BODY_LIMIT: usize = 16 * 1024;
@@ -114,6 +118,34 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         .route(
             "/paypal/disconnect",
             post(paypal::disconnect).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        // Stripe Connect onboarding: the member fills in Stripe's own form and
+        // is redirected back to /stripe/return, which — like the PayPal
+        // callback — is a GET (so the CSRF guard passes it) and identifies
+        // them from the single-use `state` row rather than from a cookie the
+        // redirect may not carry.
+        .route("/stripe/connect", get(stripe::start))
+        .route("/stripe/return", get(stripe::callback))
+        .route("/stripe/refresh", get(stripe::refresh))
+        .route("/stripe/account", get(stripe::status))
+        .route(
+            "/stripe/disconnect",
+            post(stripe::disconnect).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        // Creates the hosted page a deposit or repayment is paid on. The
+        // engine owns the amount and stamps the paying member into the
+        // session, which is what /pool/deposit later checks it against.
+        .route(
+            "/stripe/checkout",
+            post(stripe::checkout).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        // Signed by Stripe, not by a session — the CSRF guard only enforces on
+        // requests carrying a session cookie, and this one never does. The
+        // handler refuses anything whose signature doesn't verify against
+        // STRIPE_WEBHOOK_SECRET.
+        .route(
+            "/stripe/webhook",
+            post(stripe::webhook).layer(DefaultBodyLimit::max(WEBHOOK_BODY_LIMIT)),
         )
         .route("/guarantors/invites", get(lending::guarantor_invites))
         .route(

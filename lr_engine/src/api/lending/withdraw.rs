@@ -61,7 +61,7 @@ pub async fn withdraw(
     // Refused before a single lot is touched: a withdrawal we have nowhere to
     // send would consume the member's deposit into a promise that can never
     // be kept.
-    let payer_id = payout::destination(&pool, user_id).await?;
+    let destination = payout::destination(&pool, user_id).await?;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin withdraw"))?;
 
@@ -123,17 +123,18 @@ pub async fn withdraw(
         }
     }
 
-    // The destination is pinned to the row now, for the same reason it is on
-    // a loan payout: relinking a PayPal account later must not redirect a
-    // transfer that is already in flight.
+    // The destination AND the rail are pinned to the row now, for the same
+    // reason: relinking an account later — or an operator flipping
+    // PAYOUT_RAIL — must not redirect a transfer that is already in flight.
     let payout_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id)
-         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3)
+        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider)
+         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3, $4)
          RETURNING id",
     )
     .bind(user_id)
     .bind(amount)
-    .bind(&payer_id)
+    .bind(&destination.account)
+    .bind(destination.provider)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| db_err(e, "insert withdrawal payout"))?;
@@ -147,7 +148,7 @@ pub async fn withdraw(
             deposit_id: None,
             rail_ref: None,
             payload: serde_json::json!({
-                "amount": amount, "payout_id": payout_id, "rail": "paypal_payouts",
+                "amount": amount, "payout_id": payout_id, "rail": destination.provider,
             }),
             actor_id: Some(user_id),
         },
@@ -167,7 +168,7 @@ pub async fn withdraw(
     tx.commit().await.map_err(|e| db_err(e, "commit withdraw"))?;
 
     let (status, message) =
-        payout::submit(&pool, payout_id, &payer_id, amount, "PrimeLendRow withdrawal").await;
+        payout::submit(&pool, payout_id, &destination, amount, "PrimeLendRow withdrawal").await;
     let payout = payout::read_one(&pool, payout_id, user_id).await?;
     tracing::info!(%user_id, %payout_id, amount, status, "withdrawal confirmed");
 

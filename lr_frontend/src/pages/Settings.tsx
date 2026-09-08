@@ -10,8 +10,10 @@ import { useToast } from '../providers/useToast'
 import { useAccent } from '../providers/AccentProvider'
 import { useCreditScore, CREDIT_SCORE_MAX } from '../functions/useCreditScore'
 import { CreditScoreSkeleton, IdentityTimelineSkeleton, WalletsCardSkeleton } from '../elements/Settings/Skeleton'
-// Not lazy like WalletsCard: there's no SDK behind it, just a fetch and a redirect.
+// Not lazy like WalletsCard: there's no SDK behind either of them, just a
+// fetch and a redirect.
 import PaypalCard from '../elements/Settings/PaypalCard'
+import StripeCard from '../elements/Settings/StripeCard'
 
 // The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
@@ -380,8 +382,11 @@ function Settings() {
 
                 {/* Not gated on score: connecting a payout account is
                     something a member should be able to do before they ever
-                    qualify to borrow, not a step wedged into the withdrawal. */}
+                    qualify to borrow, not a step wedged into the withdrawal.
+                    Both rails are offered — a member needs only one, and the
+                    engine pays out over whichever they connected. */}
                 <PaypalCard />
+                <StripeCard />
 
                 <section className='settings-card settings-card-account'>
                     <div className='settings-card-head'>
