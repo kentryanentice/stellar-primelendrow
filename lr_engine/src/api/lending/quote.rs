@@ -38,8 +38,18 @@ pub struct ProductQuote {
     pub required_deposit: Option<i64>,
     /// xlm_collateral: stroops that must be locked on-chain.
     pub required_stroops: Option<i64>,
-    /// guarantor: total pledges your guarantors must cover.
+    /// guarantor: total pledges your guarantors must cover — the principal
+    /// less the share you carry yourself.
     pub required_pledges: Option<i64>,
+    /// guarantor: the least you must carry yourself under the 50% rule, and
+    /// the two ways you may carry it. `cover_max_from_deposit` is capped by
+    /// what you actually have withdrawable, so the screen can say plainly
+    /// whether deposit alone is enough or coins have to make up the rest.
+    /// `cover_stroops_if_all_xlm` is the whole floor carried in coins at the
+    /// policy ratio — the endpoints of the slider, priced by the engine.
+    pub cover_required: Option<i64>,
+    pub cover_max_from_deposit: Option<i64>,
+    pub cover_stroops_if_all_xlm: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -123,6 +133,9 @@ pub async fn quote(
             required_deposit: q.amount.map(|a| domain::required_deposit_collateral(a, params.deposit_ltv_pct)),
             required_stroops: None,
             required_pledges: None,
+            cover_required: None,
+            cover_max_from_deposit: None,
+            cover_stroops_if_all_xlm: None,
         });
 
         // xlm_collateral
@@ -138,9 +151,18 @@ pub async fn quote(
                 .amount
                 .map(|a| domain::required_collateral_stroops(a, params.xlm_min_collateral_pct, fx)),
             required_pledges: None,
+            cover_required: None,
+            cover_max_from_deposit: None,
+            cover_stroops_if_all_xlm: None,
         });
 
-        // guarantor
+        // guarantor. Since the 50% rule the borrower carries part of this
+        // themselves, so the quote has to say how much, what their deposit can
+        // absorb of it, and what the rest costs in coins — otherwise the
+        // screen would have to work it out, and the screen is a window.
+        let cover_required = q
+            .amount
+            .map(|a| domain::required_borrower_cover(a, params.borrower_cover_min_pct));
         products.push(ProductQuote {
             product: "guarantor",
             eligible: blocked.is_none(),
@@ -149,7 +171,11 @@ pub async fn quote(
             max_amount: domain::cap_for("guarantor", band, params),
             required_deposit: None,
             required_stroops: None,
-            required_pledges: q.amount,
+            required_pledges: q.amount.zip(cover_required).map(|(a, c)| a - c),
+            cover_required,
+            cover_max_from_deposit: cover_required.map(|c| c.min(available)),
+            cover_stroops_if_all_xlm: cover_required
+                .map(|c| domain::required_collateral_stroops(c, params.xlm_min_collateral_pct, fx)),
         });
     }
 

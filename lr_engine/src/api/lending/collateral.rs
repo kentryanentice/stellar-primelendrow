@@ -15,7 +15,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::ledger::{EventDraft, commit_event};
-use super::shared::{db_err, disburse, ledger_err};
+use super::shared::{db_err, ledger_err, try_disburse};
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::stellar;
 
@@ -140,15 +140,23 @@ pub async fn confirm(
     .await
     .map_err(|e| ledger_err(e, "collateral_locked"))?;
 
-    disburse(&mut tx, p.loan_id, user_id, principal, rate_bps, term_months).await?;
+    // The coins are in. On an xlm_collateral loan that is the only leg and the
+    // loan funds here; on a guarantor loan the borrower's coins are only part
+    // of their own half, so this funds it ONLY if the guarantors have already
+    // accepted enough to cover the rest. Whichever leg lands last disburses.
+    let funded = try_disburse(&mut tx, p.loan_id, user_id, principal, rate_bps, term_months).await?;
 
     tx.commit().await.map_err(|e| db_err(e, "commit confirm"))?;
-    tracing::info!(%user_id, loan_id = %p.loan_id, locked_stroops, "collateral confirmed, loan disbursed");
+    tracing::info!(%user_id, loan_id = %p.loan_id, locked_stroops, funded, "collateral confirmed");
 
     Ok(Json(ConfirmResponse {
         loan_id: p.loan_id,
-        status: "active",
+        status: if funded { "active" } else { "pending" },
         locked_stroops,
-        message: "Collateral verified on-chain — your loan has been disbursed",
+        message: if funded {
+            "Collateral verified on-chain — your loan has been disbursed"
+        } else {
+            "Collateral verified on-chain — your loan disburses once your guarantors have accepted"
+        },
     }))
 }

@@ -86,6 +86,71 @@ pub fn collateral_value_centavos(stroops: i64, centavos_per_xlm: i64) -> i64 {
     (stroops as i128 * centavos_per_xlm as i128 / CENTAVOS_PER_XLM_UNIT as i128) as i64
 }
 
+// ---- the borrower's own share of a guarantor loan (SOW §4.1) --------------
+
+/// Centavos of the principal the borrower must carry themselves before any
+/// guarantor is asked for anything. Ceiling — the floor rounds towards the
+/// borrower carrying more, never less.
+pub fn required_borrower_cover(amount: i64, min_pct: i64) -> i64 {
+    let numer = amount as i128 * min_pct.clamp(0, 100) as i128;
+    ((numer + 99) / 100) as i64
+}
+
+/// How a guarantor loan is actually backed, once the borrower's two legs and
+/// the guarantors' share are settled. Peso amounts throughout: the XLM leg is
+/// stated as the centavos of principal it carries, and the stroops that must
+/// be locked to carry it are `required_collateral_stroops(xlm, ratio, rate)` —
+/// so the 120% over-collateralization applies to the borrower's XLM share
+/// alone, exactly as it does on a pure collateral loan.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CoverPlan {
+    pub required: i64,
+    pub deposit: i64,
+    pub xlm: i64,
+    pub total: i64,
+    /// What the guarantors must pledge between them: the remainder.
+    pub guarantor_gap: i64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CoverError {
+    /// The two legs together fall short of the policy floor.
+    BelowFloor { required: i64, offered: i64 },
+    /// Negative legs, or a total past the whole principal.
+    Invalid,
+    /// Fully self-backed, so there is nothing for a guarantor to do.
+    NoGapLeft,
+}
+
+/// PURE: settle the borrower's cover against the floor and work out what is
+/// left for the guarantors. The caller supplies only INTENT — how much of the
+/// cover each leg should carry — and every consequence is derived here.
+pub fn plan_cover(
+    amount: i64,
+    deposit_cover: i64,
+    xlm_cover: i64,
+    min_pct: i64,
+) -> Result<CoverPlan, CoverError> {
+    if deposit_cover < 0 || xlm_cover < 0 {
+        return Err(CoverError::Invalid);
+    }
+    let total = (deposit_cover as i128 + xlm_cover as i128)
+        .try_into()
+        .map_err(|_| CoverError::Invalid)?;
+    if total > amount {
+        return Err(CoverError::Invalid);
+    }
+    let required = required_borrower_cover(amount, min_pct);
+    if total < required {
+        return Err(CoverError::BelowFloor { required, offered: total });
+    }
+    let guarantor_gap = amount - total;
+    if guarantor_gap <= 0 {
+        return Err(CoverError::NoGapLeft);
+    }
+    Ok(CoverPlan { required, deposit: deposit_cover, xlm: xlm_cover, total, guarantor_gap })
+}
+
 // ---- pricing the collateral (SOW §3.10, "Price source and oracle bounds") --
 //
 // The feeds themselves are I/O and live in `infra::oracle`; deciding ONE
@@ -211,7 +276,8 @@ mod tests {
             xlm_min_collateral_pct: 120,
             xlm_liquidation_pct: 110,
             guarantor_cap_multiple: 2,
-            guarantors_max: 3,
+            guarantors_max: 2,
+            borrower_cover_min_pct: 50,
             term_months: TermRange { min: 3, max: 12 },
             min_deposit: 10_000,
             min_loan: 50_000,
@@ -261,6 +327,83 @@ mod tests {
         assert!(value >= amount * 120 / 100);
         // and not absurdly more than one stroop over
         assert!(collateral_value_centavos(stroops - 1, rate) < 600_000 + rate);
+    }
+
+    #[test]
+    fn borrower_cover_floor_rounds_towards_the_borrower() {
+        // Half of ₱10,000 is exact.
+        assert_eq!(required_borrower_cover(1_000_000, 50), 500_000);
+        // An odd centavo rounds UP, so the floor is never undershot.
+        assert_eq!(required_borrower_cover(1_000_001, 50), 500_001);
+        assert_eq!(required_borrower_cover(333, 50), 167);
+        // The parameter is honoured, not assumed to be 50.
+        assert_eq!(required_borrower_cover(1_000_000, 60), 600_000);
+    }
+
+    #[test]
+    fn cover_can_be_deposit_xlm_or_a_mix_of_both() {
+        let amount = 1_000_000; // ₱10,000, so the floor is ₱5,000
+        // All deposit.
+        let all_deposit = plan_cover(amount, 500_000, 0, 50).unwrap();
+        assert_eq!(all_deposit.guarantor_gap, 500_000);
+        // All XLM.
+        let all_xlm = plan_cover(amount, 0, 500_000, 50).unwrap();
+        assert_eq!(all_xlm.guarantor_gap, 500_000);
+        // A mix that meets the floor exactly.
+        let mixed = plan_cover(amount, 200_000, 300_000, 50).unwrap();
+        assert_eq!(mixed.total, 500_000);
+        assert_eq!(mixed.guarantor_gap, 500_000);
+        // Covering MORE than the floor shrinks the guarantors' share.
+        let generous = plan_cover(amount, 400_000, 300_000, 50).unwrap();
+        assert_eq!(generous.guarantor_gap, 300_000);
+    }
+
+    #[test]
+    fn cover_below_the_floor_is_refused() {
+        let amount = 1_000_000;
+        // One centavo short, from either leg or both.
+        assert_eq!(
+            plan_cover(amount, 499_999, 0, 50),
+            Err(CoverError::BelowFloor { required: 500_000, offered: 499_999 })
+        );
+        assert_eq!(
+            plan_cover(amount, 0, 499_999, 50),
+            Err(CoverError::BelowFloor { required: 500_000, offered: 499_999 })
+        );
+        assert_eq!(
+            plan_cover(amount, 250_000, 249_999, 50),
+            Err(CoverError::BelowFloor { required: 500_000, offered: 499_999 })
+        );
+        // Nothing offered at all is the same refusal, not a special case.
+        assert!(matches!(plan_cover(amount, 0, 0, 50), Err(CoverError::BelowFloor { .. })));
+    }
+
+    #[test]
+    fn cover_cannot_exceed_the_loan_or_leave_no_gap() {
+        let amount = 1_000_000;
+        // Fully self-backed: this is a deposit or collateral loan, not a
+        // guarantor one, and is refused rather than issued with no guarantors.
+        assert_eq!(plan_cover(amount, 1_000_000, 0, 50), Err(CoverError::NoGapLeft));
+        // Past the principal entirely.
+        assert_eq!(plan_cover(amount, 900_000, 200_000, 50), Err(CoverError::Invalid));
+        // Negative legs never reach the arithmetic.
+        assert_eq!(plan_cover(amount, -1, 600_000, 50), Err(CoverError::Invalid));
+        assert_eq!(plan_cover(amount, 600_000, -1, 50), Err(CoverError::Invalid));
+        // And a leg large enough to overflow the sum is refused, not wrapped.
+        assert_eq!(plan_cover(amount, i64::MAX, i64::MAX, 50), Err(CoverError::Invalid));
+    }
+
+    #[test]
+    fn the_xlm_leg_is_over_collateralized_at_the_policy_ratio() {
+        // The borrower carries ₱5,000 of a ₱10,000 loan on XLM alone. The
+        // coins locked must be worth 120% of THAT LEG — ₱6,000 — not 120% of
+        // the whole loan, and not merely the leg itself.
+        let rate = 1_800; // ₱18.00 / XLM
+        let plan = plan_cover(1_000_000, 0, 500_000, 50).unwrap();
+        let stroops = required_collateral_stroops(plan.xlm, 120, rate);
+        let value = collateral_value_centavos(stroops, rate);
+        assert!(value >= 600_000);
+        assert!(value < 600_000 + rate); // and not materially more
     }
 
     #[test]

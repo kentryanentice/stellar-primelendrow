@@ -1,0 +1,17 @@
+# Normalize all text to LF in the repository and on checkout.
+# The repo is uniformly LF; this keeps an editor or tool that writes CRLF
+# from re-rendering whole files as modified.
+* text=auto eol=lf
+
+# Binary assets: never touch line endings, never diff as text.
+*.png    binary
+*.webp   binary
+*.pptx   binary
+*.traineddata binary
+*.onnx   binary
+*.wasm   binary
+*.pdf    binary
+
+# Generated lockfiles: keep them out of diffs and merge conflicts by default.
+package-lock.json -diff linguist-generated
+Cargo.lock        -diff linguist-generated

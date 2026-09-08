@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::ledger::{EventDraft, commit_event};
 use super::lots;
-use super::shared::{db_err, disburse, ledger_err};
+use super::shared::{db_err, ledger_err, try_disburse};
 use crate::api::users::shared::{E, require_verified_user};
 
 #[derive(Serialize)]
@@ -110,19 +110,26 @@ pub async fn respond(
         return Err((StatusCode::CONFLICT, "You've already responded to this invitation"));
     }
 
-    let loan: Option<(Uuid, i64, i32, i16, String)> = sqlx::query_as(
-        "SELECT borrower_id, principal, rate_bps, term_months, status
+    let loan: Option<(Uuid, i64, i32, i16, String, i64)> = sqlx::query_as(
+        "SELECT borrower_id, principal, rate_bps, term_months, status,
+                borrower_cover_centavos
            FROM public.loans WHERE id = $1 FOR UPDATE",
     )
     .bind(loan_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| db_err(e, "lock loan"))?;
-    let (borrower_id, principal, rate_bps, term_months, loan_status) =
+    let (borrower_id, principal, rate_bps, term_months, loan_status, borrower_cover) =
         loan.ok_or((StatusCode::NOT_FOUND, "Loan not found"))?;
     if loan_status != "pending" {
         return Err((StatusCode::CONFLICT, "This loan is no longer waiting on guarantors"));
     }
+
+    // What the guarantors are actually on the hook for: the principal less the
+    // half (or more) the borrower carries from their own deposit and coins.
+    // Loans issued before the 50% rule carry a cover of 0, so this is the full
+    // principal for them and they keep the rule they were issued under.
+    let guarantor_gap = principal - borrower_cover;
 
     let now = Utc::now().timestamp();
 
@@ -147,8 +154,39 @@ pub async fn respond(
         .map_err(|e| db_err(e, "remaining pledges"))?;
 
         let mut loan_status_out = "pending".to_string();
-        if remaining < principal {
-            lots::release_loan_lots(&mut tx, loan_id, &["pledged"]).await?;
+        if remaining < guarantor_gap {
+            // Everything frozen for a loan that will never fund goes home:
+            // the co-guarantors' pledges, and — since the 50% rule — the
+            // borrower's own deposit leg, which froze at apply time. Leaving
+            // 'collateral' out here would strand the borrower's own money
+            // behind a dead application.
+            lots::release_loan_lots(&mut tx, loan_id, &["pledged", "collateral"]).await?;
+
+            // Their coin leg, if they had already locked it. A position still
+            // 'pending' never moved anything, so there is nothing to unwind;
+            // one that is 'locked' holds real XLM and has to be released the
+            // same way a closed loan releases it — the contract refuses to
+            // release a position with no outcome recorded against it, so the
+            // outcome goes on chain first. Queue order is by id, which keeps
+            // the pair the right way round.
+            let locked_position: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM public.xlm_collateral
+                  WHERE loan_id = $1 AND status = 'locked'",
+            )
+            .bind(loan_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| db_err(e, "collateral position"))?;
+            if let Some(cid) = locked_position {
+                sqlx::query(
+                    "INSERT INTO public.collateral_actions (collateral_id, action)
+                     VALUES ($1, 'mark_repaid'), ($1, 'release')",
+                )
+                .bind(cid)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| db_err(e, "queue release"))?;
+            }
             sqlx::query("UPDATE public.loans SET status = 'declined', updated_at = $1 WHERE id = $2")
                 .bind(now)
                 .bind(loan_id)
@@ -232,7 +270,11 @@ pub async fn respond(
     .await
     .map_err(|e| db_err(e, "accept invite"))?;
 
-    // The moment accepted pledges cover the principal, the loan funds.
+    // The loan funds the moment EVERY leg is in: the accepted pledges covering
+    // the guarantors' share, and the borrower's own coins locked on chain if
+    // they chose to carry part of their half that way. `try_disburse` owns
+    // that decision, so the collateral confirm path and this one can never
+    // disagree about what "fully backed" means.
     let accepted: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(pledge_amount), 0)::BIGINT FROM public.loan_guarantors
           WHERE loan_id = $1 AND status = 'accepted'",
@@ -242,9 +284,13 @@ pub async fn respond(
     .await
     .map_err(|e| db_err(e, "accepted pledges"))?;
 
-    let (loan_status_out, message) = if accepted >= principal {
-        disburse(&mut tx, loan_id, borrower_id, principal, rate_bps, term_months).await?;
+    let funded =
+        try_disburse(&mut tx, loan_id, borrower_id, principal, rate_bps, term_months).await?;
+    let (loan_status_out, message) = if funded {
         ("active".to_string(), "Pledge locked — the loan is now fully backed and has been disbursed")
+    } else if accepted >= guarantor_gap {
+        // Pledges are all in; the borrower's own coins are the missing leg.
+        ("pending".to_string(), "Pledge locked — waiting on the borrower to lock their XLM")
     } else {
         ("pending".to_string(), "Pledge locked — waiting on the remaining guarantors")
     };

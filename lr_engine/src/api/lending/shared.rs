@@ -50,6 +50,82 @@ pub fn validate_centavos(amount: i64) -> Result<i64, E> {
     Ok(amount)
 }
 
+/// Is every leg backing this loan actually in place?
+///
+/// Two products fund asynchronously, and since the 50% rule a guarantor loan
+/// can be waiting on BOTH at once: the borrower's own XLM has to lock on
+/// chain, and the guarantors have to accept enough to cover what the borrower
+/// did not carry. Whichever of the two lands last is the one that funds the
+/// loan, so both call this rather than each assuming it is the only gate.
+///
+/// Read inside the caller's transaction, with the loan row already locked.
+pub async fn backing_complete(
+    tx: &mut Transaction<'_, Postgres>,
+    loan_id: Uuid,
+) -> Result<bool, E> {
+    // The borrower's coins, if this loan has a leg on them. `pending` means
+    // the lock has not been verified on chain yet — for either product.
+    let coins_pending: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM public.xlm_collateral
+          WHERE loan_id = $1 AND status = 'pending')",
+    )
+    .bind(loan_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "collateral leg"))?;
+    if coins_pending {
+        return Ok(false);
+    }
+
+    let row: Option<(String, i64, i64)> = sqlx::query_as(
+        "SELECT product, principal, borrower_cover_centavos
+           FROM public.loans WHERE id = $1",
+    )
+    .bind(loan_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "loan backing"))?;
+    let (product, principal, cover) =
+        row.ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
+
+    // Only a guarantor loan has a share somebody else carries.
+    if product != "guarantor" {
+        return Ok(true);
+    }
+    let gap = principal - cover;
+    if gap <= 0 {
+        return Ok(true);
+    }
+
+    let accepted: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(pledge_amount), 0)::BIGINT FROM public.loan_guarantors
+          WHERE loan_id = $1 AND status = 'accepted'",
+    )
+    .bind(loan_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "accepted pledges"))?;
+    Ok(accepted >= gap)
+}
+
+/// Disburse, but only once every leg is in place. Returns whether it funded,
+/// so the caller can tell the member which of the two they are still waiting
+/// on. Callers must hold the loan row lock.
+pub async fn try_disburse(
+    tx: &mut Transaction<'_, Postgres>,
+    loan_id: Uuid,
+    borrower_id: Uuid,
+    principal: i64,
+    rate_bps: i32,
+    term_months: i16,
+) -> Result<bool, E> {
+    if !backing_complete(tx, loan_id).await? {
+        return Ok(false);
+    }
+    disburse(tx, loan_id, borrower_id, principal, rate_bps, term_months).await?;
+    Ok(true)
+}
+
 /// Takes the pool lock, checks real cash, marks funding lots, writes the
 /// disbursement into the books, activates the loan, and pins its schedule —
 /// all inside the caller's transaction. Every product ends its apply path

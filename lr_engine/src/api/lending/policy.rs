@@ -41,6 +41,12 @@ pub struct PolicyParams {
     pub xlm_liquidation_pct: i64,
     pub guarantor_cap_multiple: i64,
     pub guarantors_max: i64,
+    /// Guarantor loans: the share of the principal the BORROWER must carry
+    /// themselves, from their own deposit and/or their own XLM, before any
+    /// guarantor is asked for anything (SOW §4.1). A policy parameter, set
+    /// conservatively at 50 for this sprint and meant to be recalibrated
+    /// against real repayment data — deliberately not a constant.
+    pub borrower_cover_min_pct: i64,
     pub term_months: TermRange,
     pub min_deposit: i64,
     pub min_loan: i64,
