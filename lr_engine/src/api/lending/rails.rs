@@ -48,11 +48,16 @@ pub struct Captured {
 
 /// Verifies a payment with whichever provider it belongs to.
 ///
-/// `user_id` is the member claiming it. Only the Stripe rail can actually
-/// enforce that claim — a Checkout Session records whose it is, whereas a
-/// PayPal order id is a bearer reference and anyone holding it can present it.
-/// That asymmetry is real and worth naming rather than papering over: it is
-/// the main reason to prefer the Stripe rail for new deposits.
+/// `user_id` is the member claiming it, and both rails now enforce that claim
+/// rather than only Stripe. A Checkout Session records whose it is in
+/// `client_reference_id`; a PayPal order records it in `custom_id`, stamped by
+/// `paypal::create_order` when the engine — not the browser — creates the
+/// order. Either way the reference alone proves nothing: the provider is asked
+/// who it belongs to, and a mismatch is refused.
+///
+/// A PayPal order created before the engine started stamping carries no owner
+/// and is refused outright. Those are true bearer references, and there is no
+/// safe way to decide after the fact whose money they were.
 ///
 /// Never called inside a database transaction: this is a network round trip,
 /// and no lock is ever held across one.
@@ -68,7 +73,7 @@ pub async fn capture(p: &PaymentRef, user_id: Uuid) -> Result<Captured, E> {
             "Send either a PayPal order or a Stripe session, not both",
         )),
         (Some(order_id), None) => {
-            let payment = paypal::capture_order(order_id)
+            let payment = paypal::capture_order(order_id, &user_id.to_string())
                 .await
                 .map_err(|m| (StatusCode::UNPROCESSABLE_ENTITY, m))?;
             Ok(Captured { rail: "paypal", payment })

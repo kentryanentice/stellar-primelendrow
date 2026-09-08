@@ -137,6 +137,14 @@ struct OrderResponse {
 #[derive(Deserialize)]
 struct PurchaseUnit {
     payments: Option<Payments>,
+    /// The member the order was created for, stamped by `create_order`. PayPal
+    /// stores it on the unit and echoes it back on capture, which is what lets
+    /// this rail check ownership the way the Stripe rail always could.
+    ///
+    /// `None` on an order created before the engine started stamping — those
+    /// are bearer references and are refused rather than trusted.
+    #[serde(default)]
+    custom_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -183,7 +191,29 @@ pub fn parse_centavos(value: &str) -> Result<i64, &'static str> {
     Ok(whole * 100 + frac_val)
 }
 
-fn completed_php_capture(order: OrderResponse) -> Result<CapturedPayment, &'static str> {
+fn completed_php_capture(
+    order: OrderResponse,
+    expect_user: &str,
+) -> Result<CapturedPayment, &'static str> {
+    // Ownership before amount, the same order `stripe::capture_session` uses:
+    // a real payment belonging to another member is not this member's deposit,
+    // however completed it is.
+    //
+    // An order id is a bearer reference — anyone who comes by one can present
+    // it — so the stamp is the only thing standing between "I hold this id"
+    // and "this payment is mine". An unstamped order predates the engine
+    // creating orders itself and is refused, not waved through: the whole
+    // point is that holding the id proves nothing.
+    let owner = order
+        .purchase_units
+        .iter()
+        .find_map(|u| u.custom_id.as_deref())
+        .ok_or("That payment can't be verified as yours — start a new one")?;
+    if owner != expect_user {
+        tracing::warn!(owner, expect_user, "paypal order claimed by the wrong member");
+        return Err("That payment doesn't belong to this account");
+    }
+
     let capture = order
         .purchase_units
         .into_iter()
@@ -204,13 +234,79 @@ fn completed_php_capture(order: OrderResponse) -> Result<CapturedPayment, &'stat
     })
 }
 
+/// Creates the order the member will approve, stamped with whose it is.
+///
+/// The browser used to build this itself, which left two holes: the amount was
+/// whatever the page said, and nothing recorded who the order belonged to — so
+/// any order id, once out of its owner's hands, could be credited to whoever
+/// presented it. Creating it here closes both. `custom_id` is the ownership
+/// stamp `capture_order` checks, and it is the same shape the Stripe rail gets
+/// from `client_reference_id`.
+///
+/// Returns the order id for the Buttons SDK to approve.
+pub async fn create_order(
+    user_id: &str,
+    centavos: i64,
+    description: &str,
+) -> Result<String, &'static str> {
+    if centavos <= 0 || centavos > 1_000_000_000_000 {
+        return Err("Invalid amount");
+    }
+    let token = access_token().await?;
+
+    // PayPal wants a decimal string; string math only, never a float.
+    let value = format!("{}.{:02}", centavos / 100, centavos % 100);
+    let body = serde_json::json!({
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "amount": { "currency_code": "PHP", "value": value },
+            "description": description.chars().take(120).collect::<String>(),
+            "custom_id": user_id,
+        }],
+    });
+
+    let res = http()
+        .post(format!("{}/v2/checkout/orders", api_base()))
+        .bearer_auth(&token)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("paypal order create: {e}");
+            "Payment provider unreachable"
+        })?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        tracing::error!("paypal order create {status}: {text}");
+        return Err("PayPal could not start the payment");
+    }
+
+    #[derive(Deserialize)]
+    struct Created {
+        id: String,
+    }
+    res.json::<Created>()
+        .await
+        .map(|c| c.id)
+        .map_err(|e| {
+            tracing::error!("paypal order create body: {e}");
+            "PayPal sent a reply we couldn't read"
+        })
+}
+
 /// Captures an approved order and returns the verified capture.
 ///
 /// Idempotency, two layers: PayPal answers `ORDER_ALREADY_CAPTURED` (422) for
 /// a re-capture, in which case the order is re-fetched and its existing
 /// completed capture returned; and the ledger's unique `rail_ref` refuses a
 /// double credit even if both layers were somehow fooled.
-pub async fn capture_order(order_id: &str) -> Result<CapturedPayment, &'static str> {
+pub async fn capture_order(
+    order_id: &str,
+    expect_user: &str,
+) -> Result<CapturedPayment, &'static str> {
     if order_id.is_empty()
         || order_id.len() > 64
         || !order_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -240,7 +336,7 @@ pub async fn capture_order(order_id: &str) -> Result<CapturedPayment, &'static s
             tracing::error!("paypal capture body: {e}");
             "Payment provider unreachable"
         })?;
-        return completed_php_capture(order);
+        return completed_php_capture(order, expect_user);
     }
 
     // Already captured (a retry, a double click, a resent request): fetch the
@@ -261,7 +357,7 @@ pub async fn capture_order(order_id: &str) -> Result<CapturedPayment, &'static s
                 "Payment provider unreachable"
             })?;
             if order.status == "COMPLETED" {
-                return completed_php_capture(order);
+                return completed_php_capture(order, expect_user);
             }
         }
         return Err("Payment was not completed");
@@ -672,6 +768,11 @@ mod tests {
         assert!(info.emails.is_empty());
     }
 
+    // The centavo literals below are grouped as pesos_then_centavos
+    // (999_999_99 is ₱999,999.99), which is what makes them readable as money.
+    // Clippy would rather they were grouped in threes from the right; that is
+    // the correct default and the wrong call here.
+    #[allow(clippy::inconsistent_digit_grouping)]
     #[test]
     fn formats_centavos_back_without_floats() {
         assert_eq!(format_centavos(150000), "1500.00");

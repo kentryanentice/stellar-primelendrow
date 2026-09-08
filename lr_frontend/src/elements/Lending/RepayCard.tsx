@@ -129,7 +129,8 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                             <Suspense fallback={<p className='lending-muted'>Loading payment…</p>}>
                                 <PayPalButton
                                     amountCentavos={next.total}
-                                    description='PrimeLendRow loan repayment'
+                                    purpose='repay'
+                                    loanId={activeLoan.id}
                                     onApproved={async orderId => {
                                         if (await repay(activeLoan.id, orderId)) onPaid()
                                     }}
