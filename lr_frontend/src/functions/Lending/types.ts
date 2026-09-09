@@ -369,7 +369,13 @@ export type Loan = {
     principal: number
     rate_bps: number
     term_months: number
-    status: 'pending' | 'active' | 'closed' | 'defaulted' | 'declined' | 'cancelled'
+    /** `reconciling` = defaulted, but reopened by an administrator so it can be
+     *  settled; it pays through the ordinary repay flow. `reconciled` = it was
+     *  settled, the credit penalty was returned, and the borrower can apply
+     *  again. Both are kept distinct from `closed` on purpose — a loan that
+     *  defaulted and was made good is not the same credit fact as one repaid on
+     *  time, and the ledger keeps both events either way (033). */
+    status: 'pending' | 'active' | 'closed' | 'defaulted' | 'reconciling' | 'reconciled' | 'declined' | 'cancelled'
     principal_outstanding: number
     disbursed_at: number | null
     closed_at: number | null

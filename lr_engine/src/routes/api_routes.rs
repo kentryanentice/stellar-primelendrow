@@ -173,6 +173,18 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/lending/admin/loans/default",
             post(lending::loan_default).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // The way back from a default (033), deliberately two calls rather than
+        // one: `reopen` lets the borrower pay their arrears through the normal
+        // rail, and `reconcile` accepts the result once they actually have.
+        // Neither one moves money on an admin's say-so.
+        .route(
+            "/lending/admin/loans/reopen",
+            post(lending::loan_reopen).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
+        .route(
+            "/lending/admin/loans/reconcile",
+            post(lending::loan_mark_paid).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route(
             "/lending/admin/actions",
             post(lending::actions_list).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),

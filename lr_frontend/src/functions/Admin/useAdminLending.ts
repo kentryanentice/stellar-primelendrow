@@ -60,7 +60,13 @@ export type AdminLoan = {
     principal_outstanding: number
     rate_bps: number
     term_months: number
-    status: 'pending' | 'active' | 'closed' | 'defaulted' | 'declined' | 'cancelled'
+    /** `reconciling` = defaulted but reopened so the borrower can settle;
+     *  `reconciled` = they did, and their standing was restored (033). */
+    status: 'pending' | 'active' | 'closed' | 'defaulted' | 'reconciling' | 'reconciled' | 'declined' | 'cancelled'
+    /** Everything still unpaid across unsettled installments. This — not
+     *  `principal_outstanding` — is what a settling borrower owes: recovery
+     *  wrote the outstanding column down to zero when the loan defaulted. */
+    arrears: number
     disbursed_at: number | null
     defaulted_at: number | null
     closed_at: number | null
@@ -104,7 +110,7 @@ type PreparedAction = {
     quote: SeizureQuote | null
 }
 
-export type LoanFilter = 'open' | 'defaulted' | 'all'
+export type LoanFilter = 'open' | 'defaulted' | 'settling' | 'all'
 
 /**
  * The operator's lending console: the loan book, declaring a default, and
@@ -140,6 +146,9 @@ export default function useAdminLending() {
     /** The movement currently being signed, so only its button spins. */
     const [busyAction, setBusyAction] = useState<number | null>(null)
     const [defaultingId, setDefaultingId] = useState<string | null>(null)
+    /** The loan a reopen-or-settle call is in flight for (033). Separate from
+     *  `defaultingId` so the two can't disable each other's buttons. */
+    const [reconcilingId, setReconcilingId] = useState<string | null>(null)
 
     const authHeaders = useCallback((): HeadersInit => ({
         'Content-Type': 'application/json',
@@ -207,6 +216,61 @@ export default function useAdminLending() {
             return false
         } finally {
             setDefaultingId(null)
+        }
+    }, [post, toast, loadLoans, loadActions, page, filter])
+
+    /**
+     * Reopens a defaulted loan so the borrower can pay their arrears (033).
+     *
+     * Moves no money — it makes the loan payable again and puts the arrears on
+     * the borrower's Pay page. The settlement itself arrives through the
+     * ordinary rail, verified by the provider, which is why an admin can offer
+     * a borrower this second chance without being able to fake that they took
+     * it.
+     */
+    const reopenForSettlement = useCallback(async (loanId: string, reason: string) => {
+        setReconcilingId(loanId)
+        try {
+            const data = await post<{ message: string; arrears: number }>(
+                '/lending/admin/loans/reopen',
+                { loan_id: loanId, reason },
+            )
+            toast.success(data.message)
+            await loadLoans(page, filter)
+            return true
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Unable to reopen this loan')
+            return false
+        } finally {
+            setReconcilingId(null)
+        }
+    }, [post, toast, loadLoans, page, filter])
+
+    /**
+     * Accepts a reopened loan as settled: restores the credit penalty and
+     * queues the on-chain outcome, so the borrower can apply again.
+     *
+     * The engine refuses while any arrears remain, so this button is an
+     * acceptance of a fact, not an assertion of one.
+     */
+    const markSettled = useCallback(async (loanId: string, reason: string) => {
+        setReconcilingId(loanId)
+        try {
+            const data = await post<{ message: string; note: string | null }>(
+                '/lending/admin/loans/reconcile',
+                { loan_id: loanId, reason },
+            )
+            toast.success(data.message)
+            // Seized coins can't be returned from here; the engine says so
+            // rather than reporting a clean settlement, and so does the UI.
+            if (data.note) toast.error(data.note)
+            await Promise.all([loadLoans(page, filter), loadActions()])
+            return true
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Unable to mark this loan settled')
+            return false
+        } finally {
+            setReconcilingId(null)
         }
     }, [post, toast, loadLoans, loadActions, page, filter])
 
@@ -280,6 +344,7 @@ export default function useAdminLending() {
         refresh,
         actions, contractId,
         declareDefault, defaultingId,
+        reopenForSettlement, markSettled, reconcilingId,
         signAction, confirmHash, busyAction,
     }
 }

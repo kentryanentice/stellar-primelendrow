@@ -14,6 +14,8 @@ const STATUS_CLS: Record<Loan['status'], string> = {
     active: 'is-active',
     closed: 'is-closed',
     defaulted: 'is-defaulted',
+    reconciling: 'is-pending',
+    reconciled: 'is-closed',
     declined: 'is-declined',
     cancelled: 'is-declined',
 }
@@ -53,8 +55,23 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
     onPaid: () => void
 }) {
     const navigate = useNavigate()
-    const activeLoan = loans.find(l => l.status === 'active') ?? null
+    // `reconciling` is a defaulted loan an administrator reopened so the
+    // borrower can settle it (033). It pays through this same card and the same
+    // rail — the only differences are what the money does in the books, which
+    // is the engine's business, and the wording below, which is the borrower's.
+    const activeLoan = loans.find(l => l.status === 'active' || l.status === 'reconciling') ?? null
+    const settling = activeLoan?.status === 'reconciling'
     const next = activeLoan ? nextInstallment(activeLoan) : null
+    /** Everything still unpaid, not just this month's installment — the figure
+     *  a settling borrower is actually working down. */
+    const arrears = activeLoan
+        ? activeLoan.schedule.reduce(
+            (sum, row) => sum
+                + Math.max(row.principal_due - row.principal_paid, 0)
+                + Math.max(row.interest_due - row.interest_paid, 0),
+            0,
+        )
+        : 0
 
     return (
         <section className='lending-card lending-card-repay'>
@@ -81,8 +98,25 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                             <b>{pesos(activeLoan.principal)} loan</b>
                             <span>{PRODUCT_LABEL[activeLoan.product]} · {rate(activeLoan.rate_bps)} · {activeLoan.term_months} mo</span>
                         </div>
-                        <span className={`lending-loan-status ${STATUS_CLS[activeLoan.status]}`}>{activeLoan.status}</span>
+                        <span className={`lending-loan-status ${STATUS_CLS[activeLoan.status]}`}>
+                            {settling ? 'settling' : activeLoan.status}
+                        </span>
                     </div>
+
+                    {/* A settling borrower needs to know three things the
+                        ordinary repay flow never has to say: that this is the
+                        defaulted loan, what the whole debt is (not just this
+                        month), and that clearing it is what gets them their
+                        standing back. */}
+                    {settling && (
+                        <p className='lending-muted'>
+                            This loan defaulted and has been reopened so you can settle it.
+                            {arrears > 0
+                                ? <> <b>{pesos(arrears)}</b> is outstanding — you can pay it in parts.</>
+                                : <> Your arrears are cleared; an administrator will confirm the settlement.</>}
+                            {' '}Once it’s confirmed, the credit penalty is returned and you can apply again.
+                        </p>
+                    )}
 
                     <div className='lending-funds-grid'>
                         <div className='lending-funds-tile'>

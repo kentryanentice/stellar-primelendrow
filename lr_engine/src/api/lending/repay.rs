@@ -19,6 +19,7 @@ use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
 use super::policy;
 use super::rails::{self, Captured, PaymentRef};
+use super::reconcile;
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
 
@@ -84,7 +85,13 @@ pub async fn repay(
     if borrower_id != user_id {
         return Err((StatusCode::NOT_FOUND, "Loan not found"));
     }
-    if status != "active" {
+    // `reconciling` is a defaulted loan an admin reopened for settlement (033).
+    // It takes payments through this same endpoint on purpose — the borrower
+    // pays the way they always did, and the money is verified by the provider
+    // like every other peso — but where it lands in the books is different, and
+    // that difference is handled at the posting step below.
+    let settling = status == "reconciling";
+    if status != "active" && !settling {
         return Err((StatusCode::CONFLICT, "This loan is not active"));
     }
 
@@ -160,21 +167,48 @@ pub async fn repay(
     }
 
     // The books: one event, postings that tie to the received centavo.
-    let (platform_cut, reserve_cut) =
-        domain::split_interest(interest_total, &rules.params.interest_split);
+    //
+    // Two shapes, because the money means two different things.
     let mut postings = vec![Posting { account: "cash", amount: received }];
-    if principal_total > 0 {
-        postings.push(Posting { account: "loans_receivable", amount: -principal_total });
-    }
-    if platform_cut > 0 {
-        postings.push(Posting { account: "platform_earnings", amount: -platform_cut });
-    }
-    if reserve_cut > 0 {
-        postings.push(Posting { account: "reserve_fund", amount: -reserve_cut });
-    }
-    if excess > 0 {
-        postings.push(Posting { account: "member_deposits", amount: -excess });
-    }
+    let settlement = if settling {
+        // Settling a default. `loans_receivable` for this loan is already zero
+        // — `recovery::advance` wrote the whole debt off when it took the
+        // borrower's deposits, charged the guarantors and booked the remainder
+        // as a loss. Crediting a receivable that no longer exists would drive
+        // the pool's assets negative, and recognising interest income on a loan
+        // the pool has already written off would book a profit twice.
+        //
+        // So the payment undoes the loss instead: guarantors made whole first,
+        // then the reserve, then anything left back to the borrower. See
+        // `reconcile::settle` for why that order and not the strict reverse.
+        let split = reconcile::settle(&mut tx, p.loan_id, user_id, received).await?;
+        if split.to_guarantors > 0 {
+            postings.push(Posting { account: "member_deposits", amount: -split.to_guarantors });
+        }
+        if split.to_reserve > 0 {
+            postings.push(Posting { account: "reserve_fund", amount: -split.to_reserve });
+        }   
+        if split.to_borrower > 0 {
+            postings.push(Posting { account: "member_deposits", amount: -split.to_borrower });
+        }
+        Some(split)
+    } else {
+        let (platform_cut, reserve_cut) =
+            domain::split_interest(interest_total, &rules.params.interest_split);
+        if principal_total > 0 {
+            postings.push(Posting { account: "loans_receivable", amount: -principal_total });
+        }
+        if platform_cut > 0 {
+            postings.push(Posting { account: "platform_earnings", amount: -platform_cut });
+        }
+        if reserve_cut > 0 {
+            postings.push(Posting { account: "reserve_fund", amount: -reserve_cut });
+        }
+        if excess > 0 {
+            postings.push(Posting { account: "member_deposits", amount: -excess });
+        }
+        None
+    };
 
     commit_event(
         &mut tx,
@@ -217,8 +251,11 @@ pub async fn repay(
     .await
     .map_err(|e| db_err(e, "record payment"))?;
 
-    // Overpay becomes a withdrawable deposit lot instead of vanishing.
-    if excess > 0 {
+    // Overpay becomes a withdrawable deposit lot instead of vanishing. On a
+    // settlement `reconcile::settle` has already made this lot as the last step
+    // of its distribution, so making a second one here would hand the borrower
+    // their overpayment twice.
+    if excess > 0 && !settling {
         sqlx::query("INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')")
             .bind(user_id)
             .bind(excess)
@@ -227,21 +264,36 @@ pub async fn repay(
             .map_err(|e| db_err(e, "excess lot"))?;
     }
 
-    let outstanding_after = outstanding_before - principal_total;
-    sqlx::query("UPDATE public.loans SET principal_outstanding = $1, updated_at = $2 WHERE id = $3")
-        .bind(outstanding_after)
-        .bind(now)
-        .bind(p.loan_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| db_err(e, "update outstanding"))?;
+    // A settling loan's principal was written down to zero by recovery, so
+    // there is nothing left to reduce — subtracting the payment would take the
+    // column negative and trip its own `>= 0` check. The schedule above is what
+    // records the settlement's progress on a reopened loan.
+    let outstanding_after = if settling { 0 } else { outstanding_before - principal_total };
+    if !settling {
+        sqlx::query("UPDATE public.loans SET principal_outstanding = $1, updated_at = $2 WHERE id = $3")
+            .bind(outstanding_after)
+            .bind(now)
+            .bind(p.loan_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| db_err(e, "update outstanding"))?;
 
-    // Principal came home -> that much funded deposit is withdrawable again.
-    if principal_total > 0 {
-        lots::release_funding_lots(&mut tx, p.loan_id, principal_total).await?;
+        // Principal came home -> that much funded deposit is withdrawable
+        // again. Not on a settlement: recovery already released the savers'
+        // lots when it settled the default, and releasing them a second time
+        // would unfreeze deposits backing somebody else's loan.
+        if principal_total > 0 {
+            lots::release_funding_lots(&mut tx, p.loan_id, principal_total).await?;
+        }
     }
 
-    let fully_paid = outstanding_after == 0
+    // A settlement never closes the loan by itself. Arrears reaching zero is
+    // the *precondition* for reconciling, not the act — an administrator has to
+    // accept it (`reconcile::mark_paid`), which is also what returns the credit
+    // penalty and queues the on-chain outcome. Closing here would strand the
+    // loan as `closed` with the borrower's score still on the floor.
+    let fully_paid = !settling
+        && outstanding_after == 0
         && schedule.iter().all(|r| r.interest_paid >= r.interest_due);
 
     let loan_status = if fully_paid {
@@ -350,22 +402,49 @@ pub async fn repay(
         .await
         .map_err(|e| ledger_err(e, "loan_closed"))?;
         "closed"
+    } else if settling {
+        "reconciling"
     } else {
         "active"
     };
 
+    // What is still owed after this payment — the number the borrower is
+    // working down, and the one an admin needs at zero before they can accept
+    // the settlement.
+    let arrears_after = if settling {
+        reconcile::arrears(&mut tx, p.loan_id).await?
+    } else {
+        0
+    };
+
     tx.commit().await.map_err(|e| db_err(e, "commit repay"))?;
-    tracing::info!(%user_id, loan_id = %p.loan_id, received, interest_total, principal_total, "repayment received");
+    if let Some(split) = &settlement {
+        tracing::info!(
+            %user_id, loan_id = %p.loan_id, received,
+            guarantors = split.to_guarantors, reserve = split.to_reserve,
+            borrower = split.to_borrower, arrears_after,
+            "default settlement received"
+        );
+    } else {
+        tracing::info!(%user_id, loan_id = %p.loan_id, received, interest_total, principal_total, "repayment received");
+    }
 
     Ok(Json(RepayResponse {
         amount_received: received,
         interest_paid: interest_total,
         principal_paid: principal_total,
-        excess_to_deposit: excess,
+        // On a settlement the "excess" the schedule allocation computed is not
+        // what reached the borrower — `settle` distributes to the guarantors
+        // and the reserve first, and only what survives that becomes their lot.
+        excess_to_deposit: settlement.as_ref().map_or(excess, |s| s.to_borrower),
         principal_outstanding: outstanding_after,
         loan_status,
         message: if loan_status == "closed" {
             "Loan fully repaid — collateral released and your credit score just went up"
+        } else if settling && arrears_after == 0 {
+            "Arrears cleared — an administrator will confirm the settlement and restore your standing"
+        } else if settling {
+            "Payment received and applied to your arrears"
         } else {
             "Payment received and applied"
         },

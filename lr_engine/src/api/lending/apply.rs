@@ -311,9 +311,14 @@ pub async fn apply(
         .await
         .map_err(|e| db_err(e, "lock borrower"))?;
 
+    // `reconciling` counts as open (033): a defaulted loan reopened for
+    // settlement is an obligation the borrower is still working down, and
+    // lending to them again mid-settlement is exactly what the one-open-loan
+    // rule exists to prevent. A `reconciled` loan does NOT count — settling is
+    // the whole point, and the borrower gets to borrow again.
     let has_open: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM public.loans
-          WHERE borrower_id = $1 AND status IN ('pending','active'))",
+          WHERE borrower_id = $1 AND status IN ('pending','active','reconciling'))",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

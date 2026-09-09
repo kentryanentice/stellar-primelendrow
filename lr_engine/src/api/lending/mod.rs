@@ -31,6 +31,7 @@ mod pool;
 mod pricing;
 mod quote;
 mod rails;
+mod reconcile;
 mod recovery;
 mod repay;
 pub(crate) mod shared;
@@ -61,6 +62,9 @@ pub(crate) use payout::submit_to as submit_payout;
 pub use pool::summary as pool_summary;
 pub use quote::quote as loan_quote;
 pub use repay::repay;
+// Settling a defaulted loan (033): reopening it for payment and accepting it as
+// settled are two separate admin decisions, so they are two separate handlers.
+pub use reconcile::{mark_paid as loan_mark_paid, reopen as loan_reopen};
 pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
 // The sweep calls this whenever a payout reaches a terminal state it never
