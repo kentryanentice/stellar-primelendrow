@@ -9,6 +9,7 @@ import { shortId, txLink } from '../../functions/Lending/explorer'
 const FILTERS: { key: LoanFilter; label: string }[] = [
     { key: 'open', label: 'Open' },
     { key: 'defaulted', label: 'Defaulted' },
+    { key: 'settling', label: 'Settling' },
     { key: 'all', label: 'All' },
 ]
 
@@ -17,6 +18,10 @@ const STATUS_CLS: Record<AdminLoan['status'], string> = {
     active: 'is-active',
     closed: 'is-closed',
     defaulted: 'is-defaulted',
+    // Reopened for settlement — a live obligation again, so it reads like one
+    // rather than wearing the default's red.
+    reconciling: 'is-pending',
+    reconciled: 'is-closed',
     declined: 'is-declined',
     cancelled: 'is-declined',
 }
@@ -75,6 +80,7 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
         filter, setFilter, goToPage,
         actions, contractId,
         declareDefault, defaultingId,
+        reopenForSettlement, markSettled, reconcilingId,
         signAction, confirmHash, busyAction,
     } = lending
 
@@ -85,6 +91,10 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
     /** The loan a default is being confirmed for, and the reason typed for it. */
     const [confirming, setConfirming] = useState<{ loan: AdminLoan; installment: number } | null>(null)
     const [reason, setReason] = useState('')
+    /** The loan a settlement decision is being made for, and why (033). The
+     *  reason is its own state so typing one doesn't clear the default modal's. */
+    const [settling, setSettling] = useState<{ loan: AdminLoan; action: 'reopen' | 'accept' } | null>(null)
+    const [settleReason, setSettleReason] = useState('')
 
     return (
         <section className='admin-loans'>
@@ -245,6 +255,46 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
                                                 </p>
                                             )}
 
+                                            {/* The way back from a default (033).
+                                                Reopening is offered on a
+                                                defaulted loan; accepting is
+                                                offered once it is reopened, and
+                                                only bites when the arrears are
+                                                actually clear — the engine
+                                                refuses otherwise, so this
+                                                button confirms a fact rather
+                                                than asserting one. */}
+                                            {(loan.status === 'defaulted' || loan.status === 'reconciling') && (
+                                                <div className='admin-settle-row'>
+                                                    {loan.status === 'reconciling' && (
+                                                        <p className='lending-muted'>
+                                                            Reopened for settlement · {loan.arrears > 0
+                                                                ? <>borrower owes <b>{pesos(loan.arrears)}</b></>
+                                                                : <b>arrears cleared</b>}
+                                                        </p>
+                                                    )}
+                                                    <button
+                                                        type='button'
+                                                        className='admin-default-btn'
+                                                        disabled={reconcilingId !== null
+                                                            || (loan.status === 'reconciling' && loan.arrears > 0)}
+                                                        onClick={() => {
+                                                            setSettleReason('')
+                                                            setSettling({
+                                                                loan,
+                                                                action: loan.status === 'defaulted' ? 'reopen' : 'accept',
+                                                            })
+                                                        }}
+                                                    >
+                                                        {loan.status === 'defaulted'
+                                                            ? 'Allow settlement'
+                                                            : loan.arrears > 0
+                                                                ? 'Waiting on payment'
+                                                                : 'Mark settled'}
+                                                    </button>
+                                                </div>
+                                            )}
+
                                             {loan.recoveries.length > 0 && (
                                                 <div className='admin-recoveries'>
                                                     <span className='lending-stat-label'>Recovery waterfall</span>
@@ -381,7 +431,8 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
                             {confirming.loan.borrower}’s {pesos(confirming.loan.principal_outstanding)} outstanding will be
                             recovered in order: their own deposit first, then their locked XLM, then their guarantors’
                             pledges. Anything left over is written off against the reserve fund. Their credit score drops
-                            and the loan cannot be reopened.
+                            by 25, which is usually enough to put them below the lowest lending band. You can reopen
+                            the loan later to let them settle it.
                         </p>
                         {confirming.loan.collateral?.status === 'locked' && (
                             <p className='lending-muted'>
@@ -415,6 +466,85 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
                                 }}
                             >
                                 {defaultingId !== null ? 'Defaulting…' : 'Default this loan'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* The settlement decision, in the same shape as the default modal
+                above: two very different consequences, one confirm step each.
+                Reopening is the generous one and still asks for a reason,
+                because returning a credit consequence is exactly the decision
+                that should never be anonymous. */}
+            {settling && (
+                <div className='admin-default-modal' role='dialog' aria-modal='true' aria-label='Confirm settlement'>
+                    <div className='admin-default-card'>
+                        {settling.action === 'reopen' ? (
+                            <>
+                                <h3>Let {settling.loan.borrower} settle this loan?</h3>
+                                <p className='lending-muted'>
+                                    The loan becomes payable again and <b>{pesos(settling.loan.arrears)}</b> of arrears
+                                    appears on their Pay page. Nothing moves until they actually pay — and when they do,
+                                    the money goes first to any guarantors who were charged, then back into the reserve
+                                    fund, and only the remainder to them.
+                                </p>
+                                <p className='lending-muted'>
+                                    Their credit score stays where it is until you mark the loan settled.
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <h3>Mark this loan settled?</h3>
+                                <p className='lending-muted'>
+                                    {settling.loan.borrower} has cleared their arrears. This returns the 25 points the
+                                    default cost them and closes the loan as <b>reconciled</b> — defaulted, then made
+                                    good. They will be able to apply for a loan again.
+                                </p>
+                                {settling.loan.collateral?.status === 'locked' && (
+                                    <p className='lending-muted'>
+                                        Their collateral release will be queued for your key.
+                                    </p>
+                                )}
+                                {settling.loan.collateral?.status === 'seized' && (
+                                    <p className='lending-muted lending-liquidation'>
+                                        <AlertTriangle />
+                                        Their XLM was already seized on-chain and can’t be returned from here.
+                                    </p>
+                                )}
+                            </>
+                        )}
+                        <label className='lending-label' htmlFor='admin-settle-reason'>Reason (recorded)</label>
+                        <input
+                            id='admin-settle-reason'
+                            className='lending-input'
+                            value={settleReason}
+                            onChange={e => setSettleReason(e.target.value)}
+                        />
+                        <div className='admin-default-actions'>
+                            <button
+                                type='button'
+                                className='lending-btn'
+                                disabled={reconcilingId !== null}
+                                onClick={() => setSettling(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type='button'
+                                className='admin-default-btn is-solid'
+                                disabled={reconcilingId !== null}
+                                onClick={async () => {
+                                    const { loan, action } = settling
+                                    const done = action === 'reopen'
+                                        ? await reopenForSettlement(loan.id, settleReason)
+                                        : await markSettled(loan.id, settleReason)
+                                    if (done) setSettling(null)
+                                }}
+                            >
+                                {reconcilingId !== null
+                                    ? 'Working…'
+                                    : settling.action === 'reopen' ? 'Allow settlement' : 'Mark settled'}
                             </button>
                         </div>
                     </div>

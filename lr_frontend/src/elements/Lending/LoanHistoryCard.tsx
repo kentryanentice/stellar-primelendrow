@@ -17,6 +17,10 @@ const STATUS_CLS: Record<Loan['status'], string> = {
     active: 'is-active',
     closed: 'is-closed',
     defaulted: 'is-defaulted',
+    // Settling a past default, then settled. Neither wears the default's red:
+    // one is a live obligation, the other is a resolved one.
+    reconciling: 'is-pending',
+    reconciled: 'is-closed',
     declined: 'is-declined',
     cancelled: 'is-declined',
 }

@@ -101,6 +101,15 @@ pub struct AdminLoan {
     pub rate_bps: i32,
     pub term_months: i16,
     pub status: String,
+    /// Everything still unpaid across every unsettled installment, principal
+    /// and interest. This is the figure the operator quotes a borrower who is
+    /// settling a default, and the one that has to reach zero before
+    /// `/lending/admin/loans/reconcile` will accept the loan as paid (033).
+    ///
+    /// Derived from the schedule rows already fetched below rather than a
+    /// second query per loan — `principal_outstanding` cannot answer it,
+    /// because recovery wrote that column down to zero when the loan defaulted.
+    pub arrears: i64,
     pub disbursed_at: Option<i64>,
     pub defaulted_at: Option<i64>,
     pub closed_at: Option<i64>,
@@ -232,6 +241,10 @@ pub async fn list(
     let where_clause = match q.filter.as_str() {
         "open" => "WHERE l.status IN ('pending', 'active')",
         "defaulted" => "WHERE l.status = 'defaulted'",
+        // The way back from a default, as its own view: these are the loans an
+        // operator is actively working, and burying them in "all" is how one
+        // gets forgotten mid-settlement.
+        "settling" => "WHERE l.status IN ('reconciling', 'reconciled')",
         _ => "",
     };
 
@@ -365,6 +378,13 @@ pub async fn list(
                         created_at: *created_at,
                     })
                     .collect(),
+                arrears: schedule
+                    .iter()
+                    .filter(|r| r.0 == id && r.7 != "paid")
+                    .map(|(_, _, _, principal_due, interest_due, principal_paid, interest_paid, _)| {
+                        (principal_due - principal_paid).max(0) + (interest_due - interest_paid).max(0)
+                    })
+                    .sum(),
                 id, borrower, product, principal, principal_outstanding, rate_bps,
                 term_months, status, disbursed_at, defaulted_at, closed_at,
             }
