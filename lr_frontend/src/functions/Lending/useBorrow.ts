@@ -114,7 +114,13 @@ export default function useBorrow(onChanged: () => void) {
                 walletAddress,
                 loanId: pendingLock.loan_id,
                 stroops: pendingLock.required_stroops,
-                principalCentavos: pendingLock.principal,
+                // What the coins stand behind, NOT the loan's principal. On a
+                // guarantor loan the coin leg covers only the borrower's share,
+                // and the vault measures its 120% against whatever it is told
+                // here — pass the principal and it demands 120% of the whole
+                // loan from coins sized for half of it, which is refused every
+                // time (034).
+                principalCentavos: pendingLock.collateral_principal_centavos ?? pendingLock.principal,
                 quote,
                 csrfToken,
             })

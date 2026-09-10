@@ -37,12 +37,16 @@ function LoanHistoryCard({ data, history, onChanged }: {
     history: ReturnType<typeof useLoanHistory>
     onChanged: () => void
 }) {
-    const { loans, page, total, totalPages, loading, error, refresh, goToPage } = history
+    const { loans, page, total, totalPages, loading, error, refresh, goToPage, cancelLoan, cancellingId } = history
     const { csrfToken } = useSession()
     const toast = useToast()
     const navigate = useNavigate()
     const [openId, setOpenId] = useState<string | null>(null)
     const [lockingId, setLockingId] = useState<string | null>(null)
+    /** The application whose cancellation is being confirmed. Cancelling gives
+     *  the borrower's deposit back but ends the application for good, so it
+     *  asks first — the same one-step confirm a default gets in the console. */
+    const [confirmCancel, setConfirmCancel] = useState<Loan | null>(null)
     /** The open row's custody record, fetched only when it's actually opened. */
     const openLoan = loans.find(l => l.id === openId)
     const custody = useCollateralRecord(
@@ -68,7 +72,11 @@ function LoanHistoryCard({ data, history, onChanged }: {
                 walletAddress: loan.collateral.wallet_address,
                 loanId: loan.id,
                 stroops: loan.collateral.required_stroops,
-                principalCentavos: loan.principal,
+                // The position's own figure, not the loan's principal — see
+                // `collateral.principal_centavos` (034). They are the same
+                // number on an xlm_collateral loan and deliberately different
+                // on a guarantor one.
+                principalCentavos: loan.collateral.principal_centavos,
                 quote,
                 csrfToken,
             })
@@ -203,6 +211,23 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                 </button>
                                             )}
 
+                                            {/* Withdrawing the application. Offered on any
+                                                pending loan; the engine decides whether it is
+                                                actually allowed — a guarantor may have accepted,
+                                                or the coins may already be in the vault — and
+                                                says which in its refusal. Predicting that here
+                                                would mean two places deciding the same rule. */}
+                                            {loan.status === 'pending' && (
+                                                <button
+                                                    type='button'
+                                                    className='lending-btn'
+                                                    disabled={cancellingId === loan.id || lockingId === loan.id}
+                                                    onClick={() => setConfirmCancel(loan)}
+                                                >
+                                                    {cancellingId === loan.id ? 'Cancelling…' : 'Cancel this application'}
+                                                </button>
+                                            )}
+
                                             {loan.schedule.length > 0 && (
                                                 <div className='lending-schedule-scroll'>
                                                     <table className='lending-schedule'>
@@ -264,6 +289,57 @@ function LoanHistoryCard({ data, history, onChanged }: {
                         </div>
                     )}
                 </>
+            )}
+
+            {/* Cancelling ends the application for good — there is no un-cancel,
+                and reapplying re-prices the loan at whatever XLM is worth then.
+                Worth one confirm step, in the same shape the console's default
+                modal uses. */}
+            {confirmCancel && (
+                <div className='admin-default-modal' role='dialog' aria-modal='true' aria-label='Confirm cancellation'>
+                    <div className='admin-default-card'>
+                        <h3>Cancel this application?</h3>
+                        <p className='lending-muted'>
+                            Your {pesos(confirmCancel.principal)} application ends and any deposit backing it becomes
+                            withdrawable again. Nothing has been disbursed, so there's no effect on your credit score.
+                        </p>
+                        {confirmCancel.guarantors.length > 0 && (
+                            <p className='lending-muted'>
+                                Anyone you asked to guarantee it who hasn't answered yet will stop being asked.
+                            </p>
+                        )}
+                        <p className='lending-muted'>
+                            You can apply again afterwards — the new application is priced at the rate on the day,
+                            not this one's.
+                        </p>
+                        <div className='admin-default-actions'>
+                            <button
+                                type='button'
+                                className='lending-btn'
+                                disabled={cancellingId !== null}
+                                onClick={() => setConfirmCancel(null)}
+                            >
+                                Keep it
+                            </button>
+                            <button
+                                type='button'
+                                className='admin-default-btn is-solid'
+                                disabled={cancellingId !== null}
+                                onClick={async () => {
+                                    const loanId = confirmCancel.id
+                                    if (await cancelLoan(loanId)) {
+                                        setConfirmCancel(null)
+                                        // The deposit just came back — the pool
+                                        // card and lot list have to be told.
+                                        onChanged()
+                                    }
+                                }}
+                            >
+                                {cancellingId !== null ? 'Cancelling…' : 'Cancel application'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </section>
     )

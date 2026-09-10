@@ -211,6 +211,11 @@ export type ApplyResponse = PinnedQuote & {
     /** Whole centavos, as recorded by the engine — what the lock covers. */
     principal: number
     required_stroops: number | null
+    /** The principal the coins stand behind — the whole loan on an
+     *  `xlm_collateral` product, the borrower's coin share on a guarantor loan.
+     *  The vault measures its ratio against this, so the lock submits it
+     *  instead of `principal` (034). */
+    collateral_principal_centavos: number | null
     collateral_contract: string | null
     /** xlm_collateral: when the rate was read, and how it was reconciled. */
     priced_at: number | null
@@ -376,6 +381,12 @@ export type Loan = {
      *  defaulted and was made good is not the same credit fact as one repaid on
      *  time, and the ledger keeps both events either way (033). */
     status: 'pending' | 'active' | 'closed' | 'defaulted' | 'reconciling' | 'reconciled' | 'declined' | 'cancelled'
+    /** What a `reconciling` loan still needs before it can be marked settled;
+     *  0 otherwise. This is NOT the unpaid schedule — settling a default means
+     *  repaying what guarantors and the reserve fund are still short, not
+     *  every remaining month, and not the borrower's own deposit that was
+     *  already seized to cover it (033). Engine-computed; never summed here. */
+    arrears: number
     principal_outstanding: number
     disbursed_at: number | null
     closed_at: number | null
@@ -384,6 +395,12 @@ export type Loan = {
     collateral: (PinnedQuote & {
         wallet_address: string
         required_stroops: number
+        /** The principal these coins stand behind — the whole loan on an
+         *  `xlm_collateral` product, the borrower's coin share on a guarantor
+         *  loan. Submitted to the vault instead of `loan.principal`: the
+         *  contract checks its ratio against this number, so passing the full
+         *  principal for a guarantor coin leg is refused every time (034). */
+        principal_centavos: number
         locked_stroops: number
         status: 'pending' | 'locked' | 'released' | 'seized'
         health_pct: number | null

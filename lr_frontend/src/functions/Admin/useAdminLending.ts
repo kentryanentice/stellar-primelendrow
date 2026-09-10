@@ -28,6 +28,10 @@ export type AdminRecovery = {
     source: 'borrower_deposit' | 'borrower_xlm' | 'guarantor_deposit' | 'reserve_fund'
     username: string | null
     amount: number
+    /** How much of this step a settlement has given back. Only the guarantor
+     *  and reserve steps are refundable; the borrower's own seized assets are
+     *  not returned, having paid the borrower's own debt. */
+    refunded: number
     stroops: number | null
     created_at: number
 }
@@ -63,9 +67,12 @@ export type AdminLoan = {
     /** `reconciling` = defaulted but reopened so the borrower can settle;
      *  `reconciled` = they did, and their standing was restored (033). */
     status: 'pending' | 'active' | 'closed' | 'defaulted' | 'reconciling' | 'reconciled' | 'declined' | 'cancelled'
-    /** Everything still unpaid across unsettled installments. This — not
-     *  `principal_outstanding` — is what a settling borrower owes: recovery
-     *  wrote the outstanding column down to zero when the loan defaulted. */
+    /** What a settling borrower still owes: the money guarantors and the
+     *  reserve fund are short after the default, net of what a partial
+     *  settlement has already given back. Deliberately NOT the unpaid
+     *  schedule — the waterfall settled this debt on the spot, so charging
+     *  every remaining month would bill for credit nobody extended and for
+     *  the borrower's own seized deposit twice (033). */
     arrears: number
     disbursed_at: number | null
     defaulted_at: number | null

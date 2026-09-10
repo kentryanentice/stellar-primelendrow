@@ -28,9 +28,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::ledger::{EventDraft, commit_event};
-use super::recovery;
-use super::shared::{db_err, ledger_err};
+use crate::api::lending::ledger::{EventDraft, commit_event};
+use crate::api::lending::recovery;
+use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
 /// A default is the worst thing a borrower's record can carry, so it costs

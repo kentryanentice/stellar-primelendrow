@@ -1,7 +1,9 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import useLendingPool from '../functions/Lending/useLendingPool'
 import useLoans from '../functions/Lending/useLoans'
 import usePayments from '../functions/Lending/usePayments'
+import { stripeCheckoutResult } from '../functions/Lending/useStripeCheckout'
+import { useToast } from '../providers/useToast'
 import PaymentSummaryCard from '../elements/Lending/PaymentSummaryCard'
 import PaySkeleton, { RepayCardSkeleton, PaymentHistoryCardSkeleton } from '../elements/Lending/PaySkeleton'
 
@@ -11,15 +13,16 @@ const RepayCard = lazy(() => import('../elements/Lending/RepayCard'))
 const PaymentHistoryCard = lazy(() => import('../elements/Lending/PaymentHistoryCard'))
 
 /**
- * The Pay page: settle the next installment on the caller's one open loan
- * with PayPal (moved off the Borrow page's "Your loans", which is now
- * read-only), plus the full repayment history. The engine captures and
- * allocates server-side — this page only ever hands it an order id.
+ * The Pay page: settle the next installment on the caller's one open loan —
+ * with PayPal or by card — plus the full repayment history. The engine
+ * verifies and allocates server-side; this page only ever hands it a
+ * reference to a payment the provider confirmed.
  */
 function Pay() {
     const { data, loading: poolLoading, error: poolError, refresh } = useLendingPool()
     const { loans, loading: loansLoading, error: loansError, repay, repayingId } = useLoans()
     const payments = usePayments()
+    const toast = useToast()
 
     // A repayment can change the pool's badge totals (excess -> a fresh
     // deposit lot), the loan itself, and the payment history — refresh
@@ -28,6 +31,36 @@ function Pay() {
         refresh()
         payments.refresh()
     }
+
+    // Coming back from Stripe Checkout. A card repayment is confirmed on page
+    // *load*, because the borrower has been away paying on stripe.com — unlike
+    // PayPal, where approval happens in an iframe and the page never unloads.
+    //
+    // The loan comes from the URL rather than from `loans`, because the engine
+    // put it there when it built the return path (`/pay?loan=<id>`) and this
+    // effect must not wait for the loan list to arrive. `stripeCheckoutResult`
+    // consumes the query parameter on its first read, so React's development
+    // double-invoke can't submit the same session twice — and the ledger's
+    // unique rail_ref would refuse it even if it did.
+    useEffect(() => {
+        const result = stripeCheckoutResult()
+        if (!result) return
+        if ('cancelled' in result) {
+            toast.error('Payment cancelled — nothing was charged')
+            return
+        }
+        const loanId = new URLSearchParams(window.location.search).get('loan')
+        if (!loanId) {
+            toast.error('That payment came back without a loan on it — check your payment history')
+            return
+        }
+        void repay(loanId, { session_id: result.sessionId }).then(ok => {
+            if (ok) handlePaid()
+        })
+        // `repay` and `handlePaid` are recreated every render; the effect is
+        // safe to re-run because the query parameter is gone after the first
+        // read, so it returns immediately on every subsequent pass.
+    })
 
     return (
         <main className='lending-page'>

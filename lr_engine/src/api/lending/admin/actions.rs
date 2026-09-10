@@ -30,10 +30,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::domain;
-use super::pricing;
-use super::recovery;
-use super::shared::db_err;
+use crate::api::lending::domain;
+use crate::api::lending::pricing;
+use crate::api::lending::recovery;
+use crate::api::lending::shared::db_err;
 use crate::api::users::shared::{E, require_admin};
 use crate::infra::stellar;
 

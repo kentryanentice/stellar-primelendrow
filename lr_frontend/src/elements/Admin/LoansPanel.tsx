@@ -303,6 +303,7 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
                                                             <b>{step.step}.</b> {RECOVERY_LABEL[step.source] ?? step.source}
                                                             {step.username && ` (${step.username})`} — {pesos(step.amount)}
                                                             {step.stroops !== null && ` from ${xlm(step.stroops)}`}
+                                                            {step.refunded > 0 && ` · ${pesos(step.refunded)} given back`}
                                                         </p>
                                                     ))}
                                                 </div>
@@ -484,10 +485,12 @@ function LoansPanel({ lending }: { lending: ReturnType<typeof useAdminLending> }
                             <>
                                 <h3>Let {settling.loan.borrower} settle this loan?</h3>
                                 <p className='lending-muted'>
-                                    The loan becomes payable again and <b>{pesos(settling.loan.arrears)}</b> of arrears
-                                    appears on their Pay page. Nothing moves until they actually pay — and when they do,
-                                    the money goes first to any guarantors who were charged, then back into the reserve
-                                    fund, and only the remainder to them.
+                                    The loan becomes payable again and <b>{pesos(settling.loan.arrears)}</b> appears on
+                                    their Pay page. That is what your guarantors and the reserve fund are still short —
+                                    not the rest of the loan: whatever their own deposit already covered when it
+                                    defaulted isn’t charged again, and months that were never due aren’t either.
+                                    Nothing moves until they actually pay, and when they do the money goes to the
+                                    guarantors first, then the reserve fund, then any remainder back to them.
                                 </p>
                                 <p className='lending-muted'>
                                     Their credit score stays where it is until you mark the loan settled.

@@ -19,7 +19,10 @@ use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
 use super::policy;
 use super::rails::{self, Captured, PaymentRef};
-use super::reconcile;
+// Settling a reopened default is an admin-initiated flow, but the payment
+// itself arrives here on the borrower's own rail — so this is the one place
+// the borrower side reaches into `admin`, and only for the split.
+use super::admin::reconcile;
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
 
@@ -66,6 +69,17 @@ pub async fn repay(
 
     let rules = policy::active(&pool).await?;
 
+    // Can this loan take a payment at all? Asked BEFORE the provider is
+    // charged, because everything below this line happens after the money has
+    // already moved — refusing then would mean rejecting a capture that has
+    // already hit the borrower's card. In particular this is what stops a
+    // settled-but-unconfirmed loan from accepting payment after payment that
+    // `settle` can only hand straight back.
+    // The answer is discarded: the authoritative status read happens below,
+    // under the loan's row lock. What matters is that this ran and did not
+    // refuse, while refusing was still free.
+    reconcile::check_payable(&pool, p.loan_id, user_id).await?;
+
     // Verify before the transaction: no locks held across a payment provider.
     let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
     let received = captured.centavos;
@@ -94,25 +108,49 @@ pub async fn repay(
     if status != "active" && !settling {
         return Err((StatusCode::CONFLICT, "This loan is not active"));
     }
+    // No arrears re-check here, deliberately. The pre-capture guard above
+    // already refused a settled loan while that was free; if a concurrent
+    // payment cleared the arrears in between, this money is already captured,
+    // and `settle` returns it as a deposit lot. Refuse early, never refuse
+    // late — a rejection at this point would charge the borrower for nothing.
 
-    let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT id, interest_due, interest_paid, principal_due, principal_paid
-           FROM public.loan_schedule
-          WHERE loan_id = $1
-          ORDER BY installment
-          FOR UPDATE",
-    )
-    .bind(p.loan_id)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(|e| db_err(e, "lock schedule"))?;
-    let mut schedule: Vec<ScheduleRow> = rows
-        .into_iter()
-        .map(|(id, interest_due, interest_paid, principal_due, principal_paid)| ScheduleRow {
-            id, interest_due, interest_paid, principal_due, principal_paid,
-        })
-        .collect();
+    // A settlement does not touch the schedule at all — see the block comment
+    // on the allocation below for why — so its rows are neither read nor
+    // locked. `schedule` stays empty, which makes every loop and check below a
+    // no-op without needing a branch of its own.
+    let mut schedule: Vec<ScheduleRow> = Vec::new();
+    if !settling {
+        let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT id, interest_due, interest_paid, principal_due, principal_paid
+               FROM public.loan_schedule
+              WHERE loan_id = $1
+              ORDER BY installment
+              FOR UPDATE",
+        )
+        .bind(p.loan_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| db_err(e, "lock schedule"))?;
+        schedule = rows
+            .into_iter()
+            .map(|(id, interest_due, interest_paid, principal_due, principal_paid)| ScheduleRow {
+                id, interest_due, interest_paid, principal_due, principal_paid,
+            })
+            .collect();
+    }
 
+    // Allocation, oldest installment first — for an ordinary repayment.
+    //
+    // A **settlement** skips this entirely, and that is the whole of the fix
+    // for "borrowers shouldn't have to pay back all the months". Allocating a
+    // settlement across the schedule charged for every unpaid installment,
+    // including months that were never due and interest nobody had earned, and
+    // it credited none of what the recovery waterfall had already taken from
+    // the borrower's own deposits. What a settlement owes is measured in
+    // `reconcile::arrears` instead — the money other parties are still out of
+    // pocket — and the schedule is left as the default stamped it, because
+    // those installments really were defaulted.
+    //
     // Allocation, oldest installment first: within each installment settle its
     // interest THEN its principal before moving to the next. A payment clears
     // whole installments in order — overdue interest + principal, then the
