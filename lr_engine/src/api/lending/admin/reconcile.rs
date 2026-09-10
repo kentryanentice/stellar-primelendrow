@@ -6,9 +6,13 @@
 //! moves rather than one button:
 //!
 //!   1. **the admin reopens it** (`reopen`) — a judgement that this borrower
-//!      should be allowed to settle. The loan becomes `reconciling`, its
-//!      defaulted installments become due again, and the arrears appear on the
-//!      borrower's own Pay page.
+//!      should be allowed to settle. The loan becomes `reconciling` and the
+//!      arrears appear on the borrower's own Pay page.
+//!
+//!      Note what reopening does *not* do: it does not put the old schedule
+//!      back. Settling is not resuming the loan. What is owed is measured by
+//!      `arrears` below — the money other parties are still out of pocket —
+//!      not by counting unpaid months, most of which were never due.
 //!   2. **the borrower pays** (`repay`, unchanged endpoint) — through the
 //!      ordinary PayPal/Stripe rail, verified by the provider like every other
 //!      peso the pool takes in. `settle` below decides where that money goes.
@@ -51,8 +55,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::ledger::{EventDraft, commit_event};
-use super::shared::{db_err, ledger_err};
+use crate::api::lending::ledger::{EventDraft, commit_event};
+use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
 /// Returned when a defaulted loan is made good. The mirror of
@@ -66,31 +70,136 @@ const SCORE_RESTORE_ON_RECONCILE: i16 = 25;
 // What is still owed
 // ===========================================================================
 
-/// Everything the borrower has not paid on this loan, principal and interest,
-/// across every installment that isn't settled.
+/// What the borrower must actually pay to settle: the money **other people**
+/// are still out of pocket because of this default.
 ///
-/// This is the number the whole feature turns on: it is what the admin quotes,
-/// what the borrower sees on the Pay page, and what `mark_paid` requires to be
-/// zero. It is read from `loan_schedule` rather than `principal_outstanding`,
-/// because recovery drove that column to zero — the schedule is the only place
-/// that still remembers what was actually missed.
-pub(super) async fn arrears(
+/// This is the number the whole feature turns on — what the admin quotes, what
+/// the borrower sees on their Pay page, and what `mark_paid` requires to be
+/// zero — so it is worth being exact about why it is not the loan's unpaid
+/// schedule.
+///
+/// A default does not leave the debt sitting there waiting to be paid. The
+/// recovery waterfall settles it on the spot, out of whoever's money it can
+/// reach, and `loan_recoveries` records who that was. By the time a loan is
+/// reopened, every peso of the outstanding principal has already been covered
+/// by one of four parties, and only two of them are owed anything:
+///
+///   * `borrower_deposit` / `borrower_xlm` — the borrower's **own** assets,
+///     already taken. Charging for this again is charging twice for the same
+///     peso, and it is exactly the "they might have already paid some of it"
+///     case: their seized deposit *was* the payment.
+///   * `guarantor_deposit` — somebody else's money, taken to cover this
+///     borrower's debt. Still owed, and settling is what gives it back.
+///   * `reserve_fund` — the pool absorbed the rest. Still owed.
+///
+/// So the sum below is over the last two only, net of anything a partial
+/// settlement has already refunded. That makes it exactly the pot
+/// `settle` distributes, which is what lets arrears hit zero at precisely the
+/// moment every third party has been made whole — the two functions cannot
+/// drift apart, because they read and write the same rows.
+///
+/// Two consequences worth stating plainly, both deliberate:
+///
+///   * **Future installments are not charged.** The unpaid months beyond the
+///     default were never advanced to the borrower; `recovery` only ever
+///     settled `principal_outstanding`. Demanding them would bill for credit
+///     nobody extended.
+///   * **Missed interest is not charged.** Interest never entered
+///     `loans_receivable`, so no party is out of pocket for it. The pool
+///     forgoes income it never earned, which is the price of offering a way
+///     back at all.
+///
+/// A loan whose recovery came entirely out of the borrower's own deposit
+/// therefore reopens at zero arrears — correctly. Nobody else lost anything,
+/// so there is nothing to repay; the borrower only needs their standing back.
+pub(in crate::api::lending) async fn arrears(
     tx: &mut Transaction<'_, Postgres>,
     loan_id: Uuid,
 ) -> Result<i64, E> {
     let owed: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(
-                    GREATEST(principal_due - principal_paid, 0)
-                  + GREATEST(interest_due - interest_paid, 0)
-                ), 0)::BIGINT
-           FROM public.loan_schedule
-          WHERE loan_id = $1 AND status <> 'paid'",
+        "SELECT COALESCE(SUM(amount - refunded), 0)::BIGINT
+           FROM public.loan_recoveries
+          WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'reserve_fund')",
     )
     .bind(loan_id)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| db_err(e, "loan arrears"))?;
     Ok(owed)
+}
+
+/// Whether a loan can take a payment at all, decided **before** any money is
+/// captured.
+///
+/// This exists because of the order the payment endpoints have to work in: the
+/// provider is charged first (`rails::capture`), and only then does the engine
+/// take the loan's row lock. Anything refused after that point is money already
+/// taken from the borrower and handed back — or worse, taken and kept. So every
+/// entry point asks this question first, while refusing is still free.
+///
+/// The rule it adds over "is the loan active": a **settling loan with no
+/// arrears left is not payable**. Without this, a borrower whose default was
+/// covered entirely by their own seized deposit could pay the reopened loan
+/// again and again — `settle` finds nothing owed to guarantors or the reserve,
+/// so it routes the whole payment straight back into their own deposit lots.
+/// Nothing is stolen and nothing is lost, but the borrower is charged by PayPal
+/// for a round trip that settles nothing, and the loan never closes.
+///
+/// Deliberately NOT the authority. The handler still re-checks under the row
+/// lock, and if the arrears were cleared by a concurrent payment in between, it
+/// accepts the money and returns it as a deposit lot rather than rejecting a
+/// capture that already happened. Refuse early, never refuse late.
+pub(crate) struct Payable {
+    /// True when this is a reopened default being settled rather than an
+    /// ordinary running loan.
+    pub settling: bool,
+    /// What is still owed on a settlement; 0 for an ordinary loan, which pays
+    /// against its schedule instead.
+    pub arrears: i64,
+}
+
+pub(crate) async fn check_payable(
+    pool: &PgPool,
+    loan_id: Uuid,
+    user_id: Uuid,
+) -> Result<Payable, E> {
+    let loan: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT borrower_id, status FROM public.loans WHERE id = $1",
+    )
+    .bind(loan_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| db_err(e, "loan payable"))?;
+    let (borrower_id, status) = loan.ok_or((StatusCode::NOT_FOUND, "Loan not found"))?;
+    if borrower_id != user_id {
+        return Err((StatusCode::NOT_FOUND, "Loan not found"));
+    }
+
+    if status == "active" {
+        return Ok(Payable { settling: false, arrears: 0 });
+    }
+    if status != "reconciling" {
+        return Err((StatusCode::CONFLICT, "This loan is not accepting payments"));
+    }
+
+    let owed: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount - refunded), 0)::BIGINT
+           FROM public.loan_recoveries
+          WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'reserve_fund')",
+    )
+    .bind(loan_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| db_err(e, "loan arrears"))?;
+
+    if owed <= 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "There's nothing left to settle on this loan — an administrator just needs to confirm it",
+        ));
+    }
+
+    Ok(Payable { settling: true, arrears: owed })
 }
 
 // ===========================================================================
@@ -134,18 +243,35 @@ pub async fn reopen(
 
     // The loan row serializes two admins clicking at once; the loser sees the
     // status has moved and is refused.
-    let loan: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT borrower_id, status FROM public.loans WHERE id = $1 FOR UPDATE",
+    let loan: Option<(Uuid, String, Option<i64>)> = sqlx::query_as(
+        "SELECT borrower_id, status, closed_at FROM public.loans WHERE id = $1 FOR UPDATE",
     )
     .bind(p.loan_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| db_err(e, "lock loan"))?;
-    let (borrower_id, status) = loan.ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
+    let (borrower_id, status, closed_at) = loan.ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
     if status != "defaulted" {
         return Err((
             StatusCode::CONFLICT,
             "Only a defaulted loan can be reopened for settlement",
+        ));
+    }
+
+    // Recovery has to have finished first, and `closed_at` is what says it did:
+    // `recovery::advance` sets it only when the waterfall runs to the end, and
+    // returns early — leaving it NULL — when a locked XLM position is still
+    // waiting for the vault admin to sign the seizure.
+    //
+    // This matters because arrears is computed from `loan_recoveries`. Until
+    // the waterfall finishes, those rows do not yet say who ultimately carried
+    // the debt: the guarantors may still be charged, or the seized coins may
+    // cover everything. Reopening now would quote the borrower a number that
+    // changes underneath them.
+    if closed_at.is_none() {
+        return Err((
+            StatusCode::CONFLICT,
+            "This default is still being recovered — sign the queued vault movements first, then reopen it",
         ));
     }
 
@@ -183,20 +309,15 @@ pub async fn reopen(
     .await
     .map_err(|e| db_err(e, "reopen loan"))?;
 
-    // The installments the default called in are scheduled again — 'scheduled'
-    // is the status these rows carried before the default stamped them, and the
-    // only other value the column takes for an unpaid row ('late' is set by
-    // age, not here). A row already 'paid' is untouched: the borrower did pay
-    // it, and neither defaulting nor reopening rewrites that.
-    sqlx::query(
-        "UPDATE public.loan_schedule SET status = 'scheduled'
-          WHERE loan_id = $1 AND status = 'defaulted'",
-    )
-    .bind(p.loan_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| db_err(e, "reopen schedule"))?;
-
+    // The schedule is deliberately left exactly as the default stamped it.
+    //
+    // An earlier draft reset those rows to 'scheduled' so that `repay` would
+    // allocate against them — which quietly asked the borrower for every
+    // remaining month, including installments that were never due and interest
+    // nobody had earned. A settlement is not a resumed loan: the debt was
+    // closed out by the waterfall, and what is owed now is measured in
+    // `loan_recoveries`, not in months. Rewriting the schedule would also erase
+    // a true fact about this loan — those installments *were* defaulted.
     let owed = arrears(&mut tx, p.loan_id).await?;
 
     // No postings: reopening moves no money. Everything that moves is posted by
@@ -233,7 +354,7 @@ pub async fn reopen(
 
 /// How a settlement payment was distributed. Returned to `repay` so it can
 /// build the ledger postings and tell the borrower what happened.
-pub(super) struct Settlement {
+pub(in crate::api::lending) struct Settlement {
     /// Refunded to guarantors who were charged, total.
     pub to_guarantors: i64,
     /// Returned to the pool's reserve.
@@ -252,7 +373,7 @@ pub(super) struct Settlement {
 /// Returns the split; the caller posts it. Keeping the postings in one place
 /// (`repay`) rather than committing an event here is what stops a settlement
 /// from being recorded as two half-events if either part fails.
-pub(super) async fn settle(
+pub(in crate::api::lending) async fn settle(
     tx: &mut Transaction<'_, Postgres>,
     loan_id: Uuid,
     borrower_id: Uuid,
@@ -457,7 +578,7 @@ pub async fn mark_paid(
     // list because a reopened loan may still have savers' lots funding it —
     // recovery released those when it settled, but a loan reopened before that
     // point can reach here with them outstanding.
-    super::lots::release_loan_lots(&mut tx, p.loan_id, &["collateral", "pledged", "lent"]).await?;
+    crate::api::lending::lots::release_loan_lots(&mut tx, p.loan_id, &["collateral", "pledged", "lent"]).await?;
 
     // The credit consequence, returned. Exactly the penalty a default cost, no
     // more: settling late is not the same as paying on time, so this restores

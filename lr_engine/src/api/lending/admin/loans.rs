@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::shared::db_err;
+use crate::api::lending::shared::db_err;
 use crate::api::users::shared::{E, require_admin};
 
 fn default_page() -> i64 {
@@ -60,6 +60,11 @@ pub struct AdminRecovery {
     pub source: String,
     pub username: Option<String>,
     pub amount: i64,
+    /// How much of this step a settlement has given back so far (033). Only
+    /// the guarantor and reserve steps can be refunded — the borrower's own
+    /// seized assets are not returned, because they paid the borrower's own
+    /// debt.
+    pub refunded: i64,
     pub stroops: Option<i64>,
     pub created_at: i64,
 }
@@ -132,7 +137,7 @@ type LoanRow = (Uuid, String, String, i64, i64, i32, i16, String, Option<i64>, O
 /// loan_id, installment, due_at, principal_due, interest_due, principal_paid, interest_paid, status
 type ScheduleRow = (Uuid, i16, i64, i64, i64, i64, i64, String);
 /// loan_id, step, source, username, amount, stroops, created_at
-type RecoveryRow = (Uuid, i16, String, Option<String>, i64, Option<i64>, i64);
+type RecoveryRow = (Uuid, i16, String, Option<String>, i64, Option<i64>, i64, i64);
 /// loan_id, wallet_address, required_stroops, locked_stroops, status, lock_tx_hash, locked_at
 type CollateralRow = (Uuid, String, i64, i64, String, Option<String>, Option<i64>);
 /// loan_id, action, status, tx_hash, at, moved_stroops, value_centavos
@@ -331,7 +336,8 @@ pub async fn list(
     .map_err(|e| db_err(e, "admin payments"))?;
 
     let recoveries: Vec<RecoveryRow> = sqlx::query_as(
-        "SELECT r.loan_id, r.step, r.source, u.username, r.amount, r.stroops, r.created_at
+        "SELECT r.loan_id, r.step, r.source, u.username, r.amount, r.stroops, r.created_at,
+                r.refunded
            FROM public.loan_recoveries r
            LEFT JOIN public.users u ON u.id = r.user_id
           WHERE r.loan_id = ANY($1)
@@ -369,21 +375,27 @@ pub async fn list(
                 recoveries: recoveries
                     .iter()
                     .filter(|r| r.0 == id)
-                    .map(|(_, step, source, username, amount, stroops, created_at)| AdminRecovery {
+                    .map(|(_, step, source, username, amount, stroops, created_at, refunded)| AdminRecovery {
                         step: *step,
                         source: source.clone(),
                         username: username.clone(),
                         amount: *amount,
+                        refunded: *refunded,
                         stroops: *stroops,
                         created_at: *created_at,
                     })
                     .collect(),
-                arrears: schedule
+                // What a settling borrower still owes, and deliberately NOT the
+                // unpaid schedule: the waterfall already settled this debt out
+                // of somebody's money, so what is left to repay is what the
+                // parties who are not the borrower are still short. Charging
+                // the schedule would bill for months that were never due and
+                // for the borrower's own seized deposit a second time.
+                // `reconcile::arrears` is the same sum against the same rows.
+                arrears: recoveries
                     .iter()
-                    .filter(|r| r.0 == id && r.7 != "paid")
-                    .map(|(_, _, _, principal_due, interest_due, principal_paid, interest_paid, _)| {
-                        (principal_due - principal_paid).max(0) + (interest_due - interest_paid).max(0)
-                    })
+                    .filter(|r| r.0 == id && (r.2 == "guarantor_deposit" || r.2 == "reserve_fund"))
+                    .map(|r| r.4 - r.7)
                     .sum(),
                 id, borrower, product, principal, principal_outstanding, rate_bps,
                 term_months, status, disbursed_at, defaulted_at, closed_at,

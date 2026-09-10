@@ -6,6 +6,12 @@ import type { Loan } from './types'
 const API = import.meta.env.VITE_API_URL ?? ''
 
 /**
+ * The reference a borrower presents to say "I paid" — the repayment twin of
+ * `DepositRef`. Exactly one of the two, and which one it is names the rail.
+ */
+export type RepayRef = { order_id: string } | { session_id: string }
+
+/**
  * The caller's loans with their engine-pinned schedules, plus repayment
  * (PayPal order id in, engine allocates interest-then-principal out).
  * `use`-prefixed per this repo's React Compiler requirement.
@@ -37,8 +43,16 @@ export default function useLoans() {
         void refresh()
     }, [refresh])
 
-    /** Called from PayPal's onApprove with the approved order id. */
-    const repay = useCallback(async (loanId: string, orderId: string) => {
+    /**
+     * Applies a verified payment to a loan.
+     *
+     * Takes the same `PaymentRef` shape the deposit path does — a PayPal order
+     * id from the Buttons flow, or a Stripe Checkout Session id from the
+     * redirect back. The engine accepts exactly one of the two and asks that
+     * provider what was really paid, so which rail it came from changes
+     * nothing about how the money is verified.
+     */
+    const repay = useCallback(async (loanId: string, ref: RepayRef) => {
         setRepayingId(loanId)
         try {
             const res = await fetch(`${API}/loans/repay`, {
@@ -48,7 +62,7 @@ export default function useLoans() {
                     'Content-Type': 'application/json',
                     ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
                 },
-                body: JSON.stringify({ loan_id: loanId, order_id: orderId }),
+                body: JSON.stringify({ loan_id: loanId, ...ref }),
             })
             if (!res.ok) throw new Error(await res.text() || 'Unable to apply your payment')
             const data = await res.json() as { message: string }

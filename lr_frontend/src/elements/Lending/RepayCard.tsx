@@ -3,11 +3,15 @@ import { useNavigate } from 'react-router-dom'
 import { ClipboardList, CircleCheckBig, Wallet, Check } from 'lucide-react'
 import { formatDate, pesos, rate } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
+import type { RepayRef } from '../../functions/Lending/useLoans'
 import { RepayCardBody } from './PaySkeleton'
 
 // Lazy so the page shell (and the summary/history cards next to it) paint
 // before the PayPal SDK bootstrap loads.
 const PayPalButton = lazy(() => import('./PayPalButton'))
+// No SDK behind this one — it asks the engine for a Checkout Session and
+// navigates — so it doesn't need the lazy treatment PayPal gets.
+import StripeButton from './StripeButton'
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',
@@ -50,7 +54,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
     loans: Loan[]
     loading: boolean
     error: boolean
-    repay: (loanId: string, orderId: string) => Promise<boolean>
+    repay: (loanId: string, ref: RepayRef) => Promise<boolean>
     repayingId: string | null
     onPaid: () => void
 }) {
@@ -62,16 +66,19 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
     const activeLoan = loans.find(l => l.status === 'active' || l.status === 'reconciling') ?? null
     const settling = activeLoan?.status === 'reconciling'
     const next = activeLoan ? nextInstallment(activeLoan) : null
-    /** Everything still unpaid, not just this month's installment — the figure
-     *  a settling borrower is actually working down. */
-    const arrears = activeLoan
-        ? activeLoan.schedule.reduce(
-            (sum, row) => sum
-                + Math.max(row.principal_due - row.principal_paid, 0)
-                + Math.max(row.interest_due - row.interest_paid, 0),
-            0,
-        )
-        : 0
+    /** What a settling borrower still owes. The engine's number, never summed
+     *  from the schedule here: settling doesn't mean paying every remaining
+     *  month over again — the recovery waterfall already took what it could
+     *  from the borrower's own deposit, and only what other people are still
+     *  short is left to repay (033). The schedule can't answer that. */
+    const arrears = activeLoan?.arrears ?? 0
+    /** What the pay button charges, and — at 0 — whether it appears at all.
+     *  A settling loan pays its arrears; an ordinary one pays its next
+     *  installment. Driving the settlement off the schedule is what let a
+     *  fully-settled loan keep taking payments: the schedule still shows the
+     *  defaulted month as due, and always will, because settling deliberately
+     *  doesn't rewrite it. */
+    const payNow = settling ? arrears : (next?.total ?? 0)
 
     return (
         <section className='lending-card lending-card-repay'>
@@ -112,34 +119,56 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                         <p className='lending-muted'>
                             This loan defaulted and has been reopened so you can settle it.
                             {arrears > 0
-                                ? <> <b>{pesos(arrears)}</b> is outstanding — you can pay it in parts.</>
-                                : <> Your arrears are cleared; an administrator will confirm the settlement.</>}
+                                ? <> You owe <b>{pesos(arrears)}</b> — not the whole loan: what your own
+                                    deposit already covered when it defaulted isn’t charged again. You can pay
+                                    it in parts.</>
+                                : <> Nothing is outstanding; an administrator will confirm the settlement.</>}
                             {' '}Once it’s confirmed, the credit penalty is returned and you can apply again.
                         </p>
                     )}
 
                     <div className='lending-funds-grid'>
-                        <div className='lending-funds-tile'>
-                            <span className='lending-stat-label'>Outstanding</span>
-                            <span className='lending-stat-value'>{pesos(activeLoan.principal_outstanding)}</span>
-                        </div>
-                        {next && (
-                            <div className='lending-funds-tile is-highlight'>
-                                <span className='lending-stat-label'>Installment {next.installment} due</span>
-                                <span className='lending-stat-value'>{pesos(next.total)}</span>
+                        {/* Not shown while settling: recovery wrote
+                            `principal_outstanding` down to zero when the loan
+                            defaulted, so this tile reads ₱0.00 next to a real
+                            amount still to pay — two numbers that contradict
+                            each other. "Left to settle" is the honest one. */}
+                        {!settling && (
+                            <div className='lending-funds-tile'>
+                                <span className='lending-stat-label'>Outstanding</span>
+                                <span className='lending-stat-value'>{pesos(activeLoan.principal_outstanding)}</span>
                             </div>
                         )}
-                        {next && (
-                            <>
-                                <div className='lending-funds-tile'>
-                                    <span className='lending-stat-label'>Principal</span>
-                                    <span className='lending-stat-value'>{pesos(next.principal)}</span>
+                        {/* A settlement is not an installment. Its schedule was
+                            left exactly as the default stamped it, so the
+                            "next installment" tiles below would keep pointing
+                            at a defaulted month forever — which is what made
+                            this card offer to charge for it over and over. A
+                            settling loan gets one tile: what is left to pay. */}
+                        {settling ? (
+                            arrears > 0 && (
+                                <div className='lending-funds-tile is-highlight'>
+                                    <span className='lending-stat-label'>Left to settle</span>
+                                    <span className='lending-stat-value'>{pesos(arrears)}</span>
                                 </div>
-                                <div className='lending-funds-tile'>
-                                    <span className='lending-stat-label'>Interest</span>
-                                    <span className='lending-stat-value'>{pesos(next.interest)}</span>
-                                </div>
-                            </>
+                            )
+                        ) : (
+                            next && (
+                                <>
+                                    <div className='lending-funds-tile is-highlight'>
+                                        <span className='lending-stat-label'>Installment {next.installment} due</span>
+                                        <span className='lending-stat-value'>{pesos(next.total)}</span>
+                                    </div>
+                                    <div className='lending-funds-tile'>
+                                        <span className='lending-stat-label'>Principal</span>
+                                        <span className='lending-stat-value'>{pesos(next.principal)}</span>
+                                    </div>
+                                    <div className='lending-funds-tile'>
+                                        <span className='lending-stat-label'>Interest</span>
+                                        <span className='lending-stat-value'>{pesos(next.interest)}</span>
+                                    </div>
+                                </>
+                            )
                         )}
                     </div>
 
@@ -147,7 +176,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                         <p className='lending-muted'>Disbursed {formatDate(activeLoan.disbursed_at)}</p>
                     )}
 
-                    {next ? (
+                    {payNow > 0 ? (
                         <>
                             <label className='lending-label'>Payment method</label>
                             {data.params.paypal_ready && (
@@ -162,16 +191,32 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                             )}
                             <Suspense fallback={<p className='lending-muted'>Loading payment…</p>}>
                                 <PayPalButton
-                                    amountCentavos={next.total}
+                                    amountCentavos={payNow}
                                     purpose='repay'
                                     loanId={activeLoan.id}
                                     onApproved={async orderId => {
-                                        if (await repay(activeLoan.id, orderId)) onPaid()
+                                        if (await repay(activeLoan.id, { order_id: orderId })) onPaid()
                                     }}
                                 />
                             </Suspense>
+                            {/* The card rail. Same money, same books — a
+                                second way to pay for borrowers without PayPal,
+                                and the one the deposit form has offered since
+                                the Stripe rail landed. This card was the last
+                                place still PayPal-only. */}
+                            <StripeButton
+                                amountCentavos={payNow}
+                                purpose='repay'
+                                loanId={activeLoan.id}
+                                label={`Pay ${pesos(payNow)} by card`}
+                            />
                             {repayingId === activeLoan.id && <p className='lending-muted'>Applying your payment…</p>}
                         </>
+                    ) : settling ? (
+                        <p className='lending-muted'>
+                            Nothing left to pay — an administrator will confirm the settlement and restore
+                            your standing. You don’t need to do anything else.
+                        </p>
                     ) : (
                         <p className='lending-muted'>Nothing due on this loan right now.</p>
                     )}

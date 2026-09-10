@@ -94,6 +94,13 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/loans/apply",
             post(lending::apply).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // The borrower withdrawing their own application (035). Refused once a
+        // guarantor has accepted, or once the coins are in the vault — see
+        // `lending::cancel` for why those two are different kinds of refusal.
+        .route(
+            "/loans/cancel",
+            post(lending::loan_cancel).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route(
             "/loans/repay",
             post(lending::repay).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),

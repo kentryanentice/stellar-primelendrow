@@ -15,8 +15,8 @@ use axum::{Extension, Json, http::{HeaderMap, StatusCode}};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use super::ledger::{EventDraft, commit_event};
-use super::shared::{db_err, ledger_err};
+use crate::api::lending::ledger::{EventDraft, commit_event};
+use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
 #[derive(Deserialize)]

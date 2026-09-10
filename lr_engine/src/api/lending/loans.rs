@@ -22,10 +22,12 @@ use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
 /// An `xlm_collateral` row in SELECT order: wallet_address, required_stroops,
-/// locked_stroops, status, the three pinned price legs with their timestamp,
-/// and the ratio the position was struck at.
+/// principal_centavos, locked_stroops, status, the three pinned price legs with
+/// their timestamp, and the ratio the position was struck at.
 type PositionRow = (
     String,
+    i64,
+    // principal_centavos — what the coins stand behind (034)
     i64,
     i64,
     String,
@@ -51,6 +53,12 @@ pub struct ScheduleView {
 pub struct CollateralView {
     pub wallet_address: String,
     pub required_stroops: i64,
+    /// The principal these coins stand behind — the whole loan on an
+    /// `xlm_collateral` product, the borrower's coin share on a guarantor loan.
+    /// The vault measures its ratio against THIS, so a resumed lock submits it
+    /// rather than `loan.principal`; submitting the principal is what made the
+    /// vault refuse every guarantor coin leg (034).
+    pub principal_centavos: i64,
     pub locked_stroops: i64,
     pub status: String,
     /// Collateral value as % of outstanding principal at the live rate.
@@ -89,6 +97,16 @@ pub struct LoanView {
     pub term_months: i16,
     pub status: String,
     pub principal_outstanding: i64,
+    /// What a `reconciling` loan still needs before it can be marked settled
+    /// (033), in centavos; 0 for every other status.
+    ///
+    /// Served by the engine rather than summed in the browser, and that is not
+    /// just house style — it cannot be derived from anything else in this
+    /// response. It is the money guarantors and the reserve are still short
+    /// after the default, which lives in `loan_recoveries`. Adding up the
+    /// unpaid schedule would bill the borrower for months that were never due
+    /// and for their own seized deposit a second time.
+    pub arrears: i64,
     pub disbursed_at: Option<i64>,
     pub closed_at: Option<i64>,
     pub created_at: i64,
@@ -129,7 +147,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     // product test only ever hid rows that exist.
     let collateral = {
         let row: Option<PositionRow> = sqlx::query_as(
-            "SELECT wallet_address, required_stroops, locked_stroops, status,
+            "SELECT wallet_address, required_stroops, principal_centavos, locked_stroops, status,
                     priced_centavos_per_xlm, priced_at,
                     priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps
                FROM public.xlm_collateral WHERE loan_id = $1",
@@ -138,7 +156,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
         .fetch_optional(pool)
         .await
         .map_err(|e| db_err(e, "collateral"))?;
-        row.map(|(wallet_address, required_stroops, locked_stroops, c_status, priced_centavos_per_xlm, priced_at, priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)| {
+        row.map(|(wallet_address, required_stroops, principal_centavos, locked_stroops, c_status, priced_centavos_per_xlm, priced_at, priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)| {
             // Health = collateral value / outstanding, at the live rate.
             // Display + liquidation watch; the seize decision itself is an
             // admin action against the vault, never automatic here.
@@ -152,6 +170,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
             CollateralView {
                 wallet_address,
                 required_stroops,
+                principal_centavos,
                 locked_stroops,
                 status: c_status,
                 health_pct,
@@ -177,6 +196,23 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
     .await
     .map_err(|e| db_err(e, "guarantors"))?;
 
+    // Only a loan being settled has arrears; skipping the query for every
+    // other status keeps the common list read at the number of queries it
+    // already made.
+    let arrears: i64 = if status == "reconciling" {
+        sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount - refunded), 0)::BIGINT
+               FROM public.loan_recoveries
+              WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'reserve_fund')",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| db_err(e, "loan arrears"))?
+    } else {
+        0
+    };
+
     Ok(LoanView {
         id,
         product,
@@ -185,6 +221,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
         term_months,
         status,
         principal_outstanding: outstanding,
+        arrears,
         disbursed_at,
         closed_at,
         created_at,

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::api::lending::shared::{db_err, validate_centavos};
+use crate::api::lending::shared::validate_centavos;
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::stripe;
 
@@ -56,7 +56,7 @@ pub async fn start(
     Json(p): Json<CheckoutInput>,
 ) -> Result<Json<CheckoutResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
-    let amount = validate_centavos(p.amount)?;
+    let mut amount = validate_centavos(p.amount)?;
 
     if !stripe::is_configured() {
         return Err((
@@ -85,24 +85,23 @@ pub async fn start(
             ))?;
 
             // Checked before the member pays, not after. The authoritative
-            // check still happens in `repay`, under the loan's row lock —
-            // this one exists so nobody pays into a loan that can't accept it.
-            let loan: Option<(Uuid, String)> = sqlx::query_as(
-                "SELECT borrower_id, status FROM public.loans WHERE id = $1",
-            )
-            .bind(loan_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| db_err(e, "loan lookup"))?;
-            let (borrower_id, status) = loan.ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
-            if borrower_id != user_id {
-                return Err((StatusCode::NOT_FOUND, "No such loan"));
-            }
-            if status != "active" {
-                return Err((
-                    StatusCode::CONFLICT,
-                    "This loan isn't accepting payments right now",
-                ));
+            // check still happens in `repay`, under the loan's row lock — this
+            // one exists so nobody is sent to a payment page for a loan that
+            // can't accept the money.
+            //
+            // Shared with the PayPal path rather than reimplemented: this used
+            // to test `status != "active"` on its own, which refused a
+            // *reopened default* outright and left settling borrowers unable to
+            // pay by card at all.
+            let payable = crate::api::lending::check_loan_payable(&pool, loan_id, user_id).await?;
+
+            // A settlement is quoted, not chosen. Paying more than the arrears
+            // does no harm — `settle` hands the excess straight back as a
+            // deposit lot — but sending someone to a payment page for a number
+            // larger than they owe, then returning most of it, is a confusing
+            // way to take money. Clamp to what is actually outstanding.
+            if payable.settling {
+                amount = amount.min(payable.arrears);
             }
 
             (

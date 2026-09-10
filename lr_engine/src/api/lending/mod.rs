@@ -8,15 +8,14 @@
 //!   ledger   — the ONE writer + balance reads (D9)
 //!   lots     — badge moves on deposit lots, always under row locks
 //!   shared   — error mapping + the single disburse routine
+//!   admin    — the operator's endpoints, all `require_admin` (see admin/mod)
 //!   the rest — one file per endpoint, same as api::wallets
 
-mod actions;
-mod admin;
-mod admin_loans;
+pub mod admin;
 mod apply;
+mod cancel;
 mod collateral;
 mod custody;
-mod default_loan;
 mod deposit;
 mod deposits_list;
 mod domain;
@@ -31,18 +30,28 @@ mod pool;
 mod pricing;
 mod quote;
 mod rails;
-mod reconcile;
 mod recovery;
 mod repay;
 pub(crate) mod shared;
 mod transactions;
 mod withdraw;
 
-pub use actions::{confirm as action_confirm, list as actions_list, prepare as action_prepare};
-pub use admin::set_fx_rate;
-pub use admin_loans::list as admin_loans;
-pub use default_loan::declare as loan_default;
+// The operator's surface, re-exported flat so `routes::api_routes` keeps
+// naming handlers the way it always has — the folder is for the people reading
+// the code, not a reshuffle of the route table.
+pub use admin::actions::{confirm as action_confirm, list as actions_list, prepare as action_prepare};
+pub use admin::default::declare as loan_default;
+pub use admin::fx::set_fx_rate;
+pub use admin::loans::list as admin_loans;
+// Settling a defaulted loan (033): reopening it for payment and accepting it as
+// settled are two separate admin decisions, so they are two separate handlers.
+pub use admin::reconcile::{mark_paid as loan_mark_paid, reopen as loan_reopen};
+// "May this loan take a payment right now?" — asked by every entry point
+// BEFORE the provider is charged, so a refusal costs the borrower nothing.
+// Exported because the Stripe checkout starts a payment from outside `lending`.
+pub(crate) use admin::reconcile::check_payable as check_loan_payable;
 pub use apply::apply;
+pub use cancel::cancel as loan_cancel;
 pub use collateral::confirm as collateral_confirm;
 pub use custody::record as collateral_record;
 pub use deposit::deposit;
@@ -62,9 +71,6 @@ pub(crate) use payout::submit_to as submit_payout;
 pub use pool::summary as pool_summary;
 pub use quote::quote as loan_quote;
 pub use repay::repay;
-// Settling a defaulted loan (033): reopening it for payment and accepting it as
-// settled are two separate admin decisions, so they are two separate handlers.
-pub use reconcile::{mark_paid as loan_mark_paid, reopen as loan_reopen};
 pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
 // The sweep calls this whenever a payout reaches a terminal state it never

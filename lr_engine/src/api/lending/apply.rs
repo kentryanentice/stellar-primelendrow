@@ -74,6 +74,11 @@ pub struct ApplyResponse {
     pub principal: i64,
     /// xlm_collateral: what the wallet must lock, and where.
     pub required_stroops: Option<i64>,
+    /// The principal the coins stand behind, which is NOT always the loan's
+    /// principal — a guarantor loan's coin leg covers only the borrower's
+    /// share. The vault measures its ratio against this, so the lock must
+    /// submit it rather than `principal` (034).
+    pub collateral_principal_centavos: Option<i64>,
     pub collateral_contract: Option<String>,
     /// xlm_collateral: the agreed rate that requirement was struck at, when
     /// the feeds were read, and how they were reconciled — pinned, so the
@@ -105,6 +110,8 @@ pub struct ApplyResponse {
 /// What the borrower must lock on chain, and the pinned numbers the wallet
 /// submits with the lock.
 struct XlmLeg {
+    /// What this leg stands behind; echoed to the client for the lock.
+    covered_centavos: i64,
     required_stroops: i64,
     contract: String,
     ratio_bps: i32,
@@ -181,8 +188,9 @@ async fn open_xlm_position(
         "INSERT INTO public.xlm_collateral
             (loan_id, user_id, wallet_address, required_stroops, status,
              priced_centavos_per_xlm, priced_at,
-             priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps)
-         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
+             priced_usd_per_xlm_e8, priced_usd_php_centavos, collateral_ratio_bps,
+             principal_centavos)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10)
          RETURNING id",
     )
     .bind(loan_id)
@@ -194,6 +202,12 @@ async fn open_xlm_position(
     .bind(usd_per_xlm_e8)
     .bind(usd_php_centavos)
     .bind(ratio_bps)
+    // What these coins stand behind — the whole loan on an `xlm_collateral`
+    // product, the borrower's coin share on a guarantor loan. Recorded so the
+    // lock can submit the same number `required_stroops` was sized against;
+    // submitting the full principal for a guarantor leg is what made the vault
+    // refuse every one of them (034).
+    .bind(covered_centavos)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| db_err(e, "insert collateral"))?;
@@ -252,7 +266,14 @@ async fn open_xlm_position(
     .await
     .map_err(|e| ledger_err(e, "collateral_priced"))?;
 
-    Ok(XlmLeg { required_stroops, contract, ratio_bps, usd_per_xlm_e8, usd_php_centavos })
+    Ok(XlmLeg {
+        covered_centavos,
+        required_stroops,
+        contract,
+        ratio_bps,
+        usd_per_xlm_e8,
+        usd_php_centavos,
+    })
 }
 
 pub async fn apply(
@@ -439,6 +460,7 @@ pub async fn apply(
                 rate_bps: rate,
                 principal: amount,
                 required_stroops: None,
+                collateral_principal_centavos: None,
                 collateral_contract: None,
                 priced_centavos_per_xlm: None,
                 priced_at: None,
@@ -467,6 +489,7 @@ pub async fn apply(
                 rate_bps: rate,
                 principal: amount,
                 required_stroops: Some(leg.required_stroops),
+                collateral_principal_centavos: Some(leg.covered_centavos),
                 collateral_contract: Some(leg.contract),
                 priced_centavos_per_xlm: Some(priced.centavos_per_xlm),
                 priced_at: Some(priced.as_of),
@@ -574,6 +597,7 @@ pub async fn apply(
                 rate_bps: rate,
                 principal: amount,
                 required_stroops: xlm_leg.as_ref().map(|l| l.required_stroops),
+                collateral_principal_centavos: xlm_leg.as_ref().map(|l| l.covered_centavos),
                 collateral_contract: xlm_leg.as_ref().map(|l| l.contract.clone()),
                 priced_centavos_per_xlm: priced.as_ref().map(|q| q.centavos_per_xlm),
                 priced_at: priced.as_ref().map(|q| q.as_of),
