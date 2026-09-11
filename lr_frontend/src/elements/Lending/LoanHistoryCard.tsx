@@ -47,11 +47,18 @@ function LoanHistoryCard({ data, history, onChanged }: {
      *  the borrower's deposit back but ends the application for good, so it
      *  asks first — the same one-step confirm a default gets in the console. */
     const [confirmCancel, setConfirmCancel] = useState<Loan | null>(null)
-    /** The open row's custody record, fetched only when it's actually opened. */
+    /** The open row's custody record, fetched only when it's actually opened.
+     *
+     *  Keyed off the POSITION, not the product. Since the 50% rule a guarantor
+     *  loan can carry part of the borrower's own half in coins, and that
+     *  position has transaction hashes and price evidence exactly like a pure
+     *  collateral loan's — gating on the product meant a guarantor borrower
+     *  could lock XLM on chain and then never be shown a single record of it.
+     *  The engine's own query fixed this same mistake (`loans.rs`), and the
+     *  render below has always keyed off `loan.collateral`; only the fetch
+     *  was still asking the wrong question. */
     const openLoan = loans.find(l => l.id === openId)
-    const custody = useCollateralRecord(
-        openLoan?.product === 'xlm_collateral' ? openLoan.id : null,
-    )
+    const custody = useCollateralRecord(openLoan?.collateral ? openLoan.id : null)
     const { forLoan, requestPayout, requestingId } = usePayouts()
 
     const resumeLock = async (loan: Loan) => {

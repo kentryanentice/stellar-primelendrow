@@ -3,11 +3,12 @@ import * as ort from 'onnxruntime-web/wasm'
 /**
  * Shared ONNX Runtime setup for the PrimeLendRow OCR engine.
  *
- * The `onnxruntime-web/wasm` entry is the CPU-only build with the WASM binary
- * inlined, so nothing has to be copied into /public or pointed at by
- * `env.wasm.wasmPaths` — importing it is the whole setup. Threads stay off
- * because SharedArrayBuffer needs COOP/COEP headers the dev server doesn't
- * send; a threaded build would silently fall back anyway.
+ * The `onnxruntime-web/wasm` entry is the CPU-only build with its JS glue
+ * inlined; the `.wasm` binary itself is emitted by Vite as a hashed asset and
+ * located automatically, so nothing has to be copied into /public or pointed
+ * at by `env.wasm.wasmPaths`. Threads stay off because SharedArrayBuffer needs
+ * COOP/COEP headers the dev server doesn't send; a threaded build would
+ * silently fall back anyway.
  *
  * `proxy` moves session creation and inference into a worker. It is not a
  * performance tweak — single-threaded WASM inference is seconds of solid
@@ -15,6 +16,12 @@ import * as ort from 'onnxruntime-web/wasm'
  * sweep stops, toasts don't paint, nothing responds. Tesseract never showed
  * this because it worker-threaded internally. Keep this on; the CSP already
  * allows the worker via `worker-src 'self' blob:`.
+ *
+ * The proxy worker is started from ONNX Runtime's own script URL, so in a
+ * production build that script must be a chunk containing nothing but the
+ * runtime — vite.config.ts pins it to one. If it gets merged back into a chunk
+ * that imports the app entry, the worker dies on `document` at load and only
+ * the deployed build fails ("no available backend found").
  */
 ort.env.wasm.numThreads = 1
 ort.env.wasm.proxy = true

@@ -28,6 +28,7 @@ use chrono::Utc;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use super::domain;
 use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
 use super::shared::{db_err, ledger_err};
@@ -203,6 +204,120 @@ pub async fn record_seizure(
     Ok(())
 }
 
+/// Shares a claim across the accepted guarantors in proportion to what each
+/// pledged, and seizes each one's own lots up to their own share.
+///
+/// Returns how much was actually recovered, which can be less than `shortfall`
+/// when the pledges no longer cover it — the caller falls through to the
+/// reserve fund for the rest, exactly as it did before.
+///
+/// **Two passes, for a reason.** The first hands every guarantor their
+/// proportional share. A share can exceed what that guarantor still has frozen
+/// (a pledge partially consumed by an earlier claim on the same loan, or lots
+/// that shrank), and the shortfall it leaves has to land somewhere. The second
+/// pass redistributes that deficit across the guarantors who had room left,
+/// again in proportion, and again capped at what each actually has. Anything
+/// still uncovered is the pool's, not some other guarantor's — nobody is ever
+/// charged beyond their own pledge to make up for someone else.
+///
+/// Two passes rather than a loop to exhaustion: one redistribution settles
+/// every realistic case, and an unbounded loop over money is a worse thing to
+/// own than a centavo left for the reserve fund to absorb.
+async fn claim_pro_rata(
+    tx: &mut Transaction<'_, Postgres>,
+    loan_id: Uuid,
+    shortfall: i64,
+    actor_id: Uuid,
+) -> Result<i64, E> {
+    // The pledges, as accepted. `pledge_amount` is what each guarantor agreed
+    // to — the weight the claim is shared by — and is deliberately read from
+    // the agreement rather than from whatever their lots currently hold.
+    let pledges: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT user_id, pledge_amount FROM public.loan_guarantors
+          WHERE loan_id = $1 AND status = 'accepted'
+          ORDER BY id",
+    )
+    .bind(loan_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "accepted pledges"))?;
+    if pledges.is_empty() {
+        return Ok(0);
+    }
+
+    // Every pledged lot on this loan, locked once and then split by owner, so
+    // the whole claim runs under one set of row locks.
+    let pledged = lots::lock_backing_lots(tx, loan_id, "pledged").await?;
+
+    let weights: Vec<i64> = pledges.iter().map(|(_, amount)| *amount).collect();
+    let shares = domain::apportion(shortfall, &weights);
+
+    // Pass 1: what each guarantor's own lots can actually cover.
+    let mut charged: Vec<i64> = vec![0; pledges.len()];
+    let mut recovered = 0i64;
+    for (i, (user_id, _)) in pledges.iter().enumerate() {
+        let held: i64 = pledged.iter().filter(|l| l.user_id == *user_id).map(|l| l.amount).sum();
+        charged[i] = shares[i].min(held);
+        recovered += charged[i];
+    }
+
+    // Pass 2: redistribute what the under-covered guarantors could not pay,
+    // across whoever still has room, in proportion to their pledges again.
+    let deficit = shortfall - recovered;
+    if deficit > 0 {
+        let headroom: Vec<i64> = pledges
+            .iter()
+            .enumerate()
+            .map(|(i, (user_id, _))| {
+                let held: i64 =
+                    pledged.iter().filter(|l| l.user_id == *user_id).map(|l| l.amount).sum();
+                (held - charged[i]).max(0)
+            })
+            .collect();
+        // Weighted by pledge, but only among those with room — a guarantor
+        // already at their limit gets a zero weight rather than a share they
+        // cannot pay.
+        let second_weights: Vec<i64> = weights
+            .iter()
+            .zip(&headroom)
+            .map(|(w, room)| if *room > 0 { *w } else { 0 })
+            .collect();
+        let extra = domain::apportion(deficit, &second_weights);
+        for i in 0..pledges.len() {
+            charged[i] += extra[i].min(headroom[i]);
+        }
+    }
+
+    // Now take it. Each guarantor's own lots, up to their own charge — the
+    // per-user limit is what makes this pro-rata rather than first-come.
+    let mut taken_total = 0i64;
+    for (i, (user_id, _)) in pledges.iter().enumerate() {
+        if charged[i] <= 0 {
+            continue;
+        }
+        let theirs: Vec<lots::Lot> = pledged
+            .iter()
+            .filter(|l| l.user_id == *user_id)
+            .cloned()
+            .collect();
+        let taken = lots::seize_lots(tx, &theirs, charged[i]).await?;
+        for (seized_user, amount) in taken {
+            apply(
+                tx, loan_id, 3, "guarantor_deposit", "member_deposits",
+                Some(seized_user), amount, None, actor_id,
+            )
+            .await?;
+            taken_total += amount;
+        }
+    }
+
+    // Keeps the two halves honest against each other: what the arithmetic said
+    // to charge is what the lots actually gave up.
+    debug_assert_eq!(taken_total, charged.iter().sum::<i64>());
+
+    Ok(taken_total)
+}
+
 /// Runs the waterfall as far as the facts currently allow.
 pub async fn advance(
     tx: &mut Transaction<'_, Postgres>,
@@ -260,16 +375,25 @@ pub async fn advance(
     }
 
     // ---- step 3: the guarantors -------------------------------------------
-    // Pledged lots only. A guarantor who pledged ₱5,000 against a ₱1,000
-    // shortfall loses ₱1,000 — seize_lots stops at the limit, so nobody is
-    // charged for more of the debt than is left.
+    // Shared in proportion to what each pledged (SOW deliverable 2), not taken
+    // in the order people happened to deposit.
+    //
+    // This used to hand `seize_lots` the whole shortfall and let it drain the
+    // pledged lots oldest-first. On a claim that consumed every pledge that
+    // looked fair, because everyone lost everything. On a PARTIAL claim it was
+    // not: ₱2,000 owed against pledges of ₱3,000 and ₱2,000 took the entire
+    // ₱2,000 from whichever guarantor had deposited into the pool earlier —
+    // possibly months before either of them heard of this borrower — and
+    // nothing from the other. The tiebreaker had no relationship to the loan.
+    //
+    // Now the shortfall is apportioned across the accepted pledges first, and
+    // each guarantor's own lots are seized up to their own share and no
+    // further. A guarantor is still capped at their pledge, still ranked behind
+    // the borrower, and now pays the same fraction of the claim as everybody
+    // else backing the loan.
     if shortfall > 0 {
-        let pledged = lots::lock_backing_lots(tx, loan_id, "pledged").await?;
-        let taken = lots::seize_lots(tx, &pledged, shortfall).await?;
-        for (user_id, amount) in taken {
-            apply(tx, loan_id, 3, "guarantor_deposit", "member_deposits", Some(user_id), amount, None, actor_id).await?;
-            shortfall -= amount;
-        }
+        let taken = claim_pro_rata(tx, loan_id, shortfall, actor_id).await?;
+        shortfall -= taken;
     }
 
     // ---- step 4: the guarantors' coins ------------------------------------
