@@ -27,6 +27,61 @@ pub fn round_half_even(numer: i128, denom: i128) -> i64 {
     (if round_up { quot + 1 } else { quot }) as i64
 }
 
+/// Splits `total` across `weights` in proportion to each weight, exact to the
+/// centavo.
+///
+/// This is how a guarantor claim is shared (SOW deliverable 2: "a claim is
+/// shared between guarantors in proportion to what each pledged"). Seizure used
+/// to consume pledged lots in order of the depositor's age, which meant that on
+/// a partial claim the guarantor who happened to deposit into the pool earlier
+/// paid the whole thing and the other paid nothing — a tiebreaker with no
+/// relationship to the loan, the pledge, or anything either of them agreed to.
+///
+/// **Rounding, at one site.** Each share is `total * weight / sum`, rounded
+/// half-to-even like every other money split in this module. Rounding
+/// independently leaves a residual of a few centavos that belongs to nobody, so
+/// the shares are summed and the difference handed to the **largest** weight —
+/// the same "final recipient absorbs the remainder" pattern `split_interest`
+/// uses. Largest rather than first: the residual is at most a centavo per
+/// participant, and putting it on the biggest pledge is the least surprising
+/// place for it. The result therefore sums to `total` exactly, always.
+///
+/// Ties on "largest" go to the earliest of the tied weights, so the answer is
+/// deterministic for a given input order — two runs over the same loan produce
+/// the same split.
+///
+/// Returns one share per weight, in the same order. A zero or negative `total`
+/// yields all zeros, and weights summing to zero do too: there is nothing to
+/// share and nobody to share it by.
+pub fn apportion(total: i64, weights: &[i64]) -> Vec<i64> {
+    let sum: i128 = weights.iter().map(|w| (*w).max(0) as i128).sum();
+    if total <= 0 || sum == 0 || weights.is_empty() {
+        return vec![0; weights.len()];
+    }
+
+    let mut shares: Vec<i64> = weights
+        .iter()
+        .map(|w| round_half_even(total as i128 * (*w).max(0) as i128, sum))
+        .collect();
+
+    // The residual: what rounding gained or lost against the total.
+    let allocated: i64 = shares.iter().sum();
+    let residual = total - allocated;
+    if residual != 0 {
+        // Strict `>` keeps the EARLIEST of any tied weights, which is what
+        // makes the split deterministic for a given input order.
+        let mut largest = 0usize;
+        for (i, w) in weights.iter().enumerate() {
+            if *w > weights[largest] {
+                largest = i;
+            }
+        }
+        shares[largest] += residual;
+    }
+
+    shares
+}
+
 /// The score band a borrower falls in, or None (score below every band =
 /// not eligible to borrow yet).
 pub fn band_for(score: i16, params: &PolicyParams) -> Option<&Band> {
@@ -327,6 +382,71 @@ mod tests {
         assert!(value >= amount * 120 / 100);
         // and not absurdly more than one stroop over
         assert!(collateral_value_centavos(stroops - 1, rate) < 600_000 + rate);
+    }
+
+    #[test]
+    fn a_claim_is_shared_in_proportion_to_what_each_pledged() {
+        // The case the sprint plan names: a partial claim across two unequal
+        // pledges. Age-ordered seizure gave one guarantor the whole ₱2,000 and
+        // the other nothing; proportion gives 3:2.
+        assert_eq!(apportion(200_000, &[300_000, 200_000]), vec![120_000, 80_000]);
+
+        // Equal pledges split equally.
+        assert_eq!(apportion(100_000, &[250_000, 250_000]), vec![50_000, 50_000]);
+
+        // A claim that exhausts everything still lands on the pledges exactly.
+        assert_eq!(apportion(500_000, &[300_000, 200_000]), vec![300_000, 200_000]);
+
+        // One guarantor.
+        assert_eq!(apportion(123_456, &[500_000]), vec![123_456]);
+    }
+
+    #[test]
+    fn apportioned_shares_always_sum_to_the_total() {
+        // Nothing divides evenly here — the residual has to go somewhere, and
+        // "somewhere" must never be "lost".
+        for total in [1i64, 2, 7, 99, 101, 1_000, 33_333, 1_000_001] {
+            for weights in [
+                vec![300_000i64, 400_000],
+                vec![1, 1, 1],
+                vec![7, 11, 13],
+                vec![999_999, 1],
+                vec![100_000, 100_000, 100_000],
+            ] {
+                let shares = apportion(total, &weights);
+                assert_eq!(
+                    shares.iter().sum::<i64>(),
+                    total,
+                    "total {total} across {weights:?} lost or invented centavos"
+                );
+                // Nobody is charged a negative amount.
+                assert!(shares.iter().all(|s| *s >= 0), "negative share for {weights:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_residual_lands_on_the_largest_pledge() {
+        // ₱10.00 across 1:1:1 is ₱3.33 each with a centavo left over. The
+        // weights are equal, so the earliest wins the tie and the result is
+        // still deterministic.
+        assert_eq!(apportion(1000, &[100, 100, 100]), vec![334, 333, 333]);
+
+        // With an unambiguous largest, the residual goes there rather than to
+        // whoever happens to be first.
+        let shares = apportion(1000, &[100, 900]);
+        assert_eq!(shares.iter().sum::<i64>(), 1000);
+        assert_eq!(shares, vec![100, 900]);
+    }
+
+    #[test]
+    fn nothing_to_share_or_nobody_to_share_by() {
+        assert_eq!(apportion(0, &[100, 200]), vec![0, 0]);
+        assert_eq!(apportion(-5, &[100, 200]), vec![0, 0]);
+        // Pledges that sum to nothing can't absorb a claim — the caller falls
+        // through to the reserve fund rather than dividing by zero.
+        assert_eq!(apportion(1000, &[0, 0]), vec![0, 0]);
+        assert!(apportion(1000, &[]).is_empty());
     }
 
     #[test]

@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::api::users::shared::E;
 
+#[derive(Clone)]
 pub struct Lot {
     pub id: Uuid,
     pub user_id: Uuid,
