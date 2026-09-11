@@ -131,6 +131,43 @@ export type TransactionsPage = {
     total_pages: number
 }
 
+/** What a movement IS, in a word or two. Shared by the transaction record
+ *  (Lend) and the dashboard's activity feed so one movement is never named
+ *  two different ways. */
+export const TRANSACTION_KIND_LABEL: Record<TransactionKind, string> = {
+    deposit: 'Deposit',
+    withdrawal: 'Withdrawal',
+    // Named for what it is rather than "Deposit", so it reads as the partner
+    // of the failed withdrawal above it instead of looking like fresh money.
+    withdrawal_refund: 'Withdrawal returned',
+    collateral_lock: 'Collateral locked',
+    collateral_release: 'Collateral released',
+    collateral_seize: 'Collateral seized',
+    deposit_seized: 'Deposit seized',
+}
+
+/** The status pill's colour, as the `.lending-tx-status` modifier. */
+export type TransactionTone = 'is-good' | 'is-progress' | 'is-warn'
+
+/**
+ * Short enough for a table cell, unlike the sentence-length PAYOUT_LABEL the
+ * money rail uses — a member scanning a list wants the state, not the
+ * explanation. `is-warn` is reserved for the states that need them to do
+ * something (accept it in PayPal, ask again).
+ */
+export const TRANSACTION_STATUS_META: Record<TransactionStatus, { label: string; cls: TransactionTone }> = {
+    completed: { label: 'Completed', cls: 'is-good' },
+    paid: { label: 'Paid out', cls: 'is-good' },
+    confirmed: { label: 'Confirmed', cls: 'is-good' },
+    sent: { label: 'Sent', cls: 'is-progress' },
+    pending: { label: 'Queued', cls: 'is-progress' },
+    queued: { label: 'Queued', cls: 'is-progress' },
+    recorded: { label: 'Recorded', cls: 'is-progress' },
+    unclaimed: { label: 'Unclaimed', cls: 'is-warn' },
+    returned: { label: 'Returned', cls: 'is-warn' },
+    failed: { label: 'Failed', cls: 'is-warn' },
+}
+
 export type PoolResponse = {
     pool: {
         total_deposits: number

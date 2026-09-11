@@ -2,39 +2,8 @@ import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-
 import type useTransactions from '../../functions/Lending/useTransactions'
 import { formatDate, pesos, xlm } from '../../functions/Lending/money'
 import { shortId, txLink } from '../../functions/Lending/explorer'
-import type { Transaction, TransactionKind, TransactionStatus } from '../../functions/Lending/types'
+import { TRANSACTION_KIND_LABEL, TRANSACTION_STATUS_META, type Transaction } from '../../functions/Lending/types'
 import { TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
-
-const KIND_LABEL: Record<TransactionKind, string> = {
-    deposit: 'Deposit',
-    withdrawal: 'Withdrawal',
-    // Named for what it is rather than "Deposit", so it reads as the partner
-    // of the failed withdrawal above it instead of looking like fresh money.
-    withdrawal_refund: 'Withdrawal returned',
-    collateral_lock: 'Collateral locked',
-    collateral_release: 'Collateral released',
-    collateral_seize: 'Collateral seized',
-    deposit_seized: 'Deposit seized',
-}
-
-/**
- * Short enough for a table cell, unlike the sentence-length PAYOUT_LABEL the
- * money rail uses — a member scanning a list wants the state, not the
- * explanation. `is-warn` is reserved for the states that need them to do
- * something (accept it in PayPal, ask again).
- */
-const STATUS_META: Record<TransactionStatus, { label: string; cls: string }> = {
-    completed: { label: 'Completed', cls: 'is-good' },
-    paid: { label: 'Paid out', cls: 'is-good' },
-    confirmed: { label: 'Confirmed', cls: 'is-good' },
-    sent: { label: 'Sent', cls: 'is-progress' },
-    pending: { label: 'Queued', cls: 'is-progress' },
-    queued: { label: 'Queued', cls: 'is-progress' },
-    recorded: { label: 'Recorded', cls: 'is-progress' },
-    unclaimed: { label: 'Unclaimed', cls: 'is-warn' },
-    returned: { label: 'Returned', cls: 'is-warn' },
-    failed: { label: 'Failed', cls: 'is-warn' },
-}
 
 /** On-chain references are checkable on a block explorer; a PayPal capture or
  *  transfer id is only checkable inside PayPal, so it's shown as plain text
@@ -122,11 +91,11 @@ function TransactionsCard({ transactions }: { transactions: ReturnType<typeof us
                             {head}
                             <tbody>
                                 {items.map(tx => {
-                                    const status = STATUS_META[tx.status]
+                                    const status = TRANSACTION_STATUS_META[tx.status]
                                     return (
                                         <tr key={tx.id}>
                                             <td>
-                                                <span className='lending-tx-kind'>{KIND_LABEL[tx.kind]}</span>
+                                                <span className='lending-tx-kind'>{TRANSACTION_KIND_LABEL[tx.kind]}</span>
                                                 <Reference tx={tx} />
                                             </td>
                                             <td className='lending-ledger-amount'>

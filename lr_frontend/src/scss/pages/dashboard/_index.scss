@@ -1,7 +1,495 @@
 @use '../../core/globals';
 @use '../../core/styles';
 
-.dashboard-page {
-    padding: 32px;
+/* Dashboard — the member's whole position on one screen. Built from the
+   lending pages' own pieces (.lending-card, buttons, stat labels, status
+   pills, EligibilityCard, GuarantorCard) so a figure looks the same here as on
+   the page it links to; only the layout and the dashboard-only figures are
+   defined below.
+
+   Breakpoints are container queries on the page rather than viewport media
+   queries: the sidebar collapses between 264px and 80px, so the width this
+   content actually gets isn't something the viewport can tell us. */
+
+.dash-page {
+    container: dash / inline-size;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
     color: var(--color-text);
+}
+
+/* ---- header ---- */
+
+.dash-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 14px 16px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+
+    h1 {
+        margin: 0 0 4px;
+        font-family: var(--auth-font-display);
+        font-weight: 700;
+        font-size: 28px;
+        letter-spacing: -.01em;
+        color: #eef1f6;
+    }
+
+    p {
+        margin: 0;
+        font-size: 13.5px;
+        color: #9fadc6;
+    }
+}
+
+/* .dash-head p (0,1,1) would otherwise restyle the eyebrow, which is a <p> */
+.dash-head .dash-eyebrow {
+    margin: 0 0 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--auth-primary);
+}
+
+.dash-head-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.dash-standing {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 13px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+
+    &::before {
+        content: '';
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    &.is-good { background: rgba(111, 217, 154, .1); border-color: rgba(111, 217, 154, .22); color: #6fd99a; }
+    &.is-warn { background: rgba(245, 185, 66, .1); border-color: rgba(245, 185, 66, .22); color: #f5b942; }
+}
+
+.dash-date {
+    font-size: 13px;
+    color: #8492ac;
+    white-space: nowrap;
+}
+
+/* ---- summary tiles ---- */
+
+.dash-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.dash-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    padding: 18px 20px;
+    border-radius: 16px;
+    background: var(--auth-panel-bg);
+    border: 1px solid rgba(255, 255, 255, .08);
+
+    .lending-stat-label { margin-bottom: 0; }
+}
+
+.dash-tile-value {
+    font-family: var(--auth-font-display);
+    font-size: 25px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+
+    &.is-good { color: #6fd99a; }
+    &.is-warn { color: #f5b942; }
+}
+
+.dash-tile-sub {
+    font-size: 12px;
+    color: #8492ac;
+}
+
+/* ---- two-column body ---- */
+
+.dash-layout {
+    display: grid;
+    grid-template-columns: 360px minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.dash-rail,
+.dash-main {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+}
+
+.dash-main {
+    container: dash-main / inline-size;
+}
+
+/* ---- balance ---- */
+
+.dash-balance-figure {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    flex-wrap: wrap;
+}
+
+.dash-balance-value {
+    font-family: var(--auth-font-display);
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    color: #6fd99a;
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+
+    > div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 13.5px;
+    }
+
+    span { color: #9fadc6; }
+
+    b {
+        color: #eef1f6;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.dash-actions {
+    display: flex;
+    gap: 9px;
+
+    > * { flex: 1; }
+}
+
+/* ---- tier limits ---- */
+
+.dash-limits {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+
+    > div {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .lending-stat-label { margin-bottom: 0; }
+}
+
+.dash-limit-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- next payment ---- */
+
+.dash-due-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px 24px;
+    flex-wrap: wrap;
+}
+
+.dash-due-figure {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.dash-due-amount {
+    font-family: var(--auth-font-display);
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-due-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.dash-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.dash-progress-track {
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .07);
+    overflow: hidden;
+}
+
+.dash-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--auth-primary-grad);
+    transition: width .4s ease;
+}
+
+.dash-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px 16px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: #8492ac;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- recent activity ---- */
+
+.dash-activity-head {
+    flex-wrap: wrap;
+}
+
+/* the lending tab group, sized to its labels instead of stretching to fill */
+.dash-filters .lending-tab {
+    flex: none;
+    padding: 7px 14px;
+    font-size: 13px;
+}
+
+.dash-activity-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.dash-activity-cols,
+.dash-activity-row {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) 150px 110px;
+    column-gap: 14px;
+    align-items: center;
+}
+
+.dash-activity-cols {
+    padding: 0 4px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    font-size: 11px;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #8492ac;
+
+    > :first-child { grid-column: 1 / 3; }
+    > :last-child { text-align: right; }
+}
+
+.dash-activity-row {
+    padding: 11px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+
+    &:last-child { border-bottom: 0; }
+}
+
+.dash-activity-icon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .07);
+    color: var(--lending-link);
+
+    svg { width: 14px; height: 14px; }
+}
+
+.dash-activity-what {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+
+    > b {
+        font-size: 13.5px;
+        font-weight: 700;
+        color: #eef1f6;
+        font-variant-numeric: tabular-nums;
+    }
+
+    > span:not(.skeleton) {
+        font-size: 12px;
+        color: #8492ac;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+.dash-activity-date {
+    font-size: 12.5px;
+    color: #9fadc6;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dash-activity-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+}
+
+.dash-link {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--lending-link);
+    text-decoration: none;
+    white-space: nowrap;
+
+    &:hover,
+    &:focus-visible {
+        color: var(--lending-link-hover);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+}
+
+/* ---- pool strip ---- */
+
+/* .lending-card is a flex column; the strip lays its figures out in a row.
+   Compound selector on purpose: pages/lending is imported after this file,
+   so a bare .dash-pool (same specificity) loses to .lending-card's column. */
+.lending-card.dash-pool {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px 28px;
+}
+
+.dash-pool-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    .lending-stat-label { margin-bottom: 0; }
+}
+
+.dash-pool-value {
+    font-family: var(--auth-font-display);
+    font-size: 19px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+
+    &.is-good { color: #6fd99a; }
+    &.is-warn { color: #f5b942; }
+}
+
+.dash-pool-divider {
+    width: 1px;
+    height: 36px;
+    background: rgba(255, 255, 255, .08);
+}
+
+.dash-pool-working {
+    flex: 1;
+    min-width: 180px;
+}
+
+/* ---- restricted accounts ---- */
+
+.dash-locked {
+    width: 100%;
+    max-width: 560px;
+    margin: 8vh auto 0;
+}
+
+/* ---- responsive ---- */
+
+@container dash (max-width: 940px) {
+    .dash-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container dash (max-width: 760px) {
+    .dash-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container dash (max-width: 420px) {
+    .dash-tiles { grid-template-columns: minmax(0, 1fr); }
+    .dash-head { align-items: flex-start; }
+}
+
+@container dash-main (max-width: 560px) {
+    .dash-activity-cols { display: none; }
+
+    /* status and date stack on the right instead of taking two fixed columns */
+    .dash-activity-row {
+        grid-template-columns: 30px minmax(0, 1fr) auto;
+        grid-template-areas:
+            'icon what status'
+            'icon what date';
+        row-gap: 4px;
+    }
+
+    .dash-activity-icon { grid-area: icon; }
+    .dash-activity-what { grid-area: what; }
+    .dash-activity-status { grid-area: status; justify-self: end; }
+    .dash-activity-date { grid-area: date; }
+
+    .dash-pool-divider { display: none; }
+
+    .dash-due-actions {
+        width: 100%;
+
+        > * { flex: 1; }
+    }
+}
+
+@media (max-width: 560px) {
+    .dash-page { padding: 24px 14px 56px; }
 }
