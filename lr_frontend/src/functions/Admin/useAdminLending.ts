@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { submitVaultMovement, type SeizureQuote, type VaultAction } from '../Lending/stellarAdmin'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -162,49 +163,93 @@ export default function useAdminLending() {
         ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
     }), [csrfToken])
 
-    const post = useCallback(async <T,>(path: string, body: unknown): Promise<T> => {
-        const res = await fetch(`${API}${path}`, {
+    const post = useCallback(async <T,>(path: string, body: unknown, signal?: AbortSignal): Promise<T> => {
+        const res = await apiFetch(`${API}${path}`, {
             method: 'POST',
             credentials: 'include',
             headers: authHeaders(),
             body: JSON.stringify(body),
+            signal,
         })
         if (!res.ok) throw new Error(await res.text() || 'Request failed')
         return await res.json() as T
     }, [authHeaders])
 
+    const showLoans = useCallback((data: LoansPage) => {
+        setLoans(data.items)
+        setPage(data.page)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
+    }, [])
+
+    const showActions = useCallback((data: ActionsPayload) => {
+        setActions(data.actions)
+        setContractId(data.contract_id)
+    }, [])
+
     const loadLoans = useCallback(async (targetPage: number, targetFilter: LoanFilter) => {
         setLoading(true)
         setError(false)
         try {
-            const data = await post<LoansPage>('/lending/admin/loans', { page: targetPage, filter: targetFilter })
-            setLoans(data.items)
-            setPage(data.page)
-            setTotal(data.total)
-            setTotalPages(data.total_pages)
+            showLoans(await post<LoansPage>('/lending/admin/loans', { page: targetPage, filter: targetFilter }))
         } catch {
             setError(true)
         } finally {
             setLoading(false)
         }
-    }, [post])
+    }, [post, showLoans])
 
     const loadActions = useCallback(async () => {
         try {
-            const data = await post<ActionsPayload>('/lending/admin/actions', {})
-            setActions(data.actions)
-            setContractId(data.contract_id)
+            showActions(await post<ActionsPayload>('/lending/admin/actions', {}))
         } catch {
             setActions([])
         }
-    }, [post])
+    }, [post, showActions])
 
     const refresh = useCallback(async () => {
         await Promise.all([loadLoans(page, filter), loadActions()])
     }, [loadLoans, loadActions, page, filter])
 
-    useEffect(() => { void loadLoans(1, filter) }, [loadLoans, filter])
-    useEffect(() => { void loadActions() }, [loadActions])
+    // Picking a filter (or a new CSRF token) reloads page 1 below. Flag that
+    // during render — React's way of adjusting state to a changed input — so
+    // the list shows loading straight away instead of the previous filter's
+    // rows, and the effects only write state once a response is in.
+    const loansKey = `${filter}|${csrfToken ?? ''}`
+    const [loadedFor, setLoadedFor] = useState(loansKey)
+    if (loadedFor !== loansKey) {
+        setLoadedFor(loansKey)
+        setLoading(true)
+        setError(false)
+    }
+
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const data = await post<LoansPage>('/lending/admin/loans', { page: 1, filter }, controller.signal)
+                if (!controller.signal.aborted) showLoans(data)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [post, showLoans, filter])
+
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const data = await post<ActionsPayload>('/lending/admin/actions', {}, controller.signal)
+                if (!controller.signal.aborted) showActions(data)
+            } catch {
+                if (!controller.signal.aborted) setActions([])
+            }
+        })()
+        return () => controller.abort()
+    }, [post, showActions])
 
     /** Declares a default. The engine takes the borrower's own deposits at
      *  once and then waits for the coins — the response says which. */

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useSession } from '../../providers/useSession'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -30,7 +31,7 @@ export default function usePayPalOrder() {
         purpose: OrderPurpose = 'deposit',
         loanId?: string,
     ): Promise<string> => {
-        const res = await fetch(`${API}/paypal/order`, {
+        const res = await apiFetch(`${API}/paypal/order`, {
             method: 'POST',
             credentials: 'include',
             headers: {

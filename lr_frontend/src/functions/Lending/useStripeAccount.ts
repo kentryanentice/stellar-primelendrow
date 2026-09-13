@@ -2,8 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { StripeAccount } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /stripe/account — reads only; `refresh` and the first-load effect apply it. */
+async function fetchStripeAccount(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/stripe/account`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    return await res.json() as StripeAccount
+}
 
 /**
  * The member's connected Stripe account — the destination loan proceeds and
@@ -35,9 +43,7 @@ export default function useStripeAccount() {
 
     const refresh = useCallback(async () => {
         try {
-            const res = await fetch(`${API}/stripe/account`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            setAccount(await res.json() as StripeAccount)
+            setAccount(await fetchStripeAccount())
         } catch {
             setAccount(null)
         } finally {
@@ -45,7 +51,22 @@ export default function useStripeAccount() {
         }
     }, [])
 
-    useEffect(() => { void refresh() }, [refresh])
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const account = await fetchStripeAccount(controller.signal)
+                if (!controller.signal.aborted) setAccount(account)
+            } catch {
+                if (!controller.signal.aborted) setAccount(null)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     /**
      * Ask the engine where to send them, then leave the app. The same call
@@ -55,7 +76,7 @@ export default function useStripeAccount() {
     const connect = useCallback(async () => {
         setBusy(true)
         try {
-            const res = await fetch(`${API}/stripe/connect`, { credentials: 'include' })
+            const res = await apiFetch(`${API}/stripe/connect`, { credentials: 'include' })
             if (!res.ok) throw new Error(await res.text() || 'Unable to start the Stripe connection')
             const { url } = await res.json() as { url: string }
             window.location.href = url
@@ -68,7 +89,7 @@ export default function useStripeAccount() {
     const disconnect = useCallback(async () => {
         setBusy(true)
         try {
-            const res = await fetch(`${API}/stripe/disconnect`, {
+            const res = await apiFetch(`${API}/stripe/disconnect`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

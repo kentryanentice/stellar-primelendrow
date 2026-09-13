@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CollateralRecord } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -28,7 +29,7 @@ export default function useCollateralRecord(loanId: string | null) {
         const controller = new AbortController()
         void (async () => {
             try {
-                const res = await fetch(`${API}/loans/${loanId}/collateral`, {
+                const res = await apiFetch(`${API}/loans/${loanId}/collateral`, {
                     credentials: 'include',
                     signal: controller.signal,
                 })

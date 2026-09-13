@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -46,7 +47,7 @@ export default function useMyFunds(onChanged: () => void) {
     const confirmDeposit = useCallback(async (ref: DepositRef) => {
         setConfirming(true)
         try {
-            const res = await fetch(`${API}/pool/deposit`, {
+            const res = await apiFetch(`${API}/pool/deposit`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),

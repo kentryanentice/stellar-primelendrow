@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Loan } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -33,33 +34,64 @@ export default function useLoanHistory() {
     const [cancellingId, setCancellingId] = useState<string | null>(null)
     const [error, setError] = useState(false)
 
+    const fetchPage = useCallback(async (targetPage: number, signal?: AbortSignal) => {
+        const res = await apiFetch(`${API}/loans/history`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+            },
+            body: JSON.stringify({ page: targetPage }),
+            signal,
+        })
+        if (!res.ok) throw new Error()
+        return await res.json() as LoansHistoryPage
+    }, [csrfToken])
+
+    const showPage = useCallback((data: LoansHistoryPage) => {
+        setLoans(data.items)
+        setPage(data.page)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
+    }, [])
+
     const load = useCallback(async (targetPage: number) => {
         setLoading(true)
         setError(false)
         try {
-            const res = await fetch(`${API}/loans/history`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
-                },
-                body: JSON.stringify({ page: targetPage }),
-            })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as LoansHistoryPage
-            setLoans(data.items)
-            setPage(data.page)
-            setTotal(data.total)
-            setTotalPages(data.total_pages)
+            showPage(await fetchPage(targetPage))
         } catch {
             setError(true)
         } finally {
             setLoading(false)
         }
-    }, [csrfToken])
+    }, [fetchPage, showPage])
 
-    useEffect(() => { void load(1) }, [load])
+    // A new CSRF token reloads page 1 (the effect below). Flag that during
+    // render — React's way of adjusting state to a changed input — so the
+    // effect itself never has to set state before the response is in.
+    const [loadedFor, setLoadedFor] = useState(csrfToken)
+    if (loadedFor !== csrfToken) {
+        setLoadedFor(csrfToken)
+        setLoading(true)
+        setError(false)
+    }
+
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const data = await fetchPage(1, controller.signal)
+                if (!controller.signal.aborted) showPage(data)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [fetchPage, showPage])
 
     const refresh = useCallback(() => load(page), [load, page])
     const goToPage = useCallback((target: number) => load(target), [load])
@@ -77,7 +109,7 @@ export default function useLoanHistory() {
     const cancelLoan = useCallback(async (loanId: string) => {
         setCancellingId(loanId)
         try {
-            const res = await fetch(`${API}/loans/cancel`, {
+            const res = await apiFetch(`${API}/loans/cancel`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

@@ -2,8 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { PaypalAccount } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /paypal/account — reads only; `refresh` and the first-load effect apply it. */
+async function fetchPaypalAccount(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/paypal/account`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    return await res.json() as PaypalAccount
+}
 
 /**
  * The member's connected PayPal — the destination loan proceeds are paid to.
@@ -26,9 +34,7 @@ export default function usePaypalAccount() {
 
     const refresh = useCallback(async () => {
         try {
-            const res = await fetch(`${API}/paypal/account`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            setAccount(await res.json() as PaypalAccount)
+            setAccount(await fetchPaypalAccount())
         } catch {
             setAccount(null)
         } finally {
@@ -36,13 +42,28 @@ export default function usePaypalAccount() {
         }
     }, [])
 
-    useEffect(() => { void refresh() }, [refresh])
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const account = await fetchPaypalAccount(controller.signal)
+                if (!controller.signal.aborted) setAccount(account)
+            } catch {
+                if (!controller.signal.aborted) setAccount(null)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     /** Ask the engine where to send them, then leave the app. */
     const connect = useCallback(async () => {
         setBusy(true)
         try {
-            const res = await fetch(`${API}/paypal/connect`, { credentials: 'include' })
+            const res = await apiFetch(`${API}/paypal/connect`, { credentials: 'include' })
             if (!res.ok) throw new Error(await res.text() || 'Unable to start the PayPal connection')
             const { url } = await res.json() as { url: string }
             window.location.href = url
@@ -55,7 +76,7 @@ export default function usePaypalAccount() {
     const disconnect = useCallback(async () => {
         setBusy(true)
         try {
-            const res = await fetch(`${API}/paypal/disconnect`, {
+            const res = await apiFetch(`${API}/paypal/disconnect`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

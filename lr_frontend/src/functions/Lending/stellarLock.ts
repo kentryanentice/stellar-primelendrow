@@ -1,5 +1,6 @@
 import { signTransaction, isConnected as freighterIsConnected } from '@stellar/freighter-api'
 import type { PinnedQuote } from './types'
+import { apiFetch } from '../apiFetch'
 
 /**
  * Builds, signs (Freighter), and submits the vault contract's `lock` call —
@@ -200,7 +201,7 @@ export async function lockAndConfirmCollateral(opts: {
     if ('error' in lock) return lock
 
     try {
-        const res = await fetch(`${API}/collateral/confirm`, {
+        const res = await apiFetch(`${API}/collateral/confirm`, {
             method: 'POST',
             credentials: 'include',
             headers: {

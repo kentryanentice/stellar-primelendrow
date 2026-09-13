@@ -14,6 +14,7 @@ import { CreditScoreSkeleton, IdentityTimelineSkeleton, WalletsCardSkeleton } fr
 // fetch and a redirect.
 import PaypalCard from '../elements/Settings/PaypalCard'
 import StripeCard from '../elements/Settings/StripeCard'
+import { apiFetch } from '../functions/apiFetch'
 
 // The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
@@ -140,7 +141,7 @@ function Settings() {
     // loading/error already start at true/false.
     useEffect(() => {
         let aborted = false
-        fetch(`${API}/kyc/status`, { credentials: 'include' })
+        apiFetch(`${API}/kyc/status`, { credentials: 'include' })
             .then(async res => {
                 if (!res.ok) throw new Error()
                 return res.json() as Promise<KycStatus>
@@ -165,7 +166,7 @@ function Settings() {
         try {
             const minDisplay = new Promise(resolve => window.setTimeout(resolve, LOGOUT_MIN_DISPLAY_MS))
             const [res] = await Promise.all([
-                fetch(`${API}/auth/logout`, {
+                apiFetch(`${API}/auth/logout`, {
                     method: 'POST',
                     credentials: 'include',
                     headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,

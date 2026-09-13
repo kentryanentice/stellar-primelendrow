@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import type { Transaction, TransactionsPage } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -25,33 +26,64 @@ export default function useTransactions() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(false)
 
+    const fetchPage = useCallback(async (targetPage: number, signal?: AbortSignal) => {
+        const res = await apiFetch(`${API}/pool/transactions`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+            },
+            body: JSON.stringify({ page: targetPage }),
+            signal,
+        })
+        if (!res.ok) throw new Error()
+        return await res.json() as TransactionsPage
+    }, [csrfToken])
+
+    const showPage = useCallback((data: TransactionsPage) => {
+        setItems(data.items)
+        setPage(data.page)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
+    }, [])
+
     const load = useCallback(async (targetPage: number) => {
         setLoading(true)
         setError(false)
         try {
-            const res = await fetch(`${API}/pool/transactions`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
-                },
-                body: JSON.stringify({ page: targetPage }),
-            })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as TransactionsPage
-            setItems(data.items)
-            setPage(data.page)
-            setTotal(data.total)
-            setTotalPages(data.total_pages)
+            showPage(await fetchPage(targetPage))
         } catch {
             setError(true)
         } finally {
             setLoading(false)
         }
-    }, [csrfToken])
+    }, [fetchPage, showPage])
 
-    useEffect(() => { void load(1) }, [load])
+    // A new CSRF token reloads page 1 (the effect below). Flag that during
+    // render — React's way of adjusting state to a changed input — so the
+    // effect itself never has to set state before the response is in.
+    const [loadedFor, setLoadedFor] = useState(csrfToken)
+    if (loadedFor !== csrfToken) {
+        setLoadedFor(csrfToken)
+        setLoading(true)
+        setError(false)
+    }
+
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const data = await fetchPage(1, controller.signal)
+                if (!controller.signal.aborted) showPage(data)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [fetchPage, showPage])
 
     /** Re-fetches the page on screen — for after a deposit or withdrawal
      *  elsewhere on the page adds a row to it. */

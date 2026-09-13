@@ -14,6 +14,7 @@ use dotenvy::dotenv;
 use infra::csrf::enforce_csrf;
 use infra::db::init_db_pool;
 use infra::limiter::{ConcurrencyLimiter, enforce_concurrency};
+use infra::payload::{PayloadCipher, enforce_payload};
 use infra::rate::{RateLimiter, enforce_rate_limit};
 use routes::api_routes;
 use tower_http::{
@@ -108,6 +109,19 @@ async fn main() {
         );
     }
 
+    // Payload encryption refuses to start half-configured: a key that can't be
+    // parsed would have the frontend sealing every request to nothing.
+    let payload_cipher = PayloadCipher::from_env().unwrap_or_else(|e| panic!("{e}"));
+    match payload_cipher.public_key() {
+        Some(public_key) => tracing::info!(
+            "Payload encryption enabled ({}); the frontend's VITE_PAYLOAD_PUBLIC_KEY must be {public_key}",
+            if payload_cipher.is_required() { "required" } else { "optional — plaintext still accepted" }
+        ),
+        None => tracing::warn!(
+            "PAYLOAD_PRIVATE_KEY not set; request and response bodies are not payload-encrypted"
+        ),
+    }
+
     // Cloud Run always sets K_SERVICE, and there the TCP peer is the platform
     // front end — without the proxy-hop config every per-IP protection keys on
     // that one shared address (rate limits collapse, and the per-(IP, email)
@@ -153,9 +167,19 @@ async fn main() {
             axum::http::header::HeaderName::from_static("x-csrf-token"),
             axum::http::header::HeaderName::from_static("x-client-name"),
             axum::http::header::HeaderName::from_static("x-client-version"),
+            axum::http::header::HeaderName::from_static(infra::payload::KEY_HEADER),
+            axum::http::header::HeaderName::from_static(infra::payload::ENCRYPTED_HEADER),
+            axum::http::header::HeaderName::from_static(infra::payload::TYPE_HEADER),
         ])
-        .expose_headers([axum::http::header::HeaderName::from_static("x-csrf-token")])
-        .allow_credentials(true);
+        .expose_headers([
+            axum::http::header::HeaderName::from_static("x-csrf-token"),
+            axum::http::header::HeaderName::from_static(infra::payload::ENCRYPTED_HEADER),
+            axum::http::header::HeaderName::from_static(infra::payload::TYPE_HEADER),
+        ])
+        .allow_credentials(true)
+        // Every call now carries `x-payload-key`, so even GETs are preflighted;
+        // caching the preflight keeps that to one OPTIONS per endpoint per 10min.
+        .max_age(Duration::from_secs(600));
 
     let db_pool = init_db_pool().await;
 
@@ -165,6 +189,12 @@ async fn main() {
     infra::payouts::spawn(db_pool.clone());
 
     let app = api_routes::routes(mail_rate_limiter)
+        // Innermost of the global layers: bodies are opened right before the
+        // handlers and sealed right after, so CSRF, rate limits and CORS keep
+        // working on headers exactly as before.
+        .layer(middleware::from_fn(move |req, next| {
+            enforce_payload(payload_cipher.clone(), req, next)
+        }))
         .layer(Extension(db_pool))
         .layer(Extension(kyc_storage))
         .layer(middleware::from_fn(move |req, next| {

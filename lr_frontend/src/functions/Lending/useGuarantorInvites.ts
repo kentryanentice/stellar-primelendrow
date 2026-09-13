@@ -2,8 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Invite } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /guarantors/invites — reads only; `refresh` and the first-load effect apply it. */
+async function fetchInvites(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/guarantors/invites`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    const data = await res.json() as { invites: Invite[] }
+    return data.invites
+}
 
 /**
  * Invitations to guarantee someone else's loan. Accepting freezes the pledge
@@ -23,10 +32,7 @@ export default function useGuarantorInvites(onChanged: () => void) {
     const refresh = useCallback(async () => {
         setError(false)
         try {
-            const res = await fetch(`${API}/guarantors/invites`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as { invites: Invite[] }
-            setInvites(data.invites)
+            setInvites(await fetchInvites())
         } catch {
             setError(true)
         } finally {
@@ -34,14 +40,27 @@ export default function useGuarantorInvites(onChanged: () => void) {
         }
     }, [])
 
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
     useEffect(() => {
-        void refresh()
-    }, [refresh])
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const invites = await fetchInvites(controller.signal)
+                if (!controller.signal.aborted) setInvites(invites)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     const respond = useCallback(async (inviteId: string, accept: boolean) => {
         setRespondingId(inviteId)
         try {
-            const res = await fetch(`${API}/guarantors/respond`, {
+            const res = await apiFetch(`${API}/guarantors/respond`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

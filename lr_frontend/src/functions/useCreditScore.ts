@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSession } from '../providers/useSession'
+import { apiFetch } from './apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -25,17 +26,21 @@ export function useCreditScore() {
     const [loading, setLoading] = useState(eligible)
     const [error, setError] = useState(false)
 
-    useEffect(() => {
-        if (!eligible) {
-            setScore(null)
-            setLoading(false)
-            setError(false)
-            return
-        }
-        let aborted = false
-        setLoading(true)
+    // Eligibility flipping (an account getting verified, or signing out)
+    // resets during render rather than from the effect, so the effect only
+    // ever writes state once the score is back.
+    const [eligibleFor, setEligibleFor] = useState(eligible)
+    if (eligibleFor !== eligible) {
+        setEligibleFor(eligible)
+        setScore(null)
+        setLoading(eligible)
         setError(false)
-        fetch(`${API}/credit/score`, { credentials: 'include' })
+    }
+
+    useEffect(() => {
+        if (!eligible) return
+        let aborted = false
+        apiFetch(`${API}/credit/score`, { credentials: 'include' })
             .then(async res => {
                 if (!res.ok) throw new Error()
                 return res.json() as Promise<{ score: number; updated_at: number }>

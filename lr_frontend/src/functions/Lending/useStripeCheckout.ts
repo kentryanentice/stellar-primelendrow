@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -41,7 +42,7 @@ export default function useStripeCheckout() {
     ) => {
         setStarting(true)
         try {
-            const res = await fetch(`${API}/stripe/checkout`, {
+            const res = await apiFetch(`${API}/stripe/checkout`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

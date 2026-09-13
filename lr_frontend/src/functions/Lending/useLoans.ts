@@ -2,8 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Loan } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /loans — reads only; `refresh` and the first-load effect apply it. */
+async function fetchLoans(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/loans`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    const data = await res.json() as { loans: Loan[] }
+    return data.loans
+}
 
 /**
  * The reference a borrower presents to say "I paid" — the repayment twin of
@@ -28,10 +37,7 @@ export default function useLoans() {
     const refresh = useCallback(async () => {
         setError(false)
         try {
-            const res = await fetch(`${API}/loans`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as { loans: Loan[] }
-            setLoans(data.loans)
+            setLoans(await fetchLoans())
         } catch {
             setError(true)
         } finally {
@@ -39,9 +45,22 @@ export default function useLoans() {
         }
     }, [])
 
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
     useEffect(() => {
-        void refresh()
-    }, [refresh])
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const loans = await fetchLoans(controller.signal)
+                if (!controller.signal.aborted) setLoans(loans)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     /**
      * Applies a verified payment to a loan.
@@ -55,7 +74,7 @@ export default function useLoans() {
     const repay = useCallback(async (loanId: string, ref: RepayRef) => {
         setRepayingId(loanId)
         try {
-            const res = await fetch(`${API}/loans/repay`, {
+            const res = await apiFetch(`${API}/loans/repay`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

@@ -7,6 +7,7 @@
     "dev": "vite",
     "harness": "vite --open /ocr-harness.html",
     "models:ocr": "node scripts/fetch-ocr-models.mjs",
+    "keys:payload": "node scripts/gen-payload-keys.mjs",
     "build": "tsc -b && vite build",
     "build:lan": "tsc -b && vite build --mode lan",
     "lint": "eslint .",

@@ -3,6 +3,7 @@ import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { lockAndConfirmCollateral, quoteFromPinned } from './stellarLock'
 import type { ApplyResponse, Product, QuoteResponse } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 /** How long after the last keystroke before asking the engine for a quote. */
@@ -45,7 +46,7 @@ export default function useBorrow(onChanged: () => void) {
             try {
                 const params = new URLSearchParams({ product, term_months: String(termMonths) })
                 if (amountCentavos) params.set('amount', String(amountCentavos))
-                const res = await fetch(`${API}/loans/quote?${params}`, { credentials: 'include' })
+                const res = await apiFetch(`${API}/loans/quote?${params}`, { credentials: 'include' })
                 if (!res.ok) throw new Error()
                 setQuote(await res.json() as QuoteResponse)
             } catch {
@@ -70,7 +71,7 @@ export default function useBorrow(onChanged: () => void) {
     }) => {
         setApplying(true)
         try {
-            const res = await fetch(`${API}/loans/apply`, {
+            const res = await apiFetch(`${API}/loans/apply`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
