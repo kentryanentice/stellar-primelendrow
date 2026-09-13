@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { ID_TYPE_LABELS, type IdType } from '../KYC/idParsing'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -129,8 +130,8 @@ export default function useAdminFunctions() {
     // page_size is fixed server-side (10) — this only ever tells the backend
     // which page, never how large, so there's no client-controlled query
     // string; page travels in the POST body instead
-    const fetchQueuePage = useCallback(async (targetPage: number): Promise<PendingResponse | null> => {
-        const res = await fetch(`${API}/kyc/admin/pending`, {
+    const fetchQueuePage = useCallback(async (targetPage: number, signal?: AbortSignal): Promise<PendingResponse | null> => {
+        const res = await apiFetch(`${API}/kyc/admin/pending`, {
             method: 'POST',
             credentials: 'include',
             headers: {
@@ -138,36 +139,68 @@ export default function useAdminFunctions() {
                 ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
             },
             body: JSON.stringify({ page: targetPage }),
+            signal,
         })
         if (!res.ok) return null
         return res.json() as Promise<PendingResponse>
     }, [csrfToken])
 
+    const fetchQueue = useCallback(async (targetPage: number, signal?: AbortSignal) => {
+        let data = await fetchQueuePage(targetPage, signal)
+        if (!data) throw new Error()
+        // the page we asked for might no longer exist (e.g. we just decided
+        // the only submission on what was the last page) — fall back to
+        // whatever the new last page is instead of showing an empty page 3 of 2
+        if (data.items.length === 0 && data.page > 1 && data.page > data.total_pages) {
+            data = await fetchQueuePage(data.total_pages, signal)
+            if (!data) throw new Error()
+        }
+        return data
+    }, [fetchQueuePage])
+
+    const showQueue = useCallback((data: PendingResponse) => {
+        setQueue(data.items)
+        setPage(data.page)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
+    }, [])
+
     const loadQueue = useCallback(async (targetPage: number) => {
         setQueueLoading(true)
         setQueueError(false)
         try {
-            let data = await fetchQueuePage(targetPage)
-            if (!data) throw new Error()
-            // the page we asked for might no longer exist (e.g. we just decided
-            // the only submission on what was the last page) — fall back to
-            // whatever the new last page is instead of showing an empty page 3 of 2
-            if (data.items.length === 0 && data.page > 1 && data.page > data.total_pages) {
-                data = await fetchQueuePage(data.total_pages)
-                if (!data) throw new Error()
-            }
-            setQueue(data.items)
-            setPage(data.page)
-            setTotal(data.total)
-            setTotalPages(data.total_pages)
+            showQueue(await fetchQueue(targetPage))
         } catch {
             setQueueError(true)
         } finally {
             setQueueLoading(false)
         }
-    }, [fetchQueuePage])
+    }, [fetchQueue, showQueue])
 
-    useEffect(() => { loadQueue(1) }, [loadQueue])
+    // A new CSRF token reloads the first page below. Flag that during render —
+    // React's way of adjusting state to a changed input — so the effect only
+    // writes state once the queue is back.
+    const [queueLoadedFor, setQueueLoadedFor] = useState(csrfToken)
+    if (queueLoadedFor !== csrfToken) {
+        setQueueLoadedFor(csrfToken)
+        setQueueLoading(true)
+        setQueueError(false)
+    }
+
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const data = await fetchQueue(1, controller.signal)
+                if (!controller.signal.aborted) showQueue(data)
+            } catch {
+                if (!controller.signal.aborted) setQueueError(true)
+            } finally {
+                if (!controller.signal.aborted) setQueueLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [fetchQueue, showQueue])
 
     // appends the next backend batch onto the already-loaded queue instead of
     // replacing it, so scrolling the carousel to the end feels continuous
@@ -210,7 +243,7 @@ export default function useAdminFunctions() {
         setLightboxOpen(false)
         setDetailLoading(true)
         try {
-            const res = await fetch(`${API}/kyc/admin/submissions/${id}`, { credentials: 'include' })
+            const res = await apiFetch(`${API}/kyc/admin/submissions/${id}`, { credentials: 'include' })
             if (!res.ok) throw new Error()
             setDetail(await res.json())
         } catch {
@@ -251,7 +284,7 @@ export default function useAdminFunctions() {
         }
         setDeciding(true)
         try {
-            const res = await fetch(`${API}/kyc/admin/review`, {
+            const res = await apiFetch(`${API}/kyc/admin/review`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {

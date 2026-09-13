@@ -2,8 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Payout } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /payouts — reads only; `refresh` and the first-load effect apply it. */
+async function fetchPayouts(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/payouts`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    const data = await res.json() as { payouts: Payout[] }
+    return data.payouts
+}
 
 /**
  * The member's payouts (GET /payouts), and the two requests that start one:
@@ -30,10 +39,7 @@ export default function usePayouts() {
 
     const refresh = useCallback(async () => {
         try {
-            const res = await fetch(`${API}/payouts`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as { payouts: Payout[] }
-            setPayouts(data.payouts)
+            setPayouts(await fetchPayouts())
         } catch {
             setPayouts([])
         } finally {
@@ -41,7 +47,22 @@ export default function usePayouts() {
         }
     }, [])
 
-    useEffect(() => { void refresh() }, [refresh])
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
+    useEffect(() => {
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const payouts = await fetchPayouts(controller.signal)
+                if (!controller.signal.aborted) setPayouts(payouts)
+            } catch {
+                if (!controller.signal.aborted) setPayouts([])
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     const authHeaders = useCallback((): HeadersInit => ({
         'Content-Type': 'application/json',
@@ -51,7 +72,7 @@ export default function usePayouts() {
     const requestPayout = useCallback(async (loanId: string) => {
         setRequestingId(loanId)
         try {
-            const res = await fetch(`${API}/loans/payout`, {
+            const res = await apiFetch(`${API}/loans/payout`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
@@ -80,7 +101,7 @@ export default function usePayouts() {
     const requestWithdrawal = useCallback(async (centavos: number) => {
         setWithdrawing(true)
         try {
-            const res = await fetch(`${API}/pool/withdraw`, {
+            const res = await apiFetch(`${API}/pool/withdraw`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useToast } from './useToast'
 import { SessionContext, type SessionPayload } from './useSession'
+import { apiFetch } from '../functions/apiFetch'
 
 interface SessionProviderProps {
     children: ReactNode
@@ -23,7 +24,7 @@ export const SessionProvider = ({ children }: SessionProviderProps) => {
         const run = async () => {
             setLoading(true)
             try {
-                const res = await fetch(`${ENGINE}/auth/session`, {
+                const res = await apiFetch(`${ENGINE}/auth/session`, {
                     method: 'GET',
                     credentials: 'include',
                     headers: { 'Content-Type': 'application/json' }

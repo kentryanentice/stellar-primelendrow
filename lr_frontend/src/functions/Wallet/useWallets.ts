@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import { connectFreighter, signChallenge } from './wallet'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
@@ -18,6 +19,14 @@ export type Wallet = {
 }
 
 type ChallengeResponse = { nonce: string; message: string; expires_at: number }
+
+/** GET /wallets — reads only; `refresh` and the first-load effect apply it. */
+async function fetchWallets(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/wallets`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    const data = await res.json() as { wallets: Wallet[] }
+    return data.wallets
+}
 
 /**
  * Drives the "Wallets" settings card: loads the caller's wallet list, and
@@ -44,10 +53,7 @@ export default function useWallets() {
         setLoading(true)
         setError(false)
         try {
-            const res = await fetch(`${API}/wallets`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            const data = await res.json() as { wallets: Wallet[] }
-            setWallets(data.wallets)
+            setWallets(await fetchWallets())
         } catch {
             setError(true)
         } finally {
@@ -55,9 +61,22 @@ export default function useWallets() {
         }
     }, [])
 
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
     useEffect(() => {
-        void refresh()
-    }, [refresh])
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const wallets = await fetchWallets(controller.signal)
+                if (!controller.signal.aborted) setWallets(wallets)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     // connect -> challenge -> sign -> connect: the backend never trusts an
     // address unless the wallet just proved it holds the private key behind
@@ -72,7 +91,7 @@ export default function useWallets() {
             }
             const { address } = connectResult
 
-            const challengeRes = await fetch(`${API}/wallets/challenge`, {
+            const challengeRes = await apiFetch(`${API}/wallets/challenge`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
@@ -86,7 +105,7 @@ export default function useWallets() {
                 return
             }
 
-            const connectRes = await fetch(`${API}/wallets/connect`, {
+            const connectRes = await apiFetch(`${API}/wallets/connect`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
@@ -106,7 +125,7 @@ export default function useWallets() {
     const disconnectWallet = useCallback(async (walletId: string) => {
         setDisconnectingId(walletId)
         try {
-            const res = await fetch(`${API}/wallets/disconnect`, {
+            const res = await apiFetch(`${API}/wallets/disconnect`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),

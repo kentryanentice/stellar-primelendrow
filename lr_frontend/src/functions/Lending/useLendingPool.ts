@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PoolResponse } from './types'
+import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
+
+/** GET /pool — reads only; `refresh` and the first-load effect decide what to do with it. */
+async function fetchPool(signal?: AbortSignal) {
+    const res = await apiFetch(`${API}/pool`, { credentials: 'include', signal })
+    if (!res.ok) throw new Error()
+    return await res.json() as PoolResponse
+}
 
 /**
  * The one read that drives the whole Lending page: pool stats, the caller's
@@ -18,9 +26,7 @@ export default function useLendingPool() {
     const refresh = useCallback(async () => {
         setError(false)
         try {
-            const res = await fetch(`${API}/pool`, { credentials: 'include' })
-            if (!res.ok) throw new Error()
-            setData(await res.json() as PoolResponse)
+            setData(await fetchPool())
         } catch {
             setError(true)
         } finally {
@@ -28,9 +34,22 @@ export default function useLendingPool() {
         }
     }, [])
 
+    // First load. The initial state already says "loading", so state is only
+    // written once the response is in — never synchronously in the effect.
     useEffect(() => {
-        void refresh()
-    }, [refresh])
+        const controller = new AbortController()
+        void (async () => {
+            try {
+                const pool = await fetchPool(controller.signal)
+                if (!controller.signal.aborted) setData(pool)
+            } catch {
+                if (!controller.signal.aborted) setError(true)
+            } finally {
+                if (!controller.signal.aborted) setLoading(false)
+            }
+        })()
+        return () => controller.abort()
+    }, [])
 
     return { data, loading, error, refresh }
 }

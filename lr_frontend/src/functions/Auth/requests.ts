@@ -1,3 +1,5 @@
+import { apiFetch } from '../apiFetch'
+
 type User = {
     id: string
     username: string
@@ -19,7 +21,7 @@ const b64 = (x: ArrayBuffer | Uint8Array) => {
 async function signed(path: string, data: object) {
     const key = await crypto.subtle.generateKey({ name: 'Ed25519' } as AlgorithmIdentifier, true, ['sign', 'verify']) as CryptoKeyPair
     const body = enc.encode(JSON.stringify({ ...data, nonce: crypto.randomUUID(), ingress_expiry: Date.now() + 120000 }))
-    const res = await fetch(`${API}${path}`, {
+    const res = await apiFetch(`${API}${path}`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
