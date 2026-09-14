@@ -114,6 +114,11 @@ export type TransactionKind =
     /** A deposit taken to cover a default — the member's own, or a pledge
      *  they made for somebody else's loan (030). */
     | 'deposit_seized'
+    /** The member's share of a repayment's depositor interest — every member
+     *  earns on their deposit balance — paid in as a withdrawable lot (039). */
+    | 'interest_earned'
+    /** A guarantor's tier-based share of a repayment on a loan they back (039). */
+    | 'guarantor_earned'
 
 /**
  * Where a movement got to. Withdrawals carry their PayPal payout's own status
@@ -164,6 +169,8 @@ export const TRANSACTION_KIND_LABEL: Record<TransactionKind, string> = {
     collateral_release: 'Collateral released',
     collateral_seize: 'Collateral seized',
     deposit_seized: 'Deposit seized',
+    interest_earned: 'Interest earned',
+    guarantor_earned: 'Guarantor interest',
 }
 
 /** The status pill's colour, as the `.lending-tx-status` modifier. */
@@ -195,6 +202,8 @@ export type PoolResponse = {
         out_on_loans: number
         active_loans: number
         utilization_pct: number
+        /** Every recorded repayment split, summed. `parts` sums to `total`. */
+        interest: { total: number; payments: number; parts: InterestParts }
     }
     me: {
         available: number
@@ -202,6 +211,8 @@ export type PoolResponse = {
         collateral: number
         pledged: number
         score: number
+        /** What the caller has been paid from repayments' interest, by why. */
+        interest_earned: { total: number; as_depositor: number; as_guarantor: number; payments: number }
     }
     params: {
         policy: PolicyParams

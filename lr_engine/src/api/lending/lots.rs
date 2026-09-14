@@ -15,6 +15,7 @@ use chrono::Utc;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use super::domain;
 use crate::api::users::shared::E;
 
 #[derive(Clone)]
@@ -198,16 +199,41 @@ pub async fn freeze_user_lots(
     rebadge_fifo(tx, &lots, amount, badge, backing_loan).await
 }
 
-/// Marks pool-wide available lots 'lent' to fund a disbursement, oldest
-/// first across ALL depositors — this is the "your deposit is locked while
-/// it funds a loan" the depositor sees. Tolerant of covering less than
-/// `amount`: the cash check in the disburse path is the real liquidity gate
-/// (retained earnings are cash without lots).
-pub async fn freeze_funding_lots(
+/// Groups locked lots by owner, members in id order (so every pro-rata step
+/// is deterministic) and each member's lots in the order they were locked.
+fn by_member(lots: Vec<Lot>) -> Vec<(Uuid, Vec<Lot>)> {
+    let mut members: Vec<(Uuid, Vec<Lot>)> = Vec::new();
+    for lot in lots {
+        match members.iter_mut().find(|(m, _)| *m == lot.user_id) {
+            Some((_, theirs)) => theirs.push(lot),
+            None => members.push((lot.user_id, vec![lot])),
+        }
+    }
+    members.sort_by_key(|(member, _)| *member);
+    members
+}
+
+/// Funds a disbursement from every depositor at once: each member's available
+/// balance goes 'lent' in proportion to their share of all available
+/// balances, until the locked slices add up to `amount`. Returns what each
+/// member put in.
+///
+/// Largest-remainder rounding (`domain::apportion_capped`) makes the slices
+/// sum to `amount` exactly and never exceed a member's own balance. Within a
+/// member, their oldest lots go first, splitting the last one.
+///
+/// Tolerant of the pool's available balances covering less than `amount`:
+/// the rest is funded by retained earnings (platform, reserve and recovery
+/// fund cash, which carries no lots), and the cash check in `disburse` is the
+/// real liquidity gate.
+pub async fn freeze_funding_pro_rata(
     tx: &mut Transaction<'_, Postgres>,
     amount: i64,
     backing_loan: Uuid,
-) -> Result<(), E> {
+) -> Result<Vec<(Uuid, i64)>, E> {
+    if amount <= 0 {
+        return Ok(Vec::new());
+    }
     let rows: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
         "SELECT id, user_id, amount FROM public.deposits
           WHERE badge = 'available'
@@ -217,10 +243,19 @@ pub async fn freeze_funding_lots(
     .fetch_all(&mut **tx)
     .await
     .map_err(|e| db_err(e, "lock pool lots"))?;
-    let lots: Vec<Lot> = rows.into_iter().map(|(id, user_id, amount)| Lot { id, user_id, amount }).collect();
-    let total: i64 = lots.iter().map(|l| l.amount).sum();
-    rebadge_fifo(tx, &lots, amount.min(total), "lent", backing_loan).await?;
-    Ok(())
+    let members = by_member(rows.into_iter().map(|(id, user_id, amount)| Lot { id, user_id, amount }).collect());
+
+    let balances: Vec<i64> = members.iter().map(|(_, lots)| lots.iter().map(|l| l.amount).sum()).collect();
+    let slices = domain::apportion_capped(amount, &balances);
+
+    let mut funded = Vec::new();
+    for ((member, lots), slice) in members.iter().zip(slices) {
+        if slice > 0 {
+            rebadge_fifo(tx, lots, slice, "lent", backing_loan).await?;
+            funded.push((*member, slice));
+        }
+    }
+    Ok(funded)
 }
 
 /// Flips every lot backing `loan_id` that wears one of `badges` back to
@@ -245,15 +280,50 @@ pub async fn release_loan_lots(
     Ok(())
 }
 
-/// Unlocks up to `amount` of the 'lent' lots funding `loan_id` (called as
-/// principal repays: the pool got cash back, so that much deposit is
-/// withdrawable again). FIFO with a split for the partial tail.
-pub async fn release_funding_lots(
+/// Every member's whole deposit balance (all badges: what they can withdraw,
+/// what is lent out, what backs their own loan, what they pledged), members in
+/// id order. This is what the depositors' share of interest is divided by.
+///
+/// Read without locks on purpose. The balances are a snapshot of the pool at
+/// the moment a payment lands, and the interest is credited as brand-new lots
+/// rather than by updating existing ones, so a repayment never waits on — or
+/// deadlocks against — a withdrawal or a recovery touching the same member.
+pub async fn deposit_balances(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<(Uuid, i64)>, E> {
+    sqlx::query_as(
+        "SELECT user_id, SUM(amount)::BIGINT FROM public.deposits
+          GROUP BY user_id
+         HAVING SUM(amount) > 0
+          ORDER BY user_id",
+    )
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "deposit balances"))
+}
+
+/// What is still locked funding `loan_id`, in total.
+pub async fn locked_funding(tx: &mut Transaction<'_, Postgres>, loan_id: Uuid) -> Result<i64, E> {
+    sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits
+          WHERE backing_loan = $1 AND badge = 'lent'",
+    )
+    .bind(loan_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "locked funding"))
+}
+
+/// Unlocks `amount` of the 'lent' lots funding `loan_id` as principal comes
+/// back, pro-rata across the members funding it — the same shape the money
+/// was locked in, so nobody's balance is freed ahead of anyone else's. The
+/// caller decides how much (`domain::funding_to_release`); this decides whose.
+pub async fn release_funding_pro_rata(
     tx: &mut Transaction<'_, Postgres>,
     loan_id: Uuid,
-    mut amount: i64,
+    amount: i64,
 ) -> Result<(), E> {
-    let now = Utc::now().timestamp();
+    if amount <= 0 {
+        return Ok(());
+    }
     let rows: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
         "SELECT id, user_id, amount FROM public.deposits
           WHERE backing_loan = $1 AND badge = 'lent'
@@ -264,28 +334,42 @@ pub async fn release_funding_lots(
     .fetch_all(&mut **tx)
     .await
     .map_err(|e| db_err(e, "lock lent lots"))?;
+    let members = by_member(rows.into_iter().map(|(id, user_id, amount)| Lot { id, user_id, amount }).collect());
 
-    for (id, user_id, lot_amount) in rows {
+    let lent: Vec<i64> = members.iter().map(|(_, lots)| lots.iter().map(|l| l.amount).sum()).collect();
+    let slices = domain::apportion_capped(amount, &lent);
+    for ((_, lots), slice) in members.iter().zip(slices) {
+        release_fifo(tx, lots, slice).await?;
+    }
+    Ok(())
+}
+
+/// Unlocks `amount` out of one member's locked lent lots, oldest first,
+/// splitting the last. `amount` never exceeds the lots' sum
+/// (`apportion_capped` guarantees it).
+async fn release_fifo(tx: &mut Transaction<'_, Postgres>, lots: &[Lot], mut amount: i64) -> Result<(), E> {
+    let now = Utc::now().timestamp();
+    for lot in lots {
         if amount == 0 {
             break;
         }
-        if lot_amount <= amount {
+        if lot.amount <= amount {
             sqlx::query(
                 "UPDATE public.deposits
                     SET badge = 'available', backing_loan = NULL, updated_at = $1
                   WHERE id = $2",
             )
             .bind(now)
-            .bind(id)
+            .bind(lot.id)
             .execute(&mut **tx)
             .await
             .map_err(|e| db_err(e, "release lent lot"))?;
-            amount -= lot_amount;
+            amount -= lot.amount;
         } else {
             sqlx::query("UPDATE public.deposits SET amount = amount - $1, updated_at = $2 WHERE id = $3")
                 .bind(amount)
                 .bind(now)
-                .bind(id)
+                .bind(lot.id)
                 .execute(&mut **tx)
                 .await
                 .map_err(|e| db_err(e, "shrink lent lot"))?;
@@ -293,14 +377,15 @@ pub async fn release_funding_lots(
                 "INSERT INTO public.deposits (user_id, amount, badge, parent_lot)
                  VALUES ($1, $2, 'available', $3)",
             )
-            .bind(user_id)
+            .bind(lot.user_id)
             .bind(amount)
-            .bind(id)
+            .bind(lot.id)
             .execute(&mut **tx)
             .await
             .map_err(|e| db_err(e, "split lent lot"))?;
             amount = 0;
         }
     }
+    debug_assert_eq!(amount, 0);
     Ok(())
 }

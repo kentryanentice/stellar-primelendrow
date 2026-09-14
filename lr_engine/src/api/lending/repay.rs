@@ -3,8 +3,10 @@
 //! PayPal is captured server-side first (never inside the transaction); the
 //! captured centavos are then allocated oldest installment first — each
 //! installment's interest then its principal — so a payment clears whole
-//! installments in order (Lesson 8), the interest is split at the
-//! single rounding site, 'lent' funding lots unlock as principal returns,
+//! installments in order (Lesson 8), the interest is split four ways
+//! (platform, reserve, every depositor pro-rata to their balance, and the
+//! risk band: guarantors by their own tier, the rest to the recovery fund),
+//! 'lent' funding lots unlock as principal returns,
 //! and a fully paid loan releases its collateral/pledges and bumps the
 //! borrower's score. A duplicate capture bounces off the ledger's rail_ref.
 
@@ -50,6 +52,18 @@ pub struct RepayResponse {
     pub principal_outstanding: i64,
     pub loan_status: &'static str,
     pub message: &'static str,
+}
+
+/// One member's slice of a repayment's interest, as recorded in
+/// `member_interest` (039).
+struct MemberCredit {
+    user_id: Uuid,
+    role: &'static str,
+    /// Deposit balance for a depositor, pledge for a guarantor.
+    weight: i64,
+    /// The tier percent a guarantor was paid at.
+    tier_share: Option<i16>,
+    amount: i64,
 }
 
 struct ScheduleRow {
@@ -208,6 +222,12 @@ pub async fn repay(
     //
     // Two shapes, because the money means two different things.
     let mut postings = vec![Posting { account: "cash", amount: received }];
+    // The interest split exactly as booked below, recorded beside the event
+    // (037), and every member's slice of it (039). All stay empty on a
+    // settlement, which collects no interest.
+    // With the two totals its member slices were divided by (040).
+    let mut booked_split: Option<(domain::InterestParts, i64, i64)> = None;
+    let mut member_credits: Vec<MemberCredit> = Vec::new();
     let settlement = if settling {
         // Settling a default. `loans_receivable` for this loan is already zero
         // — `recovery::advance` wrote the whole debt off when it took the
@@ -231,24 +251,80 @@ pub async fn repay(
         }
         Some(split)
     } else {
-        let (platform_cut, reserve_cut) =
-            domain::split_interest(interest_total, &rules.params.interest_split);
+        // Who shares the interest, read before this payment credits or unlocks
+        // anything, so the split reflects the pool as it stood when the money
+        // arrived.
+        //
+        //   * Depositors: every member, by whole deposit balance.
+        //   * Guarantors: the loan's accepted guarantors, each at the tier of
+        //     their OWN score, weighted by pledge.
+        //
+        // `book_interest` guarantees every slice sums back to its part.
+        let balances = lots::deposit_balances(&mut tx).await?;
+        let guarantors: Vec<(Uuid, i64, i16)> = sqlx::query_as(
+            "SELECT g.guarantor_id, g.pledge_amount, COALESCE(c.score, 50)
+               FROM public.loan_guarantors g
+               LEFT JOIN public.credit_scores c ON c.user_id = g.guarantor_id
+              WHERE g.loan_id = $1 AND g.status = 'accepted'
+              ORDER BY g.guarantor_id",
+        )
+        .bind(p.loan_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| db_err(e, "guarantor stakes"))?;
+
+        let weights: Vec<i64> = balances.iter().map(|(_, balance)| *balance).collect();
+        let stakes: Vec<domain::GuarantorStake> = guarantors
+            .iter()
+            .map(|(_, pledge, score)| domain::GuarantorStake { pledge: *pledge, score: *score })
+            .collect();
+        let booked = domain::book_interest(interest_total, &rules.params.interest_split, &weights, &stakes);
+        let parts = booked.parts;
+
+        for ((member, balance), amount) in balances.iter().zip(&booked.to_depositors) {
+            if *amount > 0 {
+                member_credits.push(MemberCredit {
+                    user_id: *member, role: "depositor", weight: *balance, tier_share: None, amount: *amount,
+                });
+            }
+        }
+        for (((member, pledge, _), amount), tier) in
+            guarantors.iter().zip(&booked.to_guarantors).zip(&booked.guarantor_tiers)
+        {
+            if *amount > 0 {
+                member_credits.push(MemberCredit {
+                    user_id: *member, role: "guarantor", weight: *pledge, tier_share: Some(*tier as i16), amount: *amount,
+                });
+            }
+        }
+
         if principal_total > 0 {
             postings.push(Posting { account: "loans_receivable", amount: -principal_total });
         }
-        if platform_cut > 0 {
-            postings.push(Posting { account: "platform_earnings", amount: -platform_cut });
-        }
-        if reserve_cut > 0 {
-            postings.push(Posting { account: "reserve_fund", amount: -reserve_cut });
+        for (account, amount) in [
+            ("platform_earnings", parts.platform),
+            ("reserve_fund", parts.reserve),
+            ("recovery_fund", parts.recovery_fund),
+            // Depositors' and guarantors' interest is owed to members, like the
+            // excess below; each gets a lot of their own after the event.
+            ("member_deposits", parts.depositors + parts.guarantor),
+        ] {
+            if amount > 0 {
+                postings.push(Posting { account, amount: -amount });
+            }
         }
         if excess > 0 {
             postings.push(Posting { account: "member_deposits", amount: -excess });
         }
+        if interest_total > 0 {
+            let pool_balance: i64 = weights.iter().sum();
+            let pledged_total: i64 = guarantors.iter().map(|(_, pledge, _)| *pledge).sum();
+            booked_split = Some((parts, pool_balance, pledged_total));
+        }
         None
     };
 
-    commit_event(
+    let event_id = commit_event(
         &mut tx,
         EventDraft {
             kind: "repayment_received",
@@ -267,6 +343,67 @@ pub async fn repay(
     )
     .await
     .map_err(|e| ledger_err(e, "repayment"))?;
+
+    if let Some((parts, pool_balance, pledged_total)) = booked_split {
+        sqlx::query(
+            "INSERT INTO public.interest_splits
+                (event_id, loan_id, policy_version, interest,
+                 platform, reserve, depositors, guarantor, recovery_fund, guarantor_share,
+                 pool_balance, pledged_total)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)",
+        )
+        .bind(event_id)
+        .bind(p.loan_id)
+        .bind(rules.id)
+        .bind(interest_total)
+        .bind(parts.platform)
+        .bind(parts.reserve)
+        .bind(parts.depositors)
+        .bind(parts.guarantor)
+        .bind(parts.recovery_fund)
+        .bind(pool_balance)
+        .bind(pledged_total)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| db_err(e, "record interest split"))?;
+    }
+
+    // Every member's interest becomes withdrawable money: one new lot per
+    // member per payment, holding their depositor and guarantor slices
+    // together. New lots rather than topping up existing ones, so this never
+    // takes a row lock another handler could be holding (see
+    // `lots::deposit_balances`). The lots sum to the member_deposits credit
+    // above because `book_interest`'s slices sum to their parts exactly, and
+    // each slice is recorded with where it came from.
+    let mut lots_to_credit: Vec<(Uuid, i64)> = Vec::new();
+    for credit in &member_credits {
+        match lots_to_credit.iter_mut().find(|(m, _)| *m == credit.user_id) {
+            Some((_, total)) => *total += credit.amount,
+            None => lots_to_credit.push((credit.user_id, credit.amount)),
+        }
+        sqlx::query(
+            "INSERT INTO public.member_interest (event_id, loan_id, user_id, role, weight, tier_share, amount)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(event_id)
+        .bind(p.loan_id)
+        .bind(credit.user_id)
+        .bind(credit.role)
+        .bind(credit.weight)
+        .bind(credit.tier_share)
+        .bind(credit.amount)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| db_err(e, "record member interest"))?;
+    }
+    for (member, amount) in lots_to_credit {
+        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')")
+            .bind(member)
+            .bind(amount)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| db_err(e, "credit member interest"))?;
+    }
 
     // The borrower-facing payment record (migration 023): the ledger event
     // above is the books, this is the "here is every payment you made" row the
@@ -320,8 +457,12 @@ pub async fn repay(
         // again. Not on a settlement: recovery already released the savers'
         // lots when it settled the default, and releasing them a second time
         // would unfreeze deposits backing somebody else's loan.
+        // Unlocked in proportion to the principal returned, pro-rata across
+        // the members funding it, with the final payment unlocking the rest.
         if principal_total > 0 {
-            lots::release_funding_lots(&mut tx, p.loan_id, principal_total).await?;
+            let locked = lots::locked_funding(&mut tx, p.loan_id).await?;
+            let release = domain::funding_to_release(locked, principal_total, outstanding_before);
+            lots::release_funding_pro_rata(&mut tx, p.loan_id, release).await?;
         }
     }
 

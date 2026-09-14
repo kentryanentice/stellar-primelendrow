@@ -8,6 +8,7 @@
 //! instead of twenty-seven.
 //!
 //!   fx        — pin the XLM/PHP rate used for collateral valuation
+//!   interest  — every repayment's interest split and the members paid from it
 //!   loans     — the loan book: every loan, its schedule, collateral,
 //!               recoveries and movements, paginated
 //!   default   — declare a loan defaulted, and run the recovery waterfall
@@ -45,5 +46,6 @@
 pub mod actions;
 pub mod default;
 pub mod fx;
+pub mod interest;
 pub mod loans;
 pub mod reconcile;

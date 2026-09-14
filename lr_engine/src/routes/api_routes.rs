@@ -176,6 +176,11 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/lending/admin/loans",
             post(lending::admin_loans).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // Where every repayment's interest went, and to whom.
+        .route(
+            "/lending/admin/interest",
+            post(lending::admin_interest).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route(
             "/lending/admin/loans/default",
             post(lending::loan_default).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),

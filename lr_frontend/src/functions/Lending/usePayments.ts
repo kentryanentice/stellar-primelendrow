@@ -58,8 +58,11 @@ export default function usePayments() {
         setTotals(data.totals)
     }, [])
 
-    const load = useCallback(async (targetPage: number) => {
-        setLoading(true)
+    // `quiet` keeps the rows on screen while they reload — used after a
+    // payment, where the list is only gaining a row and swapping it for a
+    // skeleton would read as the history disappearing.
+    const load = useCallback(async (targetPage: number, quiet = false) => {
+        if (!quiet) setLoading(true)
         setError(false)
         try {
             showPage(await fetchPage(targetPage))
@@ -95,7 +98,7 @@ export default function usePayments() {
         return () => controller.abort()
     }, [fetchPage, showPage])
 
-    const refresh = useCallback(() => load(page), [load, page])
+    const refresh = useCallback(() => load(page, true), [load, page])
     const goToPage = useCallback((target: number) => load(target), [load])
 
     return { payments, page, total, totalPages, totals, loading, error, refresh, goToPage }

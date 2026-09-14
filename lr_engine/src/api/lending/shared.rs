@@ -158,9 +158,25 @@ pub async fn disburse(
         ));
     }
 
-    // The depositor-visible side of funding: their available lots go 'lent'
-    // until principal comes back.
-    lots::freeze_funding_lots(tx, principal, loan_id).await?;
+    // The depositor-visible side of funding. What the borrower backs with their
+    // own locked deposit is their money on the line, not anyone else's: a
+    // deposit-backed loan locks at least principal / LTV of it, so nobody
+    // else's balance moves; an XLM loan has none, so the pool funds all of it;
+    // a guarantor loan funds everything past the borrower's own deposit cover.
+    // One rule, read off the lots themselves rather than the product name, so
+    // it cannot drift from what apply actually froze. The rest is taken
+    // pro-rata from every member's available balance and unlocks the same way
+    // as principal comes back.
+    let own_backing: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits
+          WHERE backing_loan = $1 AND badge = 'collateral'",
+    )
+    .bind(loan_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "own deposit backing"))?;
+    let pool_funded = domain::pool_funded_amount(principal, own_backing);
+    lots::freeze_funding_pro_rata(tx, pool_funded, loan_id).await?;
 
     let now = Utc::now().timestamp();
     commit_event(
@@ -172,7 +188,8 @@ pub async fn disburse(
             deposit_id: None,
             rail_ref: None,
             payload: serde_json::json!({
-                "principal": principal, "rate_bps": rate_bps, "term_months": term_months
+                "principal": principal, "rate_bps": rate_bps, "term_months": term_months,
+                "own_deposit_backing": own_backing, "pool_funded": pool_funded
             }),
             actor_id: Some(borrower_id),
         },

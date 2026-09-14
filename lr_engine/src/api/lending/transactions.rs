@@ -9,7 +9,7 @@
 //! previously show that the withdrawal ever happened.
 //!
 //! Assembled from what already exists rather than a new mirror table, the same
-//! call `custody` makes. Five sources, one ordered list:
+//! call `custody` makes. Six sources, one ordered list:
 //!
 //!   * deposits and withdrawals from `ledger_events` + `ledger_postings` —
 //!     the amount is read from the POSTING, never from the payload, so the
@@ -198,6 +198,23 @@ const MOVEMENTS: &str = "
            'recovery:' || r.id::text
       FROM public.loan_recoveries r
      WHERE r.user_id = $1 AND r.source <> 'borrower_xlm'
+
+    UNION ALL
+
+    -- pesos in: the member's slice of a repayment's interest (039) — as a
+    -- depositor in the pool, or as a guarantor on that loan — paid as a new
+    -- withdrawable lot. A slice that rounded to nothing moved no money, so it
+    -- is not a transaction.
+    SELECT d.created_at,
+           CASE WHEN d.role = 'guarantor' THEN 'guarantor_earned' ELSE 'interest_earned' END,
+           'php',
+           d.amount,
+           'completed',
+           NULL,
+           d.loan_id,
+           'interest:' || d.id::text
+      FROM public.member_interest d
+     WHERE d.user_id = $1 AND d.amount > 0
 ";
 
 type MovementRow = (i64, String, String, i64, String, Option<String>, Option<Uuid>, String);

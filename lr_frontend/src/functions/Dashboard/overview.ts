@@ -48,7 +48,7 @@ export function loanStanding(loans: Loan[]): Standing | null {
 }
 
 export type ActivitySide = 'lending' | 'borrowing'
-export type ActivityGlyph = 'deposit' | 'withdraw' | 'refund' | 'seized' | 'lock' | 'unlock' | 'paid' | 'disbursed'
+export type ActivityGlyph = 'deposit' | 'withdraw' | 'refund' | 'seized' | 'interest' | 'lock' | 'unlock' | 'paid' | 'disbursed'
 
 export type ActivityRow = {
     key: string
@@ -69,6 +69,8 @@ const SIDE: Record<TransactionKind, ActivitySide> = {
     withdrawal: 'lending',
     withdrawal_refund: 'lending',
     deposit_seized: 'lending',
+    interest_earned: 'lending',
+    guarantor_earned: 'lending',
     collateral_lock: 'borrowing',
     collateral_release: 'borrowing',
     collateral_seize: 'borrowing',
@@ -79,6 +81,8 @@ const GLYPH: Record<TransactionKind, ActivityGlyph> = {
     withdrawal: 'withdraw',
     withdrawal_refund: 'refund',
     deposit_seized: 'seized',
+    interest_earned: 'interest',
+    guarantor_earned: 'interest',
     collateral_lock: 'lock',
     collateral_release: 'unlock',
     collateral_seize: 'seized',

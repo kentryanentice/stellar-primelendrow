@@ -1,7 +1,7 @@
 import { SkeletonBone, LedgerRowsSkeleton, TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
 
-const TILE_LABEL_WIDTHS = [62, 84, 96, 88]
-const TILE_VALUE_WIDTHS = [78, 66, 72, 48]
+const TILE_LABEL_WIDTHS = [62, 84, 96, 88, 110]
+const TILE_VALUE_WIDTHS = [78, 66, 72, 48, 70]
 
 /**
  * The funds rail — same shape ManageFundsCard.tsx loads into. Exported on
@@ -93,23 +93,28 @@ function LendingSkeleton() {
                 </div>
             </section>
 
-            <section className='lending-card lending-card-split' aria-hidden='true'>
-                <div className='lending-card-head'>
-                    <span className='lending-card-icon is-accent' />
-                    <h2><SkeletonBone width={140} height={16} /></h2>
+            <section className='lending-card lending-card-split'>
+                <div className='lending-tier-summary'>
+                    <div className='lending-tier-summary-score'>
+                        <span className='lending-stat-label'><SkeletonBone width={84} height={11} /></span>
+                        <span className='lending-tier-summary-band'><SkeletonBone width={70} height={15} /></span>
+                    </div>
+                    <div className='lending-tier-summary-divider' />
+                    <div className='lending-tier-summary-stats'>
+                        {[72, 56, 60, 88].map((w, i) => (
+                            <div key={i}>
+                                <span className='lending-stat-label'><SkeletonBone width={w} height={11} /></span>
+                                <span className='lending-stat-value'><SkeletonBone width={52} height={15} /></span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className='lending-tier-summary-divider' />
+                    <div className='lending-tier-summary-score'>
+                        <span className='lending-stat-label'><SkeletonBone width={70} height={11} /></span>
+                        <span className='lending-stat-value'><SkeletonBone width={64} height={15} /></span>
+                    </div>
+                    <span className='lending-btn lending-tier-toggle' aria-hidden='true'><SkeletonBone width={90} height={13} /></span>
                 </div>
-                <SkeletonBone width='70%' height={13} />
-                <SkeletonBone width='100%' height={43} radius={10} />
-                <SkeletonBone width='100%' height={28} radius={4} />
-                <ul className='lending-split-legend'>
-                    {[0, 1, 2, 3, 4].map(i => (
-                        <li key={i}>
-                            <SkeletonBone width={10} height={10} radius={3} />
-                            <span className='lending-split-legend-text'><SkeletonBone width={180} height={13} /></span>
-                            <SkeletonBone width={52} height={13} />
-                        </li>
-                    ))}
-                </ul>
             </section>
 
             <div className='lending-rail-layout'>

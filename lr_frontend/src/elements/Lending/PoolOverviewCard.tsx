@@ -4,8 +4,9 @@ import type { PoolResponse } from '../../functions/Lending/types'
 /**
  * The pool of funds, honestly: how much members have deposited, how much is
  * out working as loans, how much cash is on hand, and how hard the pool is
- * working right now — four standalone tiles rather than one boxed card, so
- * they read at a glance above the tier/ledger content.
+ * working right now, and how much interest it has collected — standalone
+ * tiles rather than one boxed card, so they read at a glance above the
+ * tier/ledger content. Where that interest went is InterestSplitCard's job.
  */
 function PoolOverviewCard({ data }: { data: PoolResponse }) {
     const { pool } = data
@@ -32,6 +33,10 @@ function PoolOverviewCard({ data }: { data: PoolResponse }) {
                         <div className='lending-pool-working-fill' style={{ width: `${Math.min(100, pool.utilization_pct)}%` }} />
                     </div>
                 </div>
+            </div>
+            <div className='lending-funds-tile'>
+                <span className='lending-stat-label'>Interest collected</span>
+                <span className='lending-stat-value is-good'>{pesosCompact(pool.interest.total)}</span>
             </div>
         </div>
     )
