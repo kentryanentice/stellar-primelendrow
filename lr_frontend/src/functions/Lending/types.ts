@@ -195,6 +195,8 @@ export type PoolResponse = {
         out_on_loans: number
         active_loans: number
         utilization_pct: number
+        /** Every recorded repayment split, summed. `parts` sums to `total`. */
+        interest: { total: number; payments: number; parts: InterestParts }
     }
     me: {
         available: number

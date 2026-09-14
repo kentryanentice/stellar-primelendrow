@@ -24,6 +24,17 @@ pub struct PoolStats {
     pub active_loans: i64,
     /// 0..100, integer — how much of the pool is working.
     pub utilization_pct: i64,
+    pub interest: InterestCollected,
+}
+
+/// All interest the pool has collected, and where it actually went: the sum
+/// of every recorded split (037), not the published rule applied after the
+/// fact. `parts` always sums to `total`, because every row does.
+#[derive(Serialize)]
+pub struct InterestCollected {
+    pub total: i64,
+    pub payments: i64,
+    pub parts: domain::InterestParts,
 }
 
 #[derive(Serialize)]
@@ -128,6 +139,23 @@ pub async fn summary(
     let working = out_on_loans + cash_available;
     let utilization_pct = if working > 0 { out_on_loans * 100 / working } else { 0 };
 
+    let (total, payments, platform, reserve, depositors, guarantor, recovery_fund):
+        (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(interest), 0)::BIGINT, COUNT(*),
+                COALESCE(SUM(platform), 0)::BIGINT, COALESCE(SUM(reserve), 0)::BIGINT,
+                COALESCE(SUM(depositors), 0)::BIGINT, COALESCE(SUM(guarantor), 0)::BIGINT,
+                COALESCE(SUM(recovery_fund), 0)::BIGINT
+           FROM public.interest_splits",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| db_err(e, "interest totals"))?;
+    let interest = InterestCollected {
+        total,
+        payments,
+        parts: domain::InterestParts { platform, reserve, depositors, guarantor, recovery_fund },
+    };
+
     // The four running totals, grouped in the database rather than summed by
     // looping the caller's full lot list — the list itself now lives behind
     // its own paginated endpoint (deposits_list) and this response no longer
@@ -174,6 +202,7 @@ pub async fn summary(
             out_on_loans,
             active_loans,
             utilization_pct,
+            interest,
         },
         me,
         params: Params {

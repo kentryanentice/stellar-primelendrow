@@ -354,6 +354,7 @@ pub fn check_interest_split(params: &PolicyParams) -> Result<(), &'static str> {
 }
 
 /// The guarantor tier a score falls in — the split's counterpart to `band_for`.
+#[cfg_attr(not(test), expect(dead_code, reason = "read by the repayment path once the guarantor split is wired"))]
 pub fn guarantor_tier_for(score: i16, split: &InterestSplit) -> Option<&GuarantorTier> {
     split
         .guarantor_tiers

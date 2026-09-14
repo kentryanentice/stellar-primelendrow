@@ -208,6 +208,9 @@ pub async fn repay(
     //
     // Two shapes, because the money means two different things.
     let mut postings = vec![Posting { account: "cash", amount: received }];
+    // The interest split exactly as booked below, recorded beside the event
+    // (037). Stays None on a settlement, which collects no interest.
+    let mut booked_split: Option<domain::InterestParts> = None;
     let settlement = if settling {
         // Settling a default. `loans_receivable` for this loan is already zero
         // — `recovery::advance` wrote the whole debt off when it took the
@@ -245,10 +248,21 @@ pub async fn repay(
         if excess > 0 {
             postings.push(Posting { account: "member_deposits", amount: -excess });
         }
+        if interest_total > 0 {
+            // Interim two-way split: only platform and reserve are booked, so
+            // only they are recorded. The four-way wiring fills the rest.
+            booked_split = Some(domain::InterestParts {
+                platform: platform_cut,
+                reserve: reserve_cut,
+                depositors: 0,
+                guarantor: 0,
+                recovery_fund: 0,
+            });
+        }
         None
     };
 
-    commit_event(
+    let event_id = commit_event(
         &mut tx,
         EventDraft {
             kind: "repayment_received",
@@ -267,6 +281,27 @@ pub async fn repay(
     )
     .await
     .map_err(|e| ledger_err(e, "repayment"))?;
+
+    if let Some(parts) = booked_split {
+        sqlx::query(
+            "INSERT INTO public.interest_splits
+                (event_id, loan_id, policy_version, interest,
+                 platform, reserve, depositors, guarantor, recovery_fund, guarantor_share)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)",
+        )
+        .bind(event_id)
+        .bind(p.loan_id)
+        .bind(rules.id)
+        .bind(interest_total)
+        .bind(parts.platform)
+        .bind(parts.reserve)
+        .bind(parts.depositors)
+        .bind(parts.guarantor)
+        .bind(parts.recovery_fund)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| db_err(e, "record interest split"))?;
+    }
 
     // The borrower-facing payment record (migration 023): the ledger event
     // above is the books, this is the "here is every payment you made" row the
