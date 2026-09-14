@@ -28,7 +28,27 @@ export type PolicyParams = {
     term_months: { min: number; max: number }
     min_deposit: number
     min_loan: number
-    interest_split: { savers: number; platform: number; reserve: number }
+    interest_split: InterestSplit
+}
+
+/** One row of the score → guarantor-share table. `share` is percent of the
+ *  whole interest payment, carved out of the risk band. */
+export type GuarantorTier = {
+    min_score: number
+    max_score: number
+    share: number
+}
+
+/** Where collected interest lands, in percent. platform + reserve +
+ *  depositors + risk_band === 100; the recovery fund keeps whatever of the
+ *  risk band the guarantor tier doesn't take. */
+export type InterestSplit = {
+    platform: number
+    reserve: number
+    depositors: number
+    risk_band: number
+    guarantor_cap: number
+    guarantor_tiers: GuarantorTier[]
 }
 
 /** One public price feed's contribution to the agreed XLM/PHP rate. */
@@ -190,7 +210,27 @@ export type PoolResponse = {
         fx: FxQuote
         collateral_contract: string | null
         paypal_ready: boolean
+        /** The published worked example, split by the engine. */
+        split_example: SplitExample
     }
+}
+
+/** Where one interest payment lands, whole centavos. The engine guarantees
+ *  the parts sum to the interest they came from. */
+export type InterestParts = {
+    platform: number
+    reserve: number
+    depositors: number
+    guarantor: number
+    recovery_fund: number
+}
+
+export type TierExample = GuarantorTier & { parts: InterestParts }
+
+export type SplitExample = {
+    interest: number
+    no_guarantor: InterestParts
+    tiers: TierExample[]
 }
 
 export type Product = 'deposit_backed' | 'xlm_collateral' | 'guarantor'

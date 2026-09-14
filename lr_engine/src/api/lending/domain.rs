@@ -6,7 +6,7 @@
 //! Money is whole centavos in i64; intermediate products use i128 so a cap
 //! times a percentage can never overflow on the way to a valid result.
 
-use super::policy::{Band, InterestSplit, PolicyParams};
+use super::policy::{Band, GuarantorTier, InterestSplit, PolicyParams};
 
 pub const CENTAVOS_PER_XLM_UNIT: i64 = 10_000_000; // stroops in 1 XLM
 
@@ -306,10 +306,96 @@ pub fn build_schedule(principal: i64, rate_bps: i32, term_months: i16, start_at:
     rows
 }
 
-/// Where a peso of collected interest lands (D6, simplified while saver
-/// payouts are a later slice): platform's share is rounded at the single
-/// site, the reserve takes the deterministic remainder, so the split always
-/// sums back to the collected centavo.
+/// The rulebook's interest split is internally consistent (SOW deliverable 3):
+/// the four fixed shares are non-negative and sum to exactly 100, the
+/// guarantor cap fits inside the risk band, and the tier table is contiguous,
+/// ascending, never above the cap, never decreasing as score rises, and covers
+/// every score a pricing band can produce. Checked when the rulebook loads, so
+/// a bad policy change fails loudly instead of mis-splitting money.
+pub fn check_interest_split(params: &PolicyParams) -> Result<(), &'static str> {
+    let s = &params.interest_split;
+    let fixed = [s.platform, s.reserve, s.depositors, s.risk_band];
+    if fixed.iter().any(|p| *p < 0) {
+        return Err("negative share");
+    }
+    if fixed.iter().sum::<i64>() != 100 {
+        return Err("platform + reserve + depositors + risk_band must equal 100");
+    }
+    if s.guarantor_cap < 0 || s.guarantor_cap > s.risk_band {
+        return Err("guarantor_cap must be within the risk band");
+    }
+
+    let tiers = &s.guarantor_tiers;
+    let (Some(first), Some(last)) = (tiers.first(), tiers.last()) else {
+        return Err("no guarantor tiers");
+    };
+    for t in tiers {
+        if t.min_score > t.max_score {
+            return Err("tier min_score above max_score");
+        }
+        if t.share < 0 || t.share > s.guarantor_cap {
+            return Err("tier share outside 0..=guarantor_cap");
+        }
+    }
+    for w in tiers.windows(2) {
+        if w[1].min_score != w[0].max_score + 1 {
+            return Err("tiers must be contiguous and ascending");
+        }
+        if w[1].share < w[0].share {
+            return Err("tier share must not fall as score rises");
+        }
+    }
+    let band_min = params.bands.iter().map(|b| b.min_score).min();
+    let band_max = params.bands.iter().map(|b| b.max_score).max();
+    if band_min.is_some_and(|m| m < first.min_score) || band_max.is_some_and(|m| m > last.max_score) {
+        return Err("tiers do not cover every banded score");
+    }
+    Ok(())
+}
+
+/// The guarantor tier a score falls in — the split's counterpart to `band_for`.
+pub fn guarantor_tier_for(score: i16, split: &InterestSplit) -> Option<&GuarantorTier> {
+    split
+        .guarantor_tiers
+        .iter()
+        .find(|t| score >= t.min_score && score <= t.max_score)
+}
+
+/// Where one interest payment lands, in whole centavos. Always sums to the
+/// interest it was split from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct InterestParts {
+    pub platform: i64,
+    pub reserve: i64,
+    pub depositors: i64,
+    pub guarantor: i64,
+    pub recovery_fund: i64,
+}
+
+/// The four-way split (SOW deliverable 3). The three fixed shares are each
+/// rounded at the single site; the risk band is the deterministic remainder
+/// of the interest, so the parts always sum back exactly. The guarantor's
+/// share (percent of the whole interest, `None` when nobody guarantees) is
+/// rounded the same way and capped at the band, and the recovery fund keeps
+/// the rest of the band — so it can be squeezed to zero but never negative.
+///
+/// Not yet wired into repayments; `split_interest` below still books those.
+pub fn split_interest_parts(interest: i64, split: &InterestSplit, guarantor_share: Option<i64>) -> InterestParts {
+    let pct = |p: i64| round_half_even(interest as i128 * p as i128, 100);
+    let platform = pct(split.platform);
+    let reserve = pct(split.reserve);
+    let depositors = pct(split.depositors);
+    let band = interest - platform - reserve - depositors;
+    let guarantor = guarantor_share.map_or(0, |s| pct(s.min(split.guarantor_cap)).clamp(0, band.max(0)));
+    InterestParts { platform, reserve, depositors, guarantor, recovery_fund: band - guarantor }
+}
+
+/// INTERIM two-way split, kept only so the repayment path compiles and ties
+/// out between Monday's rulebook change and Tuesday's four-way rewrite:
+/// platform's share is rounded at the single site and EVERYTHING else —
+/// reserve, depositors and the risk band — lands in the reserve as the
+/// deterministic remainder. No centavo is lost, but nothing reaches
+/// depositors, guarantors or the recovery fund until Thursday's wiring.
 pub fn split_interest(interest: i64, split: &InterestSplit) -> (i64, i64) {
     let platform = round_half_even(interest as i128 * split.platform as i128, 100);
     let reserve = interest - platform;
@@ -320,6 +406,24 @@ pub fn split_interest(interest: i64, split: &InterestSplit) -> (i64, i64) {
 mod tests {
     use super::*;
     use crate::api::lending::policy::{InterestSplit, PolicyParams, TermRange};
+
+    /// The SOW's published split and tier table, verbatim.
+    fn sow_split() -> InterestSplit {
+        let tier = |min_score, max_score, share| GuarantorTier { min_score, max_score, share };
+        InterestSplit {
+            platform: 10,
+            reserve: 20,
+            depositors: 40,
+            risk_band: 30,
+            guarantor_cap: 25,
+            guarantor_tiers: vec![
+                tier(50, 79, 10),
+                tier(80, 104, 15),
+                tier(105, 129, 20),
+                tier(130, 150, 25),
+            ],
+        }
+    }
 
     fn params() -> PolicyParams {
         PolicyParams {
@@ -336,7 +440,7 @@ mod tests {
             term_months: TermRange { min: 3, max: 12 },
             min_deposit: 10_000,
             min_loan: 50_000,
-            interest_split: InterestSplit { savers: 0, platform: 80, reserve: 20 },
+            interest_split: sow_split(),
         }
     }
 
@@ -580,10 +684,84 @@ mod tests {
 
     #[test]
     fn interest_split_sums_back_exactly() {
-        let split = InterestSplit { savers: 0, platform: 80, reserve: 20 };
+        let split = sow_split();
         for interest in [0, 1, 99, 101, 12_345] {
             let (platform, reserve) = split_interest(interest, &split);
             assert_eq!(platform + reserve, interest);
         }
+    }
+
+    #[test]
+    fn the_published_rulebook_passes_its_own_checks() {
+        assert_eq!(check_interest_split(&params()), Ok(()));
+    }
+
+    #[test]
+    fn a_malformed_split_is_refused() {
+        let broken = |f: fn(&mut InterestSplit)| {
+            let mut p = params();
+            f(&mut p.interest_split);
+            check_interest_split(&p)
+        };
+        // Fixed shares that don't sum to 100 invent or lose centavos.
+        assert!(broken(|s| s.depositors = 39).is_err());
+        assert!(broken(|s| { s.platform = -10; s.depositors = 60 }).is_err());
+        // A cap past the band would push the recovery fund negative.
+        assert!(broken(|s| s.guarantor_cap = 31).is_err());
+        // A tier above the cap.
+        assert!(broken(|s| s.guarantor_tiers[3].share = 26).is_err());
+        // A gap between tiers leaves some score with no share.
+        assert!(broken(|s| s.guarantor_tiers[1].min_score = 81).is_err());
+        // Better reputation never earns less.
+        assert!(broken(|s| s.guarantor_tiers[2].share = 12).is_err());
+        // Tiers that stop short of the top band.
+        assert!(broken(|s| s.guarantor_tiers[3].max_score = 149).is_err());
+        assert!(broken(|s| s.guarantor_tiers.clear()).is_err());
+    }
+
+    #[test]
+    fn the_sow_worked_example_to_the_centavo() {
+        // ₱1,000 at 2%/mo — the first payment's interest is ₱20.00.
+        let s = sow_split();
+        let parts = |g| split_interest_parts(2_000, &s, g);
+        let row = |guarantor, recovery_fund| InterestParts {
+            platform: 200, reserve: 400, depositors: 800, guarantor, recovery_fund,
+        };
+        assert_eq!(parts(None), row(0, 600));
+        assert_eq!(parts(Some(10)), row(200, 400));
+        assert_eq!(parts(Some(15)), row(300, 300));
+        assert_eq!(parts(Some(20)), row(400, 200));
+        assert_eq!(parts(Some(25)), row(500, 100));
+        // A share past the cap is held at the cap.
+        assert_eq!(parts(Some(40)), row(500, 100));
+    }
+
+    #[test]
+    fn four_way_parts_sum_back_and_never_go_negative() {
+        let s = sow_split();
+        for interest in (0..5_000).chain([99_999, 1_000_001]) {
+            for g in [None, Some(10), Some(15), Some(20), Some(25)] {
+                let p = split_interest_parts(interest, &s, g);
+                let all = [p.platform, p.reserve, p.depositors, p.guarantor, p.recovery_fund];
+                assert_eq!(all.iter().sum::<i64>(), interest, "{interest} @ {g:?}");
+                assert!(all.iter().all(|v| *v >= 0), "negative part {p:?} for {interest} @ {g:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn scores_map_to_the_sow_guarantor_tiers() {
+        let s = sow_split();
+        let share = |score| guarantor_tier_for(score, &s).map(|t| t.share);
+        assert_eq!(share(49), None);
+        assert_eq!(share(50), Some(10));
+        assert_eq!(share(79), Some(10));
+        assert_eq!(share(80), Some(15));
+        assert_eq!(share(104), Some(15));
+        assert_eq!(share(105), Some(20));
+        assert_eq!(share(129), Some(20));
+        assert_eq!(share(130), Some(25));
+        assert_eq!(share(150), Some(25));
+        assert_eq!(share(151), None);
     }
 }
