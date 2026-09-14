@@ -554,6 +554,8 @@ select.lending-input option {
     --split-recovery_fund: #d55181;
 }
 
+.lending-split-mine .lending-muted { font-size: 12px; }
+
 @each $key in depositors, reserve, platform, guarantor, recovery_fund {
     .lending-split-seg.is-#{$key},
     .lending-split-swatch.is-#{$key} { background: var(--split-#{$key}); }
@@ -711,6 +713,22 @@ select.lending-input option {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+/* RepayCard's pay buttons, grouped so they can be hidden (not unmounted)
+   while a payment is applied. Same spacing the card gives direct children. */
+.lending-repay-methods {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+
+    &[hidden] { display: none; }
+}
+
+.lending-repay-applying {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .lending-rail-input {

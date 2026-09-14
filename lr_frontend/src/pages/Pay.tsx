@@ -20,17 +20,15 @@ const PaymentHistoryCard = lazy(() => import('../elements/Lending/PaymentHistory
  */
 function Pay() {
     const { data, loading: poolLoading, error: poolError, refresh } = useLendingPool()
-    const { loans, loading: loansLoading, error: loansError, repay, repayingId } = useLoans()
     const payments = usePayments()
-    const toast = useToast()
-
     // A repayment can change the pool's badge totals (excess -> a fresh
-    // deposit lot), the loan itself, and the payment history — refresh
-    // everything so no card is left showing a stale number.
-    const handlePaid = () => {
-        refresh()
-        payments.refresh()
-    }
+    // deposit lot), the loan itself, and the payment history. `useLoans`
+    // reloads all three at once, and holds "Applying your payment…" until they
+    // are all back, so no card is left showing a stale number.
+    const { loans, loading: loansLoading, error: loansError, repay, repayingId } = useLoans(
+        () => Promise.all([refresh(), payments.refresh()]),
+    )
+    const toast = useToast()
 
     // Coming back from Stripe Checkout. A card repayment is confirmed on page
     // *load*, because the borrower has been away paying on stripe.com — unlike
@@ -54,10 +52,8 @@ function Pay() {
             toast.error('That payment came back without a loan on it — check your payment history')
             return
         }
-        void repay(loanId, { session_id: result.sessionId }).then(ok => {
-            if (ok) handlePaid()
-        })
-        // `repay` and `handlePaid` are recreated every render; the effect is
+        void repay(loanId, { session_id: result.sessionId })
+        // `repay` is recreated every render; the effect is
         // safe to re-run because the query parameter is gone after the first
         // read, so it returns immediately on every subsequent pass.
     })
@@ -88,7 +84,6 @@ function Pay() {
                                 error={loansError}
                                 repay={repay}
                                 repayingId={repayingId}
-                                onPaid={handlePaid}
                             />
                         </Suspense>
                     </div>

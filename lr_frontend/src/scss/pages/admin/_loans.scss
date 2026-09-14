@@ -288,3 +288,32 @@
 
     .lending-btn { width: auto; padding: 10px 18px; }
 }
+
+/* ---- interest history (InterestPanel) ----
+   Each payment is a .lending-card-split so it inherits the recipient colors
+   the member-facing split card defines — one color per recipient everywhere. */
+
+.admin-interest-search {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 260px;
+    max-width: 360px;
+
+    .lending-btn { flex-shrink: 0; padding-inline: 12px; }
+    svg { width: 16px; height: 16px; }
+}
+
+.admin-interest-head > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    b { font-size: 15px; color: #eef1f6; }
+}
+
+.admin-interest-table {
+    td:nth-child(2) { white-space: normal; min-width: 220px; }
+    td:nth-child(3), th:nth-child(3),
+    td:last-child, th:last-child { text-align: right; }
+}

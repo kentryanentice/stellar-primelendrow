@@ -44,6 +44,19 @@ pub struct MyFunds {
     pub collateral: i64,
     pub pledged: i64,
     pub score: i16,
+    /// What this member has been paid out of repayments' interest (039),
+    /// split by why: their deposit balance in the pool, and loans they
+    /// guarantee.
+    pub interest_earned: MyInterest,
+}
+
+#[derive(Serialize, Default)]
+pub struct MyInterest {
+    pub total: i64,
+    pub as_depositor: i64,
+    pub as_guarantor: i64,
+    /// Repayments that paid this member anything.
+    pub payments: i64,
 }
 
 #[derive(Serialize)]
@@ -177,6 +190,7 @@ pub async fn summary(
         collateral: 0,
         pledged: 0,
         score: 50,
+        interest_earned: MyInterest::default(),
     };
     for (badge, amount) in badge_totals {
         match badge.as_str() {
@@ -194,6 +208,19 @@ pub async fn summary(
         .await
         .map_err(|e| db_err(e, "credit score"))?
         .unwrap_or(50);
+
+    let (as_depositor, as_guarantor, payments): (i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(amount) FILTER (WHERE role = 'depositor'), 0)::BIGINT,
+                COALESCE(SUM(amount) FILTER (WHERE role = 'guarantor'), 0)::BIGINT,
+                COUNT(DISTINCT event_id)
+           FROM public.member_interest
+          WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| db_err(e, "my interest"))?;
+    me.interest_earned = MyInterest { total: as_depositor + as_guarantor, as_depositor, as_guarantor, payments };
 
     Ok(Json(PoolResponse {
         pool: PoolStats {

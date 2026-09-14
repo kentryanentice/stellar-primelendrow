@@ -42,6 +42,7 @@ mod withdraw;
 pub use admin::actions::{confirm as action_confirm, list as actions_list, prepare as action_prepare};
 pub use admin::default::declare as loan_default;
 pub use admin::fx::set_fx_rate;
+pub use admin::interest::list as admin_interest;
 pub use admin::loans::list as admin_loans;
 // Settling a defaulted loan (033): reopening it for payment and accepting it as
 // settled are two separate admin decisions, so they are two separate handlers.

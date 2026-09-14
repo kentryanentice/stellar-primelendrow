@@ -41,8 +41,8 @@ pub fn round_half_even(numer: i128, denom: i128) -> i64 {
 /// half-to-even like every other money split in this module. Rounding
 /// independently leaves a residual of a few centavos that belongs to nobody, so
 /// the shares are summed and the difference handed to the **largest** weight —
-/// the same "final recipient absorbs the remainder" pattern `split_interest`
-/// uses. Largest rather than first: the residual is at most a centavo per
+/// the same "final recipient absorbs the remainder" pattern
+/// `split_interest_parts` uses. Largest rather than first: the residual is at most a centavo per
 /// participant, and putting it on the biggest pledge is the least surprising
 /// place for it. The result therefore sums to `total` exactly, always.
 ///
@@ -353,8 +353,68 @@ pub fn check_interest_split(params: &PolicyParams) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Splits `total` across `caps` in proportion to each cap, exact to the
+/// centavo, and never gives anyone more than their own cap.
+///
+/// This is how a loan is funded from, and paid back to, many members at once:
+/// each member's slice is proportional to their balance, but a slice larger
+/// than the balance itself would lock (or release) money that isn't there.
+/// `apportion`'s half-even rounding plus "residual to the largest" can do
+/// exactly that when the total is close to the sum of the caps, so this uses
+/// largest-remainder rounding instead: everyone gets the floor of their exact
+/// share, then the few centavos left over go one each to the largest
+/// fractional remainders. A member only receives that extra centavo when their
+/// exact share was a fraction below their cap, so floor + 1 can never pass it.
+///
+/// `total` above the sum of the caps is clamped to it (there is only so much
+/// to take). Ties on the remainder go to the earliest index, so the result is
+/// deterministic for a given input order.
+pub fn apportion_capped(total: i64, caps: &[i64]) -> Vec<i64> {
+    let caps: Vec<i128> = caps.iter().map(|c| (*c).max(0) as i128).collect();
+    let sum: i128 = caps.iter().sum();
+    let total = (total.max(0) as i128).min(sum);
+    if total == 0 {
+        return vec![0; caps.len()];
+    }
+
+    let mut shares: Vec<i64> = caps.iter().map(|c| (total * c / sum) as i64).collect();
+    let mut left = (total - shares.iter().map(|s| *s as i128).sum::<i128>()) as usize;
+    let mut by_remainder: Vec<usize> = (0..caps.len()).filter(|i| total * caps[*i] % sum != 0).collect();
+    by_remainder.sort_by(|a, b| (total * caps[*b] % sum).cmp(&(total * caps[*a] % sum)).then(a.cmp(b)));
+    for i in by_remainder {
+        if left == 0 {
+            break;
+        }
+        shares[i] += 1;
+        left -= 1;
+    }
+    shares
+}
+
+/// How much of a loan's funding to unlock when `principal_paid` of it comes
+/// back: the same fraction of what is still locked as the payment is of what
+/// was still owed, so members' money stays at risk exactly as long as the
+/// loan's balance does. The final payment unlocks everything, which is also
+/// what sweeps up any centavo the proportional rounding left behind.
+pub fn funding_to_release(locked: i64, principal_paid: i64, outstanding_before: i64) -> i64 {
+    if locked <= 0 || principal_paid <= 0 {
+        return 0;
+    }
+    if principal_paid >= outstanding_before {
+        return locked;
+    }
+    round_half_even(locked as i128 * principal_paid as i128, outstanding_before as i128).clamp(0, locked)
+}
+
+/// What the pool's members must fund when a loan disburses: the principal
+/// less whatever the borrower backs with their own locked deposit. A
+/// deposit-backed loan locks at least principal / LTV of the borrower's own
+/// money, so this is 0 and nobody else's balance is touched.
+pub fn pool_funded_amount(principal: i64, own_deposit_backing: i64) -> i64 {
+    (principal - own_deposit_backing.max(0)).max(0)
+}
+
 /// The guarantor tier a score falls in — the split's counterpart to `band_for`.
-#[cfg_attr(not(test), expect(dead_code, reason = "read by the repayment path once the guarantor split is wired"))]
 pub fn guarantor_tier_for(score: i16, split: &InterestSplit) -> Option<&GuarantorTier> {
     split
         .guarantor_tiers
@@ -380,7 +440,9 @@ pub struct InterestParts {
 /// rounded the same way and capped at the band, and the recovery fund keeps
 /// the rest of the band — so it can be squeezed to zero but never negative.
 ///
-/// Not yet wired into repayments; `split_interest` below still books those.
+/// This is the single-guarantor form the published worked example uses.
+/// Repayments go through `book_interest`, which handles any number of
+/// guarantors at different tiers and reduces to this for one.
 pub fn split_interest_parts(interest: i64, split: &InterestSplit, guarantor_share: Option<i64>) -> InterestParts {
     let pct = |p: i64| round_half_even(interest as i128 * p as i128, 100);
     let platform = pct(split.platform);
@@ -391,16 +453,97 @@ pub fn split_interest_parts(interest: i64, split: &InterestSplit, guarantor_shar
     InterestParts { platform, reserve, depositors, guarantor, recovery_fund: band - guarantor }
 }
 
-/// INTERIM two-way split, kept only so the repayment path compiles and ties
-/// out between Monday's rulebook change and Tuesday's four-way rewrite:
-/// platform's share is rounded at the single site and EVERYTHING else —
-/// reserve, depositors and the risk band — lands in the reserve as the
-/// deterministic remainder. No centavo is lost, but nothing reaches
-/// depositors, guarantors or the recovery fund until Thursday's wiring.
-pub fn split_interest(interest: i64, split: &InterestSplit) -> (i64, i64) {
-    let platform = round_half_even(interest as i128 * split.platform as i128, 100);
-    let reserve = interest - platform;
-    (platform, reserve)
+/// One accepted guarantor on the loan being repaid.
+#[derive(Clone, Copy, Debug)]
+pub struct GuarantorStake {
+    pub pledge: i64,
+    /// The guarantor's OWN score when the payment lands — reputation is the
+    /// guarantor's, and a guarantor who loses score on a claim drops a tier.
+    pub score: i16,
+}
+
+/// One repayment's interest, as the books take it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BookedInterest {
+    pub parts: InterestParts,
+    /// Each depositor's slice of `parts.depositors`, in `balances` order.
+    pub to_depositors: Vec<i64>,
+    /// Each guarantor's slice of `parts.guarantor`, in `guarantors` order.
+    pub to_guarantors: Vec<i64>,
+    /// The tier percent each guarantor was paid at, in `guarantors` order
+    /// (0 for a score below every tier).
+    pub guarantor_tiers: Vec<i64>,
+}
+
+/// Everything a repayment decides about its interest, in one pure step.
+///
+/// 1. **Fixed shares.** Platform, reserve and depositors are each rounded once;
+///    the risk band is what remains of the interest.
+/// 2. **Guarantors.** Each guarantor earns their own tier's percent on their
+///    share of the pledges, so the guarantors' combined percent is the
+///    pledge-weighted average of their tiers — one guarantor backing the whole
+///    gap at 10% earns 10% of the interest, exactly the published example; two
+///    at 10% and 25% with equal pledges earn 17.5% between them. That combined
+///    amount is rounded ONCE (rounding each guarantor separately would leak a
+///    centavo per guarantor), capped at the band, then apportioned between
+///    them by `tier × pledge`. The recovery fund keeps the rest of the band.
+/// 3. **Depositors.** The depositors' share goes to every member in proportion
+///    to `balances` (each member's whole deposit balance when the payment
+///    lands). With no balance anywhere there is nobody to pay, so the share
+///    stays in the reserve and is recorded there.
+///
+/// Invariants, all tested: `parts` sums to `interest`; `to_depositors` sums to
+/// `parts.depositors`; `to_guarantors` sums to `parts.guarantor`; nothing is
+/// negative. Those three sums are what keep the repayment's postings balanced
+/// and every member's new lot equal to the member_deposits credit.
+pub fn book_interest(
+    interest: i64,
+    split: &InterestSplit,
+    balances: &[i64],
+    guarantors: &[GuarantorStake],
+) -> BookedInterest {
+    let interest = interest.max(0);
+    let pct = |p: i64| round_half_even(interest as i128 * p as i128, 100);
+    let platform = pct(split.platform);
+    let mut reserve = pct(split.reserve);
+    let mut depositors = pct(split.depositors);
+    let band = (interest - platform - reserve - depositors).max(0);
+
+    let guarantor_tiers: Vec<i64> = guarantors
+        .iter()
+        .map(|g| guarantor_tier_for(g.score, split).map_or(0, |t| t.share.clamp(0, split.guarantor_cap)))
+        .collect();
+    let weights: Vec<i64> = guarantors
+        .iter()
+        .zip(&guarantor_tiers)
+        .map(|(g, tier)| g.pledge.max(0).saturating_mul(*tier))
+        .collect();
+    let total_pledged: i128 = guarantors.iter().map(|g| g.pledge.max(0) as i128).sum();
+    let guarantor = if total_pledged == 0 {
+        0
+    } else {
+        let weighted: i128 = weights.iter().map(|w| *w as i128).sum();
+        round_half_even(interest as i128 * weighted, total_pledged * 100).clamp(0, band)
+    };
+    let to_guarantors = apportion(guarantor, &weights);
+    // `apportion` returns zeros when every weight is zero, and `guarantor` is
+    // zero then too, so the two always agree.
+    debug_assert_eq!(to_guarantors.iter().sum::<i64>(), guarantor);
+
+    let mut to_depositors = apportion(depositors, balances);
+    if to_depositors.iter().sum::<i64>() != depositors {
+        // Nobody holds a balance to share by.
+        reserve += depositors;
+        depositors = 0;
+        to_depositors = vec![0; balances.len()];
+    }
+
+    BookedInterest {
+        parts: InterestParts { platform, reserve, depositors, guarantor, recovery_fund: band - guarantor },
+        to_depositors,
+        to_guarantors,
+        guarantor_tiers,
+    }
 }
 
 #[cfg(test)]
@@ -684,15 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn interest_split_sums_back_exactly() {
-        let split = sow_split();
-        for interest in [0, 1, 99, 101, 12_345] {
-            let (platform, reserve) = split_interest(interest, &split);
-            assert_eq!(platform + reserve, interest);
-        }
-    }
-
-    #[test]
     fn the_published_rulebook_passes_its_own_checks() {
         assert_eq!(check_interest_split(&params()), Ok(()));
     }
@@ -747,6 +881,197 @@ mod tests {
                 assert_eq!(all.iter().sum::<i64>(), interest, "{interest} @ {g:?}");
                 assert!(all.iter().all(|v| *v >= 0), "negative part {p:?} for {interest} @ {g:?}");
             }
+        }
+    }
+
+    const NO_GUARANTORS: &[GuarantorStake] = &[];
+
+    fn stake(pledge: i64, score: i16) -> GuarantorStake {
+        GuarantorStake { pledge, score }
+    }
+
+    #[test]
+    fn depositors_share_pro_rata_across_the_whole_pool() {
+        // ₱20.00 of interest; the pool holds ₱3,000, ₱3,000 and ₱2,000. Every
+        // depositor earns on their balance, not just whoever funded the loan.
+        let booked = book_interest(2_000, &sow_split(), &[300_000, 300_000, 200_000], NO_GUARANTORS);
+        assert_eq!(
+            booked.parts,
+            InterestParts { platform: 200, reserve: 400, depositors: 800, guarantor: 0, recovery_fund: 600 }
+        );
+        assert_eq!(booked.to_depositors, vec![300, 300, 200]);
+        assert!(booked.to_guarantors.is_empty());
+    }
+
+    #[test]
+    fn guarantor_loans_reproduce_the_published_example() {
+        let s = sow_split();
+        let pool = [400_000, 400_000];
+        // One guarantor backing ₱500 at each tier: ₱2 / ₱3 / ₱4 / ₱5 of ₱20.
+        for (score, paid, recovery) in [(50, 200, 400), (80, 300, 300), (105, 400, 200), (130, 500, 100)] {
+            let booked = book_interest(2_000, &s, &pool, &[stake(50_000, score)]);
+            assert_eq!(booked.parts.guarantor, paid, "score {score}");
+            assert_eq!(booked.parts.recovery_fund, recovery, "score {score}");
+            assert_eq!(booked.to_guarantors, vec![paid]);
+            // Depositors' fixed 40% never moves with the guarantor's tier.
+            assert_eq!(booked.parts.depositors, 800);
+            assert_eq!(booked.to_depositors, vec![400, 400]);
+        }
+    }
+
+    #[test]
+    fn two_guarantors_earn_their_own_tier_on_their_own_pledge() {
+        // Equal pledges at 10% and 25%: 17.5% between them = ₱3.50, split 1:2.5.
+        let booked = book_interest(2_000, &sow_split(), &[100_000], &[stake(25_000, 50), stake(25_000, 130)]);
+        assert_eq!(booked.parts.guarantor, 350);
+        assert_eq!(booked.to_guarantors, vec![100, 250]);
+        assert_eq!(booked.guarantor_tiers, vec![10, 25]);
+        assert_eq!(booked.parts.recovery_fund, 250);
+        // A 3:1 pledge split at the same tier: shared 3:1.
+        let booked = book_interest(2_000, &sow_split(), &[100_000], &[stake(30_000, 90), stake(10_000, 90)]);
+        assert_eq!(booked.parts.guarantor, 300);
+        assert_eq!(booked.to_guarantors, vec![225, 75]);
+    }
+
+    #[test]
+    fn a_guarantor_below_every_tier_earns_nothing_and_the_fund_keeps_it() {
+        let booked = book_interest(2_000, &sow_split(), &[100_000], &[stake(50_000, 30)]);
+        assert_eq!(booked.parts.guarantor, 0);
+        assert_eq!(booked.to_guarantors, vec![0]);
+        assert_eq!(booked.guarantor_tiers, vec![0]);
+        assert_eq!(booked.parts.recovery_fund, 600);
+    }
+
+    #[test]
+    fn with_no_balances_the_depositor_share_stays_in_the_reserve() {
+        for balances in [&[][..], &[0, 0][..]] {
+            let booked = book_interest(2_000, &sow_split(), balances, NO_GUARANTORS);
+            assert_eq!(
+                booked.parts,
+                InterestParts { platform: 200, reserve: 1_200, depositors: 0, guarantor: 0, recovery_fund: 600 }
+            );
+            assert!(booked.to_depositors.iter().all(|a| *a == 0));
+        }
+    }
+
+    #[test]
+    fn tiny_interest_still_ties_out() {
+        // A centavo or two across three depositors and two guarantors: every
+        // part rounds, nothing is lost.
+        for interest in 0..=25 {
+            let booked = book_interest(interest, &sow_split(), &[1, 1, 1], &[stake(1, 50), stake(1, 150)]);
+            let p = booked.parts;
+            assert_eq!(p.platform + p.reserve + p.depositors + p.guarantor + p.recovery_fund, interest);
+            assert_eq!(booked.to_depositors.iter().sum::<i64>(), p.depositors);
+            assert_eq!(booked.to_guarantors.iter().sum::<i64>(), p.guarantor);
+        }
+    }
+
+    /// Deterministic pseudo-random numbers for the sweeps (no rand dependency).
+    fn lcg(seed: u64) -> impl FnMut(u64) -> u64 {
+        let mut seed = seed;
+        move |max: u64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % max.max(1)
+        }
+    }
+
+    #[test]
+    fn every_repayment_shape_balances_the_books() {
+        // Interest from a partial payment up to a multi-installment payoff,
+        // 0–40 depositors of wildly different sizes, 0–2 guarantors at any
+        // score including below every tier.
+        let split = sow_split();
+        let mut next = lcg(0x5EED);
+        for _ in 0..20_000 {
+            let interest = next(5_000_000) as i64;
+            let balances: Vec<i64> = (0..next(41)).map(|_| next(10_000_000) as i64).collect();
+            let guarantors: Vec<GuarantorStake> =
+                (0..next(3)).map(|_| stake(1 + next(5_000_000) as i64, next(151) as i16)).collect();
+
+            let booked = book_interest(interest, &split, &balances, &guarantors);
+            let p = booked.parts;
+            let all = [p.platform, p.reserve, p.depositors, p.guarantor, p.recovery_fund];
+            assert_eq!(all.iter().sum::<i64>(), interest, "parts must sum to the interest");
+            assert!(all.iter().all(|v| *v >= 0), "negative part {p:?}");
+            assert_eq!(booked.to_depositors.len(), balances.len());
+            assert_eq!(booked.to_depositors.iter().sum::<i64>(), p.depositors, "depositor lots must equal their credit");
+            assert_eq!(booked.to_guarantors.len(), guarantors.len());
+            assert_eq!(booked.to_guarantors.iter().sum::<i64>(), p.guarantor, "guarantor lots must equal their credit");
+            assert!(booked.to_depositors.iter().chain(&booked.to_guarantors).all(|v| *v >= 0));
+            assert!(p.guarantor <= round_half_even(interest as i128 * split.guarantor_cap as i128, 100) + 1);
+            // The postings a repayment writes: cash in, and every credit.
+            let principal = next(10_000_000) as i64;
+            let excess = next(100_000) as i64;
+            let cash = principal + interest + excess;
+            let credits = principal + p.platform + p.reserve + p.recovery_fund + p.depositors + p.guarantor + excess;
+            assert_eq!(cash, credits, "unbalanced repayment");
+        }
+    }
+
+    #[test]
+    fn funding_is_taken_pro_rata_and_never_past_a_balance() {
+        // ₱4,000 from ₱3,000 / ₱3,000 / ₱2,000 available: half of each.
+        assert_eq!(apportion_capped(400_000, &[300_000, 300_000, 200_000]), vec![150_000, 150_000, 100_000]);
+        // Asking for everything takes everything, exactly.
+        assert_eq!(apportion_capped(800_000, &[300_000, 300_000, 200_000]), vec![300_000, 300_000, 200_000]);
+        // Asking for more than exists takes only what exists.
+        assert_eq!(apportion_capped(900_000, &[300_000, 200_000]), vec![300_000, 200_000]);
+        // The case half-even + residual-to-largest gets wrong: one centavo short
+        // of the whole pool must not push anyone over their own balance.
+        let caps = [3, 3, 3];
+        let shares = apportion_capped(8, &caps);
+        assert_eq!(shares.iter().sum::<i64>(), 8);
+        assert!(shares.iter().zip(caps).all(|(s, c)| *s <= c));
+        assert!(apportion_capped(0, &[5, 5]).iter().all(|s| *s == 0));
+        assert!(apportion_capped(10, &[]).is_empty());
+    }
+
+    #[test]
+    fn capped_apportioning_never_loses_or_overdraws_a_centavo() {
+        let mut next = lcg(0xCA95);
+        for _ in 0..20_000 {
+            let caps: Vec<i64> = (0..1 + next(40)).map(|_| next(5_000_000) as i64).collect();
+            let sum: i64 = caps.iter().sum();
+            let total = next(sum as u64 + 10) as i64;
+            let shares = apportion_capped(total, &caps);
+            assert_eq!(shares.iter().sum::<i64>(), total.min(sum), "{total} across {caps:?}");
+            assert!(shares.iter().zip(&caps).all(|(s, c)| *s >= 0 && s <= c), "overdrawn: {shares:?} of {caps:?}");
+        }
+    }
+
+    #[test]
+    fn deposit_backing_decides_what_the_pool_funds() {
+        // Deposit-backed: ₱4,500 against ₱5,000 of the borrower's own deposit.
+        assert_eq!(pool_funded_amount(450_000, 500_000), 0);
+        // XLM collateral: no deposit behind it, so the pool funds it all.
+        assert_eq!(pool_funded_amount(450_000, 0), 450_000);
+        // Guarantor: ₱3,000 of own deposit cover on a ₱10,000 loan.
+        assert_eq!(pool_funded_amount(1_000_000, 300_000), 700_000);
+    }
+
+    #[test]
+    fn locked_funding_unlocks_with_the_balance_and_all_at_the_end() {
+        // ₱7,000 locked on ₱10,000 owed; ₱2,500 of principal comes back.
+        assert_eq!(funding_to_release(700_000, 250_000, 1_000_000), 175_000);
+        // Nothing paid, nothing released.
+        assert_eq!(funding_to_release(700_000, 0, 1_000_000), 0);
+        // The final payment releases whatever is left, rounding crumbs included.
+        assert_eq!(funding_to_release(123_457, 333, 333), 123_457);
+        // Walking a loan to zero in uneven payments never strands a centavo.
+        let mut next = lcg(0x10C4);
+        for _ in 0..2_000 {
+            let principal = 1 + next(10_000_000) as i64;
+            let mut locked = next(principal as u64 + 1) as i64;
+            let mut outstanding = principal;
+            while outstanding > 0 {
+                let paid = 1 + next(outstanding as u64) as i64;
+                let released = funding_to_release(locked, paid, outstanding);
+                assert!((0..=locked).contains(&released));
+                locked -= released;
+                outstanding -= paid;
+            }
+            assert_eq!(locked, 0, "funding left locked on a repaid loan");
         }
     }
 

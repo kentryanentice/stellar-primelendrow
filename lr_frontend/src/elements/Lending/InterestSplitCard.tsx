@@ -9,7 +9,8 @@ type Scenario = { id: string; tab: string; column: string; parts: InterestParts 
 /**
  * The interest split (SOW deliverable 3), laid out like RateTiersCard.
  * Collapsed, it is the real thing: every peso of interest the pool has
- * collected and where each recorded split actually sent it (pool.interest).
+ * collected and where each recorded split actually sent it (pool.interest),
+ * with the caller's own share of it alongside (me.interest_earned).
  * "How it's split" expands the published rule behind it — a bar switchable
  * across the guarantor score tiers plus the full worked-example table
  * (params.split_example). Both are the engine's numbers; this card only
@@ -18,6 +19,13 @@ type Scenario = { id: string; tab: string; column: string; parts: InterestParts 
 function InterestSplitCard({ data }: { data: PoolResponse }) {
     const { split_example: example, policy } = data.params
     const collected = data.pool.interest
+    const mine = data.me.interest_earned
+    /** The caller's own deposits against the whole pool — what their slice of
+     *  the depositors' share is proportional to. Display only. */
+    const myBalance = data.me.available + data.me.lent + data.me.collateral + data.me.pledged
+    const poolShare = data.pool.total_deposits > 0
+        ? `${((myBalance / data.pool.total_deposits) * 100).toFixed(2).replace(/\.?0+$/, '')}%`
+        : null
     const split = policy.interest_split
     const scenarios: Scenario[] = [
         { id: 'none', tab: 'No guarantor', column: 'No guarantor', parts: example.no_guarantor },
@@ -56,6 +64,19 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
                             <span className='lending-stat-value'>{pesosCompact(collected.parts[r.key])}</span>
                         </div>
                     ))}
+                </div>
+                <div className='lending-tier-summary-divider' />
+                {/* The caller's own slice of all that, next to the pool's. */}
+                <div className='lending-tier-summary-score lending-split-mine'>
+                    <span className='lending-stat-label'>Your share</span>
+                    <span className='lending-stat-value is-good'>{pesos(mine.total)}</span>
+                    <span className='lending-muted'>
+                        {mine.as_guarantor > 0
+                            ? `${pesos(mine.as_depositor)} as depositor · ${pesos(mine.as_guarantor)} as guarantor`
+                            : poolShare
+                                ? `You hold ${poolShare} of the pool`
+                                : 'Deposit to earn a share'}
+                    </span>
                 </div>
                 <button type='button' className='lending-btn lending-tier-toggle' onClick={() => setOpen(o => !o)}>
                     {open ? 'Hide rule' : 'How it’s split'} {open ? <ChevronUp /> : <ChevronDown />}

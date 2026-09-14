@@ -108,6 +108,11 @@ function LendingSkeleton() {
                             </div>
                         ))}
                     </div>
+                    <div className='lending-tier-summary-divider' />
+                    <div className='lending-tier-summary-score'>
+                        <span className='lending-stat-label'><SkeletonBone width={70} height={11} /></span>
+                        <span className='lending-stat-value'><SkeletonBone width={64} height={15} /></span>
+                    </div>
                     <span className='lending-btn lending-tier-toggle' aria-hidden='true'><SkeletonBone width={90} height={13} /></span>
                 </div>
             </section>

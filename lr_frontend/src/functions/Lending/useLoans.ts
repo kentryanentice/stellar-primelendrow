@@ -24,8 +24,13 @@ export type RepayRef = { order_id: string } | { session_id: string }
  * The caller's loans with their engine-pinned schedules, plus repayment
  * (PayPal order id in, engine allocates interest-then-principal out).
  * `use`-prefixed per this repo's React Compiler requirement.
+ *
+ * `onRepaid` reloads whatever else a payment changes on the caller's page
+ * (pool totals, payment history). It runs alongside this hook's own loan
+ * refresh rather than after it, and `repayingId` stays set until both land,
+ * so every card updates together instead of one after another.
  */
-export default function useLoans() {
+export default function useLoans(onRepaid?: () => Promise<unknown>) {
     const { csrfToken } = useSession()
     const toast = useToast()
 
@@ -86,15 +91,17 @@ export default function useLoans() {
             if (!res.ok) throw new Error(await res.text() || 'Unable to apply your payment')
             const data = await res.json() as { message: string }
             toast.success(data.message)
-            await refresh()
-            return true
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Unable to apply your payment')
-            return false
-        } finally {
             setRepayingId(null)
+            return false
         }
-    }, [csrfToken, refresh, toast])
+        // The payment is applied; a failed reload is the reload's own error
+        // state to show, never a reason to tell the member the payment failed.
+        await Promise.allSettled([refresh(), onRepaid?.()])
+        setRepayingId(null)
+        return true
+    }, [csrfToken, onRepaid, refresh, toast])
 
     return { loans, loading, error, refresh, repay, repayingId }
 }

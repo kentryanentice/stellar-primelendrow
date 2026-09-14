@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, CircleCheckBig, Wallet, Check } from 'lucide-react'
+import { ClipboardList, CircleCheckBig, Wallet, Check, Loader2 } from 'lucide-react'
 import { formatDate, pesos, rate } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
 import type { RepayRef } from '../../functions/Lending/useLoans'
@@ -49,14 +49,14 @@ const nextInstallment = (loan: Loan): NextInstallment | null => {
  * ever hands the engine an order id. No active loan is the common case once
  * everything's repaid — that's an empty state pointing at Borrow, not an error.
  */
-function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
+function RepayCard({ data, loans, loading, error, repay, repayingId }: {
     data: PoolResponse
     loans: Loan[]
     loading: boolean
     error: boolean
+    /** Applies the payment and reloads every card it changes before resolving. */
     repay: (loanId: string, ref: RepayRef) => Promise<boolean>
     repayingId: string | null
-    onPaid: () => void
 }) {
     const navigate = useNavigate()
     // `reconciling` is a defaulted loan an administrator reopened so the
@@ -176,8 +176,20 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                         <p className='lending-muted'>Disbursed {formatDate(activeLoan.disbursed_at)}</p>
                     )}
 
+                    {repayingId === activeLoan.id ? (
+                        // Shown in place of the pay buttons from the moment a
+                        // payment is handed to the engine until every card has
+                        // its new numbers: the amounts above are still the old
+                        // ones, and a second payment against them must not be
+                        // one click away. The PayPal iframe stays mounted
+                        // (below, hidden) so its pending approval isn't torn down.
+                        <p className='lending-muted lending-repay-applying' role='status'>
+                            <Loader2 className='settings-wallet-spin' aria-hidden='true' />
+                            Applying your payment and updating your balance…
+                        </p>
+                    ) : null}
                     {payNow > 0 ? (
-                        <>
+                        <div className='lending-repay-methods' hidden={repayingId === activeLoan.id}>
                             <label className='lending-label'>Payment method</label>
                             {data.params.paypal_ready && (
                                 <div className='lending-payment-method'>
@@ -195,7 +207,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                                     purpose='repay'
                                     loanId={activeLoan.id}
                                     onApproved={async orderId => {
-                                        if (await repay(activeLoan.id, { order_id: orderId })) onPaid()
+                                        await repay(activeLoan.id, { order_id: orderId })
                                     }}
                                 />
                             </Suspense>
@@ -210,9 +222,8 @@ function RepayCard({ data, loans, loading, error, repay, repayingId, onPaid }: {
                                 loanId={activeLoan.id}
                                 label={`Pay ${pesos(payNow)} by card`}
                             />
-                            {repayingId === activeLoan.id && <p className='lending-muted'>Applying your payment…</p>}
-                        </>
-                    ) : settling ? (
+                        </div>
+                    ) : repayingId === activeLoan.id ? null : settling ? (
                         <p className='lending-muted'>
                             Nothing left to pay — an administrator will confirm the settlement and restore
                             your standing. You don’t need to do anything else.

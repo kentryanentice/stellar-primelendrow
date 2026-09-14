@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowDown, ArrowUp, Check, History, Lock, LockOpen, ShieldAlert, Undo2, type LucideIcon } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Coins, History, Lock, LockOpen, ShieldAlert, Undo2, type LucideIcon } from 'lucide-react'
 import { formatDate } from '../../functions/Lending/money'
 import type { ActivityGlyph, ActivityRow, ActivitySide } from '../../functions/Dashboard/overview'
 import { ActivityRowsSkeleton } from './DashboardSkeleton'
@@ -10,6 +10,7 @@ const GLYPH_ICON: Record<ActivityGlyph, LucideIcon> = {
     withdraw: ArrowDown,
     refund: Undo2,
     seized: ShieldAlert,
+    interest: Coins,
     lock: Lock,
     unlock: LockOpen,
     paid: Check,
