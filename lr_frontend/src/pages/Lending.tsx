@@ -7,6 +7,7 @@ import { pesos } from '../functions/Lending/money'
 
 import PoolOverviewCard from '../elements/Lending/PoolOverviewCard'
 import RateTiersCard from '../elements/Lending/RateTiersCard'
+import InterestSplitCard from '../elements/Lending/InterestSplitCard'
 import YourDepositsCard from '../elements/Lending/YourDepositsCard'
 import TransactionsCard from '../elements/Lending/TransactionsCard'
 import GuarantorCard from '../elements/Lending/GuarantorCard'
@@ -84,6 +85,7 @@ function Lending() {
 
             <PoolOverviewCard data={data} />
             <RateTiersCard data={data} />
+            <InterestSplitCard data={data} />
 
             <div className='lending-rail-layout'>
                 <aside className='lending-rail'>

@@ -8,6 +8,7 @@ use axum::{Extension, Json, http::HeaderMap};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use super::domain;
 use super::ledger::free_cash;
 use super::policy::{self, PolicyParams};
 use super::pricing;
@@ -44,6 +45,45 @@ pub struct Params {
     pub fx: pricing::Priced,
     pub collateral_contract: Option<String>,
     pub paypal_ready: bool,
+    /// The published worked example, split by the engine so the screen only
+    /// draws it.
+    pub split_example: SplitExample,
+}
+
+/// The SOW's worked example: ₱1,000 at 2%/mo, first payment's interest ₱20.00.
+const EXAMPLE_INTEREST: i64 = 2_000;
+
+#[derive(Serialize)]
+pub struct TierExample {
+    pub min_score: i16,
+    pub max_score: i16,
+    pub share: i64,
+    pub parts: domain::InterestParts,
+}
+
+#[derive(Serialize)]
+pub struct SplitExample {
+    pub interest: i64,
+    pub no_guarantor: domain::InterestParts,
+    pub tiers: Vec<TierExample>,
+}
+
+fn split_example(params: &PolicyParams) -> SplitExample {
+    let split = &params.interest_split;
+    SplitExample {
+        interest: EXAMPLE_INTEREST,
+        no_guarantor: domain::split_interest_parts(EXAMPLE_INTEREST, split, None),
+        tiers: split
+            .guarantor_tiers
+            .iter()
+            .map(|t| TierExample {
+                min_score: t.min_score,
+                max_score: t.max_score,
+                share: t.share,
+                parts: domain::split_interest_parts(EXAMPLE_INTEREST, split, Some(t.share)),
+            })
+            .collect(),
+    }
 }
 
 #[derive(Serialize)]
@@ -137,6 +177,7 @@ pub async fn summary(
         },
         me,
         params: Params {
+            split_example: split_example(&rules.params),
             policy: rules.params,
             fx_centavos_per_xlm: fx.centavos_per_xlm,
             fx,

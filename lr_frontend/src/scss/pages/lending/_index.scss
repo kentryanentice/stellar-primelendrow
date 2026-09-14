@@ -539,6 +539,138 @@ select.lending-input option {
     color: #6fd99a;
 }
 
+/* ---- interest split (InterestSplitCard) ----
+   One fixed color per recipient, in RECIPIENTS order (functions/Lending/
+   split.ts). Categorical slots 1–5 stepped for the dark panel, validated
+   together against #111f3a: CVD ΔE ≥ 8.4 and normal-vision ΔE ≥ 19.3 between
+   neighbours, all ≥ 3:1 contrast. Text never wears these; the swatch beside
+   it carries the identity. */
+
+.lending-card-split {
+    --split-depositors: #3987e5;
+    --split-reserve: #d95926;
+    --split-platform: #199e70;
+    --split-guarantor: #c98500;
+    --split-recovery_fund: #d55181;
+
+    .lending-tier-toggle { margin-left: 0; align-self: flex-start; }
+}
+
+@each $key in depositors, reserve, platform, guarantor, recovery_fund {
+    .lending-split-seg.is-#{$key},
+    .lending-split-swatch.is-#{$key} { background: var(--split-#{$key}); }
+}
+
+.lending-split-scenarios {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .lending-tab-group { flex-wrap: wrap; }
+    .lending-tab { flex: 1 1 auto; padding: 8px 12px; font-size: 12.5px; white-space: nowrap; }
+}
+
+.lending-split-bar {
+    display: flex;
+    gap: 2px;
+    height: 28px;
+}
+
+.lending-split-seg {
+    position: relative;
+    min-width: 4px;
+    outline: none;
+    transition: opacity .15s ease;
+
+    &:first-child { border-radius: 4px 0 0 4px; }
+    &:last-child { border-radius: 0 4px 4px 0; }
+    &:only-child { border-radius: 4px; }
+    &.is-dimmed { opacity: .35; }
+    &:focus-visible { box-shadow: 0 0 0 2px #eef1f6; }
+}
+
+.lending-split-tip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #0a1428;
+    border: 1px solid rgba(255, 255, 255, .12);
+    box-shadow: 0 10px 24px -12px rgba(0, 0, 0, .7);
+    font-size: 11.5px;
+    color: #9fadc6;
+    white-space: nowrap;
+    pointer-events: none;
+
+    b { font-size: 13px; color: #eef1f6; font-variant-numeric: tabular-nums; }
+}
+
+.lending-split-legend {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+
+    li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 6px;
+        border-radius: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, .05);
+
+        &.is-hovered { background: rgba(255, 255, 255, .04); }
+    }
+}
+
+.lending-split-legend-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-size: 12px;
+    color: #8492ac;
+
+    b { font-size: 13px; font-weight: 600; color: #dfe6f2; }
+}
+
+.lending-split-legend-amount {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+}
+
+.lending-split-legend li.lending-split-legend-total {
+    border-bottom: 0;
+    padding-left: 26px; // lines up with the labels past the swatch column
+}
+
+.lending-split-swatch {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-right: 8px;
+
+    .lending-split-legend & { margin-right: 0; }
+}
+
+.lending-split-table {
+    th.is-mine { color: var(--auth-primary); }
+    td.is-mine { background: color-mix(in srgb, var(--auth-primary) 10%, transparent); color: #eef1f6; font-weight: 600; }
+    tr.lending-split-table-total td { font-weight: 700; border-top: 1px solid rgba(255, 255, 255, .08); }
+}
+
 /* ---- my funds (sidebar money rail) ---- */
 
 /* the primary-action card in the sticky rail — same mild accent lift

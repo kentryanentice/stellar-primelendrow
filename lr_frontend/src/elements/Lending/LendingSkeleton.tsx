@@ -93,6 +93,25 @@ function LendingSkeleton() {
                 </div>
             </section>
 
+            <section className='lending-card lending-card-split' aria-hidden='true'>
+                <div className='lending-card-head'>
+                    <span className='lending-card-icon is-accent' />
+                    <h2><SkeletonBone width={140} height={16} /></h2>
+                </div>
+                <SkeletonBone width='70%' height={13} />
+                <SkeletonBone width='100%' height={43} radius={10} />
+                <SkeletonBone width='100%' height={28} radius={4} />
+                <ul className='lending-split-legend'>
+                    {[0, 1, 2, 3, 4].map(i => (
+                        <li key={i}>
+                            <SkeletonBone width={10} height={10} radius={3} />
+                            <span className='lending-split-legend-text'><SkeletonBone width={180} height={13} /></span>
+                            <SkeletonBone width={52} height={13} />
+                        </li>
+                    ))}
+                </ul>
+            </section>
+
             <div className='lending-rail-layout'>
                 <aside className='lending-rail'>
                     <ManageFundsCardSkeleton />

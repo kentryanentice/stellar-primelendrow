@@ -26,11 +26,36 @@ pub struct TermRange {
     pub max: i16,
 }
 
+/// One row of the score-tier → guarantor-share table (SOW §3/§4). Deliberately
+/// NOT a field on `Band`: the SOW's tier cutoffs (50–79, 80–104, 105–129,
+/// 130–150) do not line up with the pricing bands, and both are meant to be
+/// recalibrated independently.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct GuarantorTier {
+    pub min_score: i16,
+    pub max_score: i16,
+    /// Percent of the WHOLE interest payment, taken out of the risk band.
+    pub share: i64,
+}
+
+/// Where a peso of collected interest lands (SOW deliverable 3), in percent of
+/// the interest collected. The four fixed shares sum to exactly 100; the
+/// guarantor's share is carved out of `risk_band` and whatever is left of the
+/// band goes to the recovery fund. `domain::check_interest_split` enforces all
+/// of that when the rulebook loads.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InterestSplit {
-    pub savers: i64,
     pub platform: i64,
     pub reserve: i64,
+    /// Shared pro-rata across the deposit lots funding the loan. Replaces the
+    /// old `savers` field, which was always 0 and never read.
+    pub depositors: i64,
+    pub risk_band: i64,
+    /// Hard ceiling on any tier's share. Must not exceed `risk_band`, so the
+    /// recovery fund can be squeezed but never pushed negative.
+    pub guarantor_cap: i64,
+    /// Contiguous, ascending by score.
+    pub guarantor_tiers: Vec<GuarantorTier>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -76,6 +101,12 @@ pub async fn active<'e, X: PgExecutor<'e>>(executor: X) -> Result<Policy, E> {
     ))?;
     let params: PolicyParams = serde_json::from_value(params).map_err(|e| {
         tracing::error!("policy params malformed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
+    })?;
+    // Well-formed JSON is not enough for the split: shares that don't sum to
+    // 100 would silently invent or lose centavos on every repayment.
+    super::domain::check_interest_split(&params).map_err(|why| {
+        tracing::error!("policy {id} interest_split invalid: {why}");
         (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
     })?;
     Ok(Policy { id, params })

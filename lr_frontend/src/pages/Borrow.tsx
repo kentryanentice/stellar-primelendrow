@@ -33,7 +33,14 @@ const FALLBACK_POLICY: PolicyParams = {
     term_months: { min: 3, max: 12 },
     min_deposit: 0,
     min_loan: 0,
-    interest_split: { savers: 0, platform: 0, reserve: 0 },
+    interest_split: {
+        platform: 0,
+        reserve: 0,
+        depositors: 0,
+        risk_band: 0,
+        guarantor_cap: 0,
+        guarantor_tiers: [],
+    },
 }
 
 /**
