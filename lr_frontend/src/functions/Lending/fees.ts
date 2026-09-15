@@ -30,9 +30,20 @@ export function grossUp(applies: number, fees: RailFees): { total: number; fee: 
     return { total, fee: total - applies }
 }
 
-/** The fee deducted from a payout of `amount`. */
+/** What the provider charges on top for a payout that sends `sent`. */
+const payoutCharge = (sent: number, fees: RailFees) => {
+    const fee = roundHalfEven(Math.max(0, sent) * fees.payout_bps, 10_000)
+    return fees.payout_cap > 0 ? Math.min(fee, fees.payout_cap) : fee
+}
+
+/** The fee deducted from a payout claim of `amount`: what's sent plus the
+ *  provider's charge on it fits exactly inside the claim (engine 044). */
 export function payoutFee(amount: number, fees: RailFees) {
-    let fee = roundHalfEven(Math.max(0, amount) * fees.payout_bps, 10_000)
-    if (fees.payout_cap > 0) fee = Math.min(fee, fees.payout_cap)
-    return Math.max(0, Math.min(fee, amount - 1))
+    if (amount <= 1) return 0
+    let sent = Math.floor((amount * 10_000) / (10_000 + fees.payout_bps))
+    if (fees.payout_cap > 0) sent = Math.max(sent, amount - fees.payout_cap)
+    sent = Math.min(Math.max(sent, 1), amount)
+    while (sent > 1 && sent + payoutCharge(sent, fees) > amount) sent -= 1
+    while (sent < amount && sent + 1 + payoutCharge(sent + 1, fees) <= amount) sent += 1
+    return amount - sent
 }

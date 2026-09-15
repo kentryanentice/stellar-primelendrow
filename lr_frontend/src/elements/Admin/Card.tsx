@@ -23,9 +23,11 @@ export default function Card({ item, onOpen }: CardProps) {
             <div className='admin-card-photos'>
                 <div className='admin-card-photo'>
                     {item.selfie_image_url
-                        ? <img src={item.selfie_image_url} alt='Live selfie' />
+                        ? <img src={item.selfie_image_url} alt='Submitted selfie' />
                         : <User className='admin-card-photo-placeholder' aria-hidden='true' />}
-                    <span className='admin-card-photo-tag is-live'>LIVE</span>
+                    <span className={`admin-card-photo-tag${item.liveness_passed ? ' is-live' : ''}`}>
+                        {item.liveness_passed ? 'LIVE' : 'SELFIE'}
+                    </span>
                 </div>
                 <div className='admin-card-photo'>
                     {item.id_image_url
@@ -50,7 +52,7 @@ export default function Card({ item, onOpen }: CardProps) {
                 <div className='admin-card-badges'>
                     <span className={`admin-card-badge${item.liveness_passed ? ' is-passed' : ' is-bypassed'}`}>
                         {item.liveness_passed ? <CheckCircle /> : <ShieldQuestion />}
-                        Liveness {item.liveness_passed ? 'passed' : 'bypassed'}
+                        Liveness {item.liveness_passed ? 'passed' : 'needs review'}
                     </span>
                 </div>
 

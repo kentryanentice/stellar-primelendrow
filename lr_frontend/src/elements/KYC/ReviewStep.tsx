@@ -2,17 +2,18 @@ import type { KYCState } from './types'
 import { truncateAddress } from '../../functions/Wallet/wallet'
 
 type ReviewStepProps = Pick<KYCState,
-    'firstName' | 'middleName' | 'lastName' | 'idNumber' | 'dob' | 'matched' | 'matchScore' | 'walletAddress' | 'goToStep'
+    'firstName' | 'middleName' | 'lastName' | 'idNumber' | 'dob' | 'matched' | 'matchScore' | 'livenessVerified' | 'walletAddress' | 'goToStep'
 >
 
-export default function ReviewStep({ firstName, middleName, lastName, idNumber, dob, matched, matchScore, walletAddress, goToStep }: ReviewStepProps) {
+export default function ReviewStep({ firstName, middleName, lastName, idNumber, dob, matched, matchScore, livenessVerified, walletAddress, goToStep }: ReviewStepProps) {
     const rows: [string, string][] = [
         ['First name', firstName],
         ['Middle name', middleName],
         ['Last name', lastName],
         ['ID number', idNumber],
         ['Date of birth', dob],
-        ['Selfie verification', matched ? `Matched ${matchScore}%` : 'Not yet verified'],
+        ['Face match', matched ? `Matched ${matchScore}%` : 'Not yet verified'],
+        ['Liveness', livenessVerified ? 'Confirmed' : 'Needs manual review'],
         ['Stellar wallet', walletAddress ? `Connected — ${truncateAddress(walletAddress)}` : 'Not connected'],
     ]
 
