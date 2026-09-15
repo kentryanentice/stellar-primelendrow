@@ -29,6 +29,38 @@ export type PolicyParams = {
     min_deposit: number
     min_loan: number
     interest_split: InterestSplit
+    deposit_limits: DepositLimits
+}
+
+/** One row of the deposit-limit table (engine 042), whole centavos. Its own
+ *  score cutoffs, which may differ from the pricing bands. */
+export type DepositLimitTier = {
+    min_score: number
+    max_score: number
+    per_deposit: number
+    /** Gross deposits in any rolling 24 hours. */
+    daily: number
+    /** Gross deposits in any rolling 30 days. */
+    monthly: number
+    /** Balance cap reachable through deposits (earned interest is exempt). */
+    max_balance: number
+}
+
+export type DepositLimits = {
+    tiers: DepositLimitTier[]
+    /** Below the lowest tier: this percent of the lowest tier's limits. */
+    below_floor_pct: number
+}
+
+/** The caller's own deposit limits right now, computed by the engine for
+ *  their score. `used_*` and `balance` include deposits started but not
+ *  finished; `allowance` is the largest deposit the engine will start. */
+export type DepositStatus = {
+    limits: { per_deposit: number; daily: number; monthly: number; max_balance: number }
+    used_24h: number
+    used_30d: number
+    balance: number
+    allowance: number
 }
 
 /** One row of the score → guarantor-share table. `share` is percent of the
@@ -213,6 +245,8 @@ export type PoolResponse = {
         score: number
         /** What the caller has been paid from repayments' interest, by why. */
         interest_earned: { total: number; as_depositor: number; as_guarantor: number; payments: number }
+        /** Deposit limits for the caller's score tier, and what's left. */
+        deposit_limits: DepositStatus | null
     }
     params: {
         policy: PolicyParams

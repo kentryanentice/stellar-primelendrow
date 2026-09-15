@@ -48,6 +48,8 @@ pub struct MyFunds {
     /// split by why: their deposit balance in the pool, and loans they
     /// guarantee.
     pub interest_earned: MyInterest,
+    /// The member's AML deposit limits (042) and how much of them is left.
+    pub deposit_limits: Option<super::intents::DepositStatus>,
 }
 
 #[derive(Serialize, Default)]
@@ -191,6 +193,7 @@ pub async fn summary(
         pledged: 0,
         score: 50,
         interest_earned: MyInterest::default(),
+        deposit_limits: None,
     };
     for (badge, amount) in badge_totals {
         match badge.as_str() {
@@ -220,6 +223,9 @@ pub async fn summary(
     .fetch_one(&pool)
     .await
     .map_err(|e| db_err(e, "my interest"))?;
+    let mut conn = pool.acquire().await.map_err(|e| db_err(e, "acquire for deposit limits"))?;
+    me.deposit_limits = Some(super::intents::deposit_status(&mut conn, user_id, &rules.params).await?);
+    drop(conn);
     me.interest_earned = MyInterest { total: as_depositor + as_guarantor, as_depositor, as_guarantor, payments };
 
     Ok(Json(PoolResponse {

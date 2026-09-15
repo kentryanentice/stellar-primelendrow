@@ -310,6 +310,7 @@ pub struct CheckoutSession {
 /// completed` event arrives with no such context, and crediting a repayment as
 /// a pool deposit would be a real money bug. Stamping it at creation is what
 /// lets the webhook route the payment instead of guessing.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_checkout_session(
     user_id: &str,
     centavos: i64,
@@ -318,6 +319,7 @@ pub async fn create_checkout_session(
     loan_id: Option<&str>,
     success_path: &str,
     cancel_path: &str,
+    expires_at: i64,
 ) -> Result<CheckoutSession, &'static str> {
     if centavos <= 0 || centavos > 1_000_000_000_000 {
         return Err("Invalid amount");
@@ -342,6 +344,10 @@ pub async fn create_checkout_session(
         ("success_url", success_url),
         ("cancel_url", cancel_url),
         ("client_reference_id", user_id.to_string()),
+        // Tied to the payment intent's own expiry, so a checkout page can't be
+        // paid after the engine has stopped expecting it. Stripe allows 30
+        // minutes to 24 hours.
+        ("expires_at", expires_at.to_string()),
         ("metadata[user_id]", user_id.to_string()),
         ("metadata[purpose]", purpose.to_string()),
         // Also on the PaymentIntent, so the ownership stamp survives on the
@@ -447,6 +453,48 @@ pub async fn capture_session(
         capture_id: format!("stripe:{intent}"),
         centavos,
     })
+}
+
+/// Refunds a whole payment — money that arrived but no longer matched what the
+/// engine was expecting. `capture_ref` is the ledger form (`stripe:pi_…`).
+/// `idempotency_key` is the payment intent's id, so a retry never refunds twice
+/// (within Stripe's 24-hour key window; the intent's status covers the rest).
+pub async fn refund_payment(capture_ref: &str, idempotency_key: &str) -> Result<(), &'static str> {
+    let intent = capture_ref.strip_prefix("stripe:").unwrap_or(capture_ref);
+    if !valid_id(intent, "pi_") {
+        return Err("Invalid payment reference");
+    }
+    let form: Form = vec![("payment_intent", intent.to_string())];
+    match post("/v1/refunds", &form, Some(idempotency_key)).await {
+        Ok(_) => Ok(()),
+        Err((status, body)) => {
+            let (code, message) = decode_error(&body);
+            // Already refunded is the outcome we wanted.
+            if code.as_deref() == Some("charge_already_refunded") {
+                return Ok(());
+            }
+            tracing::error!("stripe refund {status}: {message}");
+            Err("Stripe refused the refund")
+        }
+    }
+}
+
+/// Closes a checkout session so it can no longer be paid — used when a newer
+/// payment for the same loan replaces it. Best effort: a session that is
+/// already complete or expired can't be expired, and that is reported, not
+/// fatal (a completed one is caught and refunded when it is confirmed).
+pub async fn expire_session(session_id: &str) -> Result<(), &'static str> {
+    if !valid_id(session_id, "cs_") {
+        return Err("Invalid payment reference");
+    }
+    post(&format!("/v1/checkout/sessions/{session_id}/expire"), &Vec::new(), None)
+        .await
+        .map(|_| ())
+        .map_err(|(status, body)| {
+            let (_, message) = decode_error(&body);
+            tracing::warn!("stripe session expire {status}: {message}");
+            "Stripe could not close the old payment page"
+        })
 }
 
 /// The app origin, taken from CLIENT_URL's first entry for the same reason

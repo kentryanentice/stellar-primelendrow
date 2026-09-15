@@ -367,6 +367,45 @@ pub async fn capture_order(
     Err("Payment could not be verified")
 }
 
+/// Refunds a whole capture — money that arrived but no longer matched what the
+/// engine was expecting (a payment superseded mid-flight, or a loan whose due
+/// amount changed between approval and capture).
+///
+/// `request_id` is the payment intent's id and goes in `PayPal-Request-Id`, so
+/// a retried refund is recognised by PayPal instead of refunding twice.
+pub async fn refund_capture(capture_id: &str, request_id: &str) -> Result<(), &'static str> {
+    if capture_id.is_empty()
+        || capture_id.len() > 64
+        || !capture_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("Invalid capture reference");
+    }
+    let token = access_token().await?;
+    let res = http()
+        .post(format!("{}/v2/payments/captures/{capture_id}/refund", api_base()))
+        .bearer_auth(&token)
+        .header("Content-Type", "application/json")
+        .header("PayPal-Request-Id", request_id)
+        .body("{}")
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("paypal refund: {e}");
+            "Payment provider unreachable"
+        })?;
+    if res.status().is_success() {
+        return Ok(());
+    }
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    // Already fully refunded is the outcome we wanted.
+    if text.contains("CAPTURE_FULLY_REFUNDED") {
+        return Ok(());
+    }
+    tracing::error!("paypal refund {status}: {text}");
+    Err("PayPal refused the refund")
+}
+
 // ===========================================================================
 // Money out, part 1: connecting the member's own PayPal ("Log in with PayPal")
 // ===========================================================================

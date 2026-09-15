@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
 import type { Payout } from './types'
@@ -36,6 +36,8 @@ export default function usePayouts() {
     const [loading, setLoading] = useState(true)
     const [requestingId, setRequestingId] = useState<string | null>(null)
     const [withdrawing, setWithdrawing] = useState(false)
+    /** The withdrawal attempt still waiting for an answer, and its key. */
+    const pendingWithdrawal = useRef<{ amount: number; key: string } | null>(null)
 
     const refresh = useCallback(async () => {
         try {
@@ -99,14 +101,23 @@ export default function usePayouts() {
      * transfer left in limbo.
      */
     const requestWithdrawal = useCallback(async (centavos: number) => {
+        // One key per withdrawal attempt (engine 041). Reused only when the
+        // same amount is sent again after the request never got an answer —
+        // exactly the retry that must not become a second withdrawal. Any
+        // answer from the engine ends the attempt.
+        if (pendingWithdrawal.current?.amount !== centavos) {
+            pendingWithdrawal.current = { amount: centavos, key: crypto.randomUUID() }
+        }
+        const requestKey = pendingWithdrawal.current.key
         setWithdrawing(true)
         try {
             const res = await apiFetch(`${API}/pool/withdraw`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
-                body: JSON.stringify({ amount: centavos }),
+                body: JSON.stringify({ amount: centavos, request_key: requestKey }),
             })
+            pendingWithdrawal.current = null
             if (!res.ok) throw new Error(await res.text() || 'Unable to withdraw')
             const data = await res.json() as { message: string }
             toast.success(data.message)

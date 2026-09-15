@@ -13,31 +13,32 @@
 //! the Stripe rail's Checkout Session: the engine creates the thing being paid
 //! for, and the client is handed nothing but a reference to approve.
 //!
-//! Being the same shape means answering the same questions, and a repayment
-//! asks one more than a deposit does: *can this loan take money right now?*
-//! `check_loan_payable` answers it for both rails, here and in
-//! `api::stripe::checkout`, so neither can end up offering a payment the other
-//! would refuse.
+//! Being the same shape means answering the same questions, through the same
+//! code: `lending::intents` reserves the payment for both rails (041). A
+//! repayment is exactly what's due on the loan, a deposit must fit the member's
+//! AML limits, and the order can only ever be confirmed as what it was created
+//! for.
 
 use axum::{Extension, Json, http::{HeaderMap, StatusCode}};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::api::lending::intents;
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::paypal;
 
 #[derive(Deserialize)]
 pub struct OrderInput {
-    /// Whole centavos. Checked here and sent to PayPal by the engine, so the
-    /// page cannot ask for one amount and be charged another.
+    /// Whole centavos, for a deposit. Ignored for a repayment, whose amount
+    /// the engine sets to exactly what's due.
+    #[serde(default)]
     amount: i64,
-    /// `deposit` or `repay` — what the member is paying for. Only used to
-    /// describe the order; what it actually settles is decided by which
-    /// endpoint the resulting order id is later presented to.
+    /// `deposit` or `repay` — what the member is paying for. Recorded on the
+    /// payment intent (041), so the order can only ever be confirmed as that.
     #[serde(default)]
     purpose: String,
-    /// repay only: which loan, for the description.
+    /// repay only: which loan.
     #[serde(default)]
     loan_id: Option<Uuid>,
 }
@@ -55,53 +56,51 @@ pub async fn create(
 ) -> Result<Json<OrderResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
 
-    if p.amount <= 0 {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid amount"));
-    }
-
-    let mut amount = p.amount;
-
+    // The payment is reserved before PayPal is asked for anything (041): a
+    // repayment's amount is set to exactly what's due — whatever the page
+    // sent — and a deposit is checked against the member's AML limits. The
+    // page's `amount` only matters for a deposit.
+    //
     // Whitelisted, never interpolated from what the client sent — the
     // description is shown to the member on PayPal's own page.
-    let description = match p.purpose.as_str() {
+    let (reserved, description) = match p.purpose.as_str() {
         "repay" => {
-            // The loan is checked HERE, before PayPal is asked for anything.
-            //
-            // This endpoint used to take `loan_id` as decoration for the
-            // description and check nothing at all — not that the loan existed,
-            // not that it belonged to the caller, not that it could accept
-            // money. `/loans/repay` would refuse a bad one later, but only
-            // after the member had walked through PayPal's whole approval
-            // sheet, which is a rotten way to say "you didn't owe this".
-            //
-            // It is also what let a fully-settled loan keep offering to be
-            // paid: the Stripe rail already refused that at checkout, and this
-            // one didn't, so the two rails disagreed about the same loan.
             let loan_id = p.loan_id.ok_or((
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Which loan is this repaying?",
             ))?;
-            let payable =
-                crate::api::lending::check_loan_payable(&pool, loan_id, user_id).await?;
-
-            // Same clamp the Stripe checkout applies: paying more than the
-            // arrears is harmless — the excess comes back as a deposit lot —
-            // but showing someone a PayPal sheet for more than they owe and
-            // then returning most of it is a confusing way to take money.
-            if payable.settling {
-                amount = amount.min(payable.arrears);
-            }
-
-            format!("PrimeLendRow loan repayment {loan_id}")
+            (
+                intents::reserve_repay(&pool, user_id, "paypal", loan_id).await?,
+                format!("PrimeLendRow loan repayment {loan_id}"),
+            )
         }
-        _ => "PrimeLendRow pool deposit".to_string(),
+        "deposit" => {
+            if p.amount <= 0 {
+                return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid amount"));
+            }
+            (
+                intents::reserve_deposit(&pool, user_id, "paypal", p.amount).await?,
+                "PrimeLendRow pool deposit".to_string(),
+            )
+        }
+        _ => return Err((StatusCode::UNPROCESSABLE_ENTITY, "Unknown payment purpose")),
     };
+    intents::close_superseded(&reserved.superseded).await;
 
-    let order_id = paypal::create_order(&user_id.to_string(), amount, &description)
-        .await
-        .map_err(|m| (StatusCode::BAD_GATEWAY, m))?;
+    let order_id = match paypal::create_order(&user_id.to_string(), reserved.amount, &description).await {
+        Ok(id) => id,
+        Err(m) => {
+            intents::abandon(&pool, reserved.id).await;
+            return Err((StatusCode::BAD_GATEWAY, m));
+        }
+    };
+    // Superseded while PayPal was being called: the order is simply never
+    // captured (capture only follows a claim), so there is nothing to undo.
+    if !intents::open(&pool, reserved.id, &order_id).await? {
+        return Err((StatusCode::CONFLICT, "A newer payment was started for this loan — use that one"));
+    }
 
-    tracing::info!(%user_id, amount, purpose = %p.purpose, "paypal order created");
+    tracing::info!(%user_id, amount = reserved.amount, purpose = %p.purpose, "paypal order created");
 
     Ok(Json(OrderResponse { order_id }))
 }

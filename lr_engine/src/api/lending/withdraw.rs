@@ -41,6 +41,10 @@ use crate::api::users::shared::{E, require_verified_user};
 pub struct WithdrawInput {
     /// Whole centavos.
     amount: i64,
+    /// One key per withdrawal attempt, made by the client (041). Sending the
+    /// same key again — a double click, a retried request — returns the
+    /// withdrawal it already made instead of making a second one.
+    request_key: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -58,6 +62,17 @@ pub async fn withdraw(
 ) -> Result<Json<WithdrawResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
     let amount = validate_centavos(p.amount)?;
+    let request_key = p.request_key.ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Missing withdrawal request key — refresh the page and try again",
+    ))?;
+
+    // A key already used: this is the same withdrawal arriving again, so answer
+    // with what it already did.
+    if let Some(done) = already_requested(&pool, user_id, request_key, amount).await? {
+        return Ok(Json(done));
+    }
+
     // Refused before a single lot is touched: a withdrawal we have nowhere to
     // send would consume the member's deposit into a promise that can never
     // be kept.
@@ -126,18 +141,32 @@ pub async fn withdraw(
     // The destination AND the rail are pinned to the row now, for the same
     // reason: relinking an account later — or an operator flipping
     // PAYOUT_RAIL — must not redirect a transfer that is already in flight.
-    let payout_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider)
-         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3, $4)
+    let payout_id: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
+        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider, request_key)
+         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3, $4, $5)
          RETURNING id",
     )
     .bind(user_id)
     .bind(amount)
     .bind(&destination.account)
     .bind(destination.provider)
+    .bind(request_key)
     .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| db_err(e, "insert withdrawal payout"))?;
+    .await;
+    let payout_id: Uuid = match payout_id {
+        Ok(id) => id,
+        // The same key landed twice at the same moment and the other request
+        // won the unique index: this transaction (and the lots it consumed)
+        // rolls back, and the member gets the withdrawal that was made.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            drop(tx);
+            return already_requested(&pool, user_id, request_key, amount)
+                .await?
+                .map(Json)
+                .ok_or((StatusCode::CONFLICT, "This withdrawal is already being processed"));
+        }
+        Err(e) => return Err(db_err(e, "insert withdrawal payout")),
+    };
 
     commit_event(
         &mut tx,
@@ -183,6 +212,36 @@ pub async fn withdraw(
     tracing::info!(%user_id, %payout_id, amount, status, "withdrawal confirmed");
 
     Ok(Json(WithdrawResponse { payout, message }))
+}
+
+/// The withdrawal a request key already made, if any. The same key with a
+/// different amount is a client bug, not a retry, and is refused rather than
+/// guessed at.
+async fn already_requested(
+    pool: &PgPool,
+    user_id: Uuid,
+    request_key: Uuid,
+    amount: i64,
+) -> Result<Option<WithdrawResponse>, E> {
+    let existing: Option<(Uuid, i64)> = sqlx::query_as(
+        "SELECT id, amount FROM public.payouts
+          WHERE user_id = $1 AND request_key = $2 AND kind = 'deposit_withdrawal'",
+    )
+    .bind(user_id)
+    .bind(request_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| db_err(e, "withdrawal request key"))?;
+    let Some((payout_id, existing_amount)) = existing else {
+        return Ok(None);
+    };
+    if existing_amount != amount {
+        return Err((StatusCode::CONFLICT, "That withdrawal request was already used for a different amount"));
+    }
+    Ok(Some(WithdrawResponse {
+        payout: payout::read_one(pool, payout_id, user_id).await?,
+        message: "This withdrawal was already requested — here is where it stands",
+    }))
 }
 
 /// Gives back a withdrawal that never left.
