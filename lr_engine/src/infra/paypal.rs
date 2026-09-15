@@ -158,6 +158,15 @@ struct Capture {
     id: String,
     status: String,
     amount: Money,
+    /// Gross, PayPal's fee and net — what actually reached the balance.
+    #[serde(default)]
+    seller_receivable_breakdown: Option<ReceivableBreakdown>,
+}
+
+#[derive(Deserialize)]
+struct ReceivableBreakdown {
+    #[serde(default)]
+    paypal_fee: Option<Money>,
 }
 
 #[derive(Deserialize)]
@@ -228,9 +237,17 @@ fn completed_php_capture(
     if centavos <= 0 {
         return Err("Invalid amount");
     }
+    // PayPal's own fee, when it reports one in pesos. Anything else (missing,
+    // another currency) leaves the caller to fall back on the policy estimate.
+    let fee = capture
+        .seller_receivable_breakdown
+        .and_then(|b| b.paypal_fee)
+        .filter(|f| f.currency_code == "PHP")
+        .and_then(|f| parse_centavos(&f.value).ok());
     Ok(CapturedPayment {
         capture_id: capture.id,
         centavos,
+        fee,
     })
 }
 
@@ -624,6 +641,15 @@ struct PayoutItem {
     transaction_status: Option<String>,
     #[serde(default)]
     errors: Option<PayoutItemError>,
+    /// What PayPal charged the sender for this item.
+    #[serde(default)]
+    payout_item_fee: Option<PayoutMoney>,
+}
+
+#[derive(Deserialize)]
+struct PayoutMoney {
+    currency: String,
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -822,6 +848,11 @@ pub async fn payout_status(batch_id: &str) -> Result<PayoutOutcome, &'static str
     let item = batch.items.into_iter().next();
     let item_id = item.as_ref().and_then(|i| i.payout_item_id.clone());
     let transaction_id = item.as_ref().and_then(|i| i.transaction_id.clone());
+    let fee = item
+        .as_ref()
+        .and_then(|i| i.payout_item_fee.as_ref())
+        .filter(|f| f.currency == "PHP")
+        .and_then(|f| parse_centavos(&f.value).ok());
     let reason = item
         .as_ref()
         .and_then(|i| i.errors.as_ref())
@@ -841,7 +872,7 @@ pub async fn payout_status(batch_id: &str) -> Result<PayoutOutcome, &'static str
 
     Ok(match item_status {
         "SUCCESS" => match item_id {
-            Some(item_id) => PayoutOutcome::Paid { item_id, transaction_id },
+            Some(item_id) => PayoutOutcome::Paid { item_id, transaction_id, fee },
             // Paid without an item id is not something to post the books on.
             None => PayoutOutcome::Pending { item_id: None },
         },

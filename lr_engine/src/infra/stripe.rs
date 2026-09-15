@@ -394,10 +394,11 @@ struct SessionRead {
     amount_total: Option<i64>,
     #[serde(default)]
     client_reference_id: Option<String>,
-    /// The id of the PaymentIntent, unexpanded — this is the reference the
-    /// ledger is keyed on.
+    /// The PaymentIntent — the reference the ledger is keyed on. Expanded
+    /// (with its charge's balance transaction) so the fee Stripe kept can be
+    /// read in the same round trip; a plain id if expansion isn't returned.
     #[serde(default)]
-    payment_intent: Option<String>,
+    payment_intent: Option<serde_json::Value>,
 }
 
 /// Verifies a completed session and returns what was really paid.
@@ -413,7 +414,9 @@ pub async fn capture_session(
         return Err("Invalid payment reference");
     }
 
-    let body = get(&format!("/v1/checkout/sessions/{session_id}"))
+    let body = get(&format!(
+        "/v1/checkout/sessions/{session_id}?expand[]=payment_intent.latest_charge.balance_transaction"
+    ))
         .await
         .map_err(|(status, body)| {
             let (_, message) = decode_error(&body);
@@ -444,14 +447,29 @@ pub async fn capture_session(
     }
     // The PaymentIntent, not the session, is the reference: a session is a
     // checkout attempt, the intent is the money.
-    let intent = session
-        .payment_intent
-        .filter(|p| !p.is_empty())
-        .ok_or("Payment could not be verified")?;
+    let (intent, fee) = match session.payment_intent {
+        Some(serde_json::Value::String(id)) => (id, None),
+        Some(object) => {
+            let id = object.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            // The balance transaction is in the account's settlement currency;
+            // its fee is only usable here when that is pesos.
+            let txn = object.get("latest_charge").and_then(|c| c.get("balance_transaction"));
+            let fee = txn
+                .filter(|t| t.get("currency").and_then(|c| c.as_str()) == Some("php"))
+                .and_then(|t| t.get("fee"))
+                .and_then(|f| f.as_i64());
+            (id, fee)
+        }
+        None => (String::new(), None),
+    };
+    if intent.is_empty() {
+        return Err("Payment could not be verified");
+    }
 
     Ok(CapturedPayment {
         capture_id: format!("stripe:{intent}"),
         centavos,
+        fee,
     })
 }
 
@@ -801,9 +819,11 @@ pub async fn transfer_status(transfer_id: &str) -> Result<PayoutOutcome, &'stati
         });
     }
 
+    // A Connect transfer carries no per-transfer fee.
     Ok(PayoutOutcome::Paid {
         item_id: transfer.id,
         transaction_id: transfer.destination_payment,
+        fee: Some(0),
     })
 }
 

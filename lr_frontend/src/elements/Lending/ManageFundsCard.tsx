@@ -5,6 +5,7 @@ import usePayouts from '../../functions/Lending/usePayouts'
 import { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
 import { useToast } from '../../providers/useToast'
 import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
+import { payoutFee, receiveFee } from '../../functions/Lending/fees'
 import { PAYOUT_LABEL, payoutNeedsAttention, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
 import StripeButton from './StripeButton'
@@ -67,6 +68,14 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const depositTooBig = limits !== null && depositCentavos !== null && depositCentavos > limits.allowance
     const depositBlocked = depositTooSmall || depositTooBig
     const withdrawTooBig = withdrawCentavos !== null && withdrawCentavos > me.available
+    // Fee estimates (engine 043), from policy. A deposit is credited net of
+    // the fee the provider actually reports; a withdrawal has its fee taken
+    // out of what's sent. `?.` so an older engine just shows no fee line.
+    const fees = params.policy.payment_fees ?? null
+    const depositFees = fees && depositCentavos && !depositBlocked
+        ? { paypal: receiveFee(depositCentavos, fees.paypal), card: receiveFee(depositCentavos, fees.stripe) }
+        : null
+    const withdrawFee = fees && withdrawCentavos && !withdrawTooBig ? payoutFee(withdrawCentavos, fees.paypal) : null
 
     const locked = me.lent + me.collateral + me.pledged
     const totalDeposited = me.available + locked
@@ -164,6 +173,13 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                             ? `Pay ${pesos(depositCentavos)} by card`
                             : 'Pay by card'}
                     />
+                    {depositFees && depositCentavos && (
+                        <p className='lending-muted lending-fee-note'>
+                            PayPal keeps about {pesos(depositFees.paypal)}, so you’re credited about{' '}
+                            <b>{pesos(depositCentavos - depositFees.paypal)}</b>. By card: about{' '}
+                            {pesos(depositFees.card)} fee, <b>{pesos(depositCentavos - depositFees.card)}</b> credited.
+                        </p>
+                    )}
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}
                 </div>
             ) : (
@@ -191,6 +207,11 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                         <p className='lending-field-error'>Only {pesos(me.available)} of your deposit is withdrawable right now.</p>
                     ) : (
                         <p className='lending-muted'>Up to {pesos(me.available)} available now · sent to your connected PayPal</p>
+                    )}
+                    {withdrawFee !== null && withdrawCentavos && (
+                        <p className='lending-muted lending-fee-note'>
+                            PayPal payout fee {pesos(withdrawFee)} · you receive <b>{pesos(withdrawCentavos - withdrawFee)}</b>
+                        </p>
                     )}
                     <button
                         type='button'
@@ -225,7 +246,9 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                                     className={`lending-muted${payoutNeedsAttention(payout) ? ' lending-liquidation' : ''}`}
                                 >
                                     {payoutNeedsAttention(payout) && <AlertTriangle />}
-                                    <b>{pesos(payout.amount)}</b> · {PAYOUT_LABEL[payout.status]}
+                                    <b>{pesos(payout.sent ?? payout.amount)}</b>
+                                    {payout.fee > 0 && <> (after {pesos(payout.fee)} fee)</>}
+                                    {' '}· {PAYOUT_LABEL[payout.status]}
                                     {payout.status === 'paid' && payout.settled_at !== null && (
                                         <> on {formatDate(payout.settled_at)}</>
                                     )}

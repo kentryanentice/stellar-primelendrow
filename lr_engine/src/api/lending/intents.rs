@@ -88,10 +88,12 @@ pub async fn deposit_status(
     let t = now();
 
     let (credited_24h, credited_30d): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(-p.amount) FILTER (WHERE e.created_at >= $2), 0)::BIGINT,
-                COALESCE(SUM(-p.amount), 0)::BIGINT
+        // Gross, from the event: what the member paid in, before any provider
+        // fee (043 credits the net, but a limit on money coming in counts all
+        // of it). Every deposit event has carried `amount` since the ledger began.
+        "SELECT COALESCE(SUM((e.payload->>'amount')::BIGINT) FILTER (WHERE e.created_at >= $2), 0)::BIGINT,
+                COALESCE(SUM((e.payload->>'amount')::BIGINT), 0)::BIGINT
            FROM public.ledger_events e
-           JOIN public.ledger_postings p ON p.event_id = e.id AND p.account = 'member_deposits'
           WHERE e.user_id = $1 AND e.kind = 'deposit_confirmed' AND e.created_at >= $3",
     )
     .bind(user_id)
@@ -154,8 +156,12 @@ pub async fn reserve_deposit(pool: &PgPool, user_id: Uuid, rail: &str, amount: i
         ));
     }
 
+    // The fee the provider is expected to keep. The member is credited the
+    // net of the fee the provider actually reports (043); this is recorded so
+    // the two can be compared.
+    let fee = domain::receive_fee_estimate(amount, rules.params.payment_fees.for_rail(rail));
     let expires_at = now() + INTENT_TTL_SECS;
-    let id = insert(&mut tx, user_id, "deposit", None, None, amount, rail, expires_at).await?;
+    let id = insert(&mut tx, user_id, "deposit", None, None, amount, fee, None, rail, expires_at).await?;
     tx.commit().await.map_err(|e| db_err(e, "commit reserve deposit"))?;
     Ok(Reserved { id, amount, expires_at, superseded: Vec::new() })
 }
@@ -164,6 +170,7 @@ pub async fn reserve_deposit(pool: &PgPool, user_id: Uuid, rail: &str, amount: i
 /// unpaid installment, or a settling loan's arrears — whatever the page asked
 /// for. Supersedes any older payment for this loan that hasn't been claimed.
 pub async fn reserve_repay(pool: &PgPool, user_id: Uuid, rail: &str, loan_id: Uuid) -> Result<Reserved, E> {
+    let rules = policy::active(pool).await?;
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin reserve repay"))?;
     let (due, installment) = amount_due(&mut tx, loan_id, user_id).await?;
 
@@ -194,10 +201,14 @@ pub async fn reserve_repay(pool: &PgPool, user_id: Uuid, rail: &str, loan_id: Uu
     .await
     .map_err(|e| db_err(e, "supersede old payments"))?;
 
+    // The borrower pays the provider's fee on top (043): the checkout total is
+    // the smallest amount that leaves exactly what's due after the estimated
+    // fee, so the loan receives the installment to the centavo.
+    let (total, fee) = domain::gross_up(due, rules.params.payment_fees.for_rail(rail));
     let expires_at = now() + INTENT_TTL_SECS;
-    let id = insert(&mut tx, user_id, "repay", Some(loan_id), installment, due, rail, expires_at).await?;
+    let id = insert(&mut tx, user_id, "repay", Some(loan_id), installment, total, fee, Some(due), rail, expires_at).await?;
     tx.commit().await.map_err(|e| db_err(e, "commit reserve repay"))?;
-    Ok(Reserved { id, amount: due, expires_at, superseded })
+    Ok(Reserved { id, amount: total, expires_at, superseded })
 }
 
 /// What a loan owes on its next payment, under the loan's row lock: exactly the
@@ -254,12 +265,14 @@ async fn insert(
     loan_id: Option<Uuid>,
     installment: Option<i16>,
     amount: i64,
+    fee: i64,
+    applies: Option<i64>,
     rail: &str,
     expires_at: i64,
 ) -> Result<Uuid, E> {
     sqlx::query_scalar(
-        "INSERT INTO public.payment_intents (user_id, purpose, loan_id, installment, amount, rail, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "INSERT INTO public.payment_intents (user_id, purpose, loan_id, installment, amount, fee, applies, rail, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id",
     )
     .bind(user_id)
@@ -267,6 +280,8 @@ async fn insert(
     .bind(loan_id)
     .bind(installment)
     .bind(amount)
+    .bind(fee)
+    .bind(applies)
     .bind(rail)
     .bind(expires_at)
     .fetch_one(&mut **tx)
@@ -329,11 +344,16 @@ pub struct Claimed {
     pub id: Uuid,
     pub rail: &'static str,
     pub loan_id: Option<Uuid>,
+    /// What the member is charged, gross.
     pub amount: i64,
+    /// Repayments: exactly what the payment applies to the loan (`amount`
+    /// less the fee charged on top). `None` on a deposit, and on a repayment
+    /// started before 043, which applies all of `amount`.
+    pub applies: Option<i64>,
 }
 
-/// id, user_id, purpose, loan_id, amount, rail, status, expires_at
-type IntentRow = (Uuid, Uuid, String, Option<Uuid>, i64, String, String, i64);
+/// id, user_id, purpose, loan_id, amount, applies, rail, status, expires_at
+type IntentRow = (Uuid, Uuid, String, Option<Uuid>, i64, Option<i64>, String, String, i64);
 
 /// What claiming found.
 pub enum Claim {
@@ -362,14 +382,14 @@ pub async fn claim(pool: &PgPool, user_id: Uuid, payment: &PaymentRef, purpose: 
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin claim"))?;
     let row: Option<IntentRow> = sqlx::query_as(
-        "SELECT id, user_id, purpose, loan_id, amount, rail, status, expires_at
+        "SELECT id, user_id, purpose, loan_id, amount, applies, rail, status, expires_at
            FROM public.payment_intents WHERE provider_ref = $1 FOR UPDATE",
     )
     .bind(&provider_ref)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| db_err(e, "claim payment intent"))?;
-    let (id, owner, intent_purpose, loan_id, amount, intent_rail, status, expires_at) = row.ok_or((
+    let (id, owner, intent_purpose, loan_id, amount, applies, intent_rail, status, expires_at) = row.ok_or((
         StatusCode::UNPROCESSABLE_ENTITY,
         "That payment wasn't started here — please start a new one",
     ))?;
@@ -380,7 +400,7 @@ pub async fn claim(pool: &PgPool, user_id: Uuid, payment: &PaymentRef, purpose: 
     if intent_purpose != purpose || intent_rail != rail {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "That payment was started for something else"));
     }
-    let claimed = Claimed { id, rail, loan_id, amount };
+    let claimed = Claimed { id, rail, loan_id, amount, applies };
 
     match status.as_str() {
         "consumed" => Err((StatusCode::CONFLICT, "This payment was already processed")),
@@ -436,15 +456,21 @@ pub async fn release_claim(pool: &PgPool, id: Uuid) {
 /// Step 4, inside the transaction that applies the money: record the capture
 /// and mark the intent consumed. Fails if the intent is no longer claimed —
 /// nothing else may have touched it between claim and apply.
-pub async fn consume(tx: &mut Transaction<'_, Postgres>, id: Uuid, capture_ref: &str) -> Result<(), E> {
+pub async fn consume(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    capture_ref: &str,
+    provider_fee: i64,
+) -> Result<(), E> {
     let updated = sqlx::query(
         "UPDATE public.payment_intents
-            SET status = 'consumed', capture_ref = $2, updated_at = $3
+            SET status = 'consumed', capture_ref = $2, provider_fee = $4, updated_at = $3
           WHERE id = $1 AND status = 'capturing'",
     )
     .bind(id)
     .bind(capture_ref)
     .bind(now())
+    .bind(provider_fee)
     .execute(&mut **tx)
     .await
     .map_err(|e| db_err(e, "consume payment intent"))?;

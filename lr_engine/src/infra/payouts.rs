@@ -67,9 +67,10 @@ pub fn spawn(pool: PgPool) {
     });
 }
 
-type PendingRow = (Uuid, Uuid, i64, String, Option<Uuid>, i32, String);
-/// id, user_id, amount, loan_id, batch_id, kind, provider — in SELECT order.
-type SentRow = (Uuid, Uuid, i64, Option<Uuid>, String, String, String);
+/// id, user_id, amount, fee, payer_id, loan_id, attempts, provider
+type PendingRow = (Uuid, Uuid, i64, i64, String, Option<Uuid>, i32, String);
+/// id, user_id, amount, fee, loan_id, batch_id, kind, provider — in SELECT order.
+type SentRow = (Uuid, Uuid, i64, i64, Option<Uuid>, String, String, String);
 
 /// The ledger event a settled payout is filed under. Both kinds pay down the
 /// same `payout_payable`, but the reason the pool owed the money is worth
@@ -84,7 +85,7 @@ fn settled_event_kind(kind: &str) -> &'static str {
 async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     let cutoff = Utc::now().timestamp() - SUBMIT_AFTER_SECS;
     let rows: Vec<PendingRow> = sqlx::query_as(
-        "SELECT id, user_id, amount, payer_id, loan_id, attempts, provider
+        "SELECT id, user_id, amount, fee, payer_id, loan_id, attempts, provider
            FROM public.payouts
           WHERE status = 'pending' AND created_at <= $1 AND attempts < $2
           ORDER BY created_at
@@ -96,7 +97,7 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
     .fetch_all(pool)
     .await?;
 
-    for (id, user_id, amount, payer_id, loan_id, attempts, provider) in rows {
+    for (id, user_id, amount, fee, payer_id, loan_id, attempts, provider) in rows {
         // A rail this deployment has no credentials for can't be retried, and
         // burning an attempt on it would quietly exhaust MAX_ATTEMPTS and
         // abandon the row. Skip instead: it stays pending and visible.
@@ -113,7 +114,9 @@ async fn submit_pending(pool: &PgPool) -> Result<(), sqlx::Error> {
         // Both providers refuse a duplicate under that id, which is the whole
         // reason a retry here is safe.
         let result =
-            crate::api::lending::submit_payout(&provider, id, &payer_id, amount, &note).await;
+            // What is sent is the claim less its fee (043) — the same figure the
+            // request handler sent on the first attempt.
+            crate::api::lending::submit_payout(&provider, id, &payer_id, amount - fee, &note).await;
         let now = Utc::now().timestamp();
 
         let (status, batch_id, sent_at, error) = match result {
@@ -222,7 +225,7 @@ async fn rail_status(provider: &str, reference: &str) -> Result<PayoutOutcome, &
 
 async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
     let rows: Vec<SentRow> = sqlx::query_as(
-        "SELECT id, user_id, amount, loan_id, batch_id, kind, provider
+        "SELECT id, user_id, amount, fee, loan_id, batch_id, kind, provider
            FROM public.payouts
           WHERE status IN ('sent', 'unclaimed') AND batch_id IS NOT NULL
           ORDER BY sent_at
@@ -232,7 +235,7 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
     .fetch_all(pool)
     .await?;
 
-    for (id, user_id, amount, loan_id, batch_id, kind, provider) in rows {
+    for (id, user_id, amount, fee, loan_id, batch_id, kind, provider) in rows {
         if !rail_configured(&provider) {
             continue;
         }
@@ -245,12 +248,14 @@ async fn reconcile_sent(pool: &PgPool) -> Result<(), sqlx::Error> {
         };
 
         match outcome {
-            PayoutOutcome::Paid { item_id, transaction_id } => {
+            PayoutOutcome::Paid { item_id, transaction_id, fee: provider_fee } => {
                 settle(
                     pool,
                     id,
                     user_id,
                     amount,
+                    fee,
+                    provider_fee,
                     loan_id,
                     settled_event_kind(&kind),
                     &provider,
@@ -313,6 +318,8 @@ async fn settle(
     id: Uuid,
     user_id: Uuid,
     amount: i64,
+    fee: i64,
+    provider_fee: Option<i64>,
     loan_id: Option<Uuid>,
     event_kind: &'static str,
     provider: &str,
@@ -351,6 +358,20 @@ async fn settle(
         "{provider}_payout:{}",
         transaction_id.as_deref().unwrap_or(item_id)
     );
+    // What left the provider balance: what was sent (the claim less its fee,
+    // 043) plus what the provider actually charged for sending it. Any gap
+    // between that charge and the fee the member was deducted lands in the
+    // variance account, so `cash` falls by exactly what really left.
+    let sent = amount - fee;
+    let charged = provider_fee.unwrap_or(fee);
+    let variance = fee - charged;
+    let mut postings = vec![
+        Posting { account: "payout_payable", amount },
+        Posting { account: "cash", amount: -(sent + charged) },
+    ];
+    if variance != 0 {
+        postings.push(Posting { account: "payment_fee_variance", amount: -variance });
+    }
     let posted = commit_event(
         &mut tx,
         EventDraft {
@@ -360,16 +381,14 @@ async fn settle(
             deposit_id: None,
             rail_ref: Some(rail_ref),
             payload: serde_json::json!({
-                "payout_id": id, "amount": amount, "item_id": item_id,
+                "payout_id": id, "amount": amount, "fee": fee, "provider_fee": charged,
+                "item_id": item_id,
                 "transaction_id": transaction_id, "rail": provider,
             }),
             actor_id: None,
         },
         // The promise is settled and the pesos really have left now.
-        &[
-            Posting { account: "payout_payable", amount },
-            Posting { account: "cash", amount: -amount },
-        ],
+        &postings,
     )
     .await;
 

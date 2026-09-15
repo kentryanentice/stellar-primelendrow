@@ -85,6 +85,35 @@ pub struct DepositLimits {
     pub below_floor_pct: i64,
 }
 
+/// One rail's fees (043), as the provider charges them to the platform.
+/// Estimates: the provider's own figure is used wherever it reports one.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct RailFees {
+    /// Receiving a payment: basis points of the amount charged...
+    pub receive_bps: i64,
+    /// ...plus this fixed fee, in centavos.
+    pub receive_fixed: i64,
+    /// Sending a payout: basis points of the amount sent...
+    pub payout_bps: i64,
+    /// ...capped at this, in centavos (0 = no cap).
+    pub payout_cap: i64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PaymentFees {
+    pub paypal: RailFees,
+    pub stripe: RailFees,
+}
+
+impl PaymentFees {
+    pub fn for_rail(&self, rail: &str) -> &RailFees {
+        match rail {
+            "stripe" => &self.stripe,
+            _ => &self.paypal,
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct PolicyParams {
     pub bands: Vec<Band>,
@@ -104,6 +133,7 @@ pub struct PolicyParams {
     pub min_loan: i64,
     pub interest_split: InterestSplit,
     pub deposit_limits: DepositLimits,
+    pub payment_fees: PaymentFees,
 }
 
 pub struct Policy {
@@ -135,6 +165,12 @@ pub async fn active<'e, X: PgExecutor<'e>>(executor: X) -> Result<Policy, E> {
     // 100 would silently invent or lose centavos on every repayment.
     super::domain::check_interest_split(&params).map_err(|why| {
         tracing::error!("policy {id} interest_split invalid: {why}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
+    })?;
+    // A receive rate of 100% or more can't be grossed up; a negative fee would
+    // pay members to use the rail.
+    super::domain::check_payment_fees(&params).map_err(|why| {
+        tracing::error!("policy {id} payment_fees invalid: {why}");
         (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
     })?;
     // Same for the AML table: a tier whose daily limit is below its per-deposit

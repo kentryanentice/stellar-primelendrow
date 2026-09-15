@@ -45,7 +45,10 @@ pub struct RepayInput {
 
 #[derive(Serialize)]
 pub struct RepayResponse {
+    /// What was applied to the loan.
     pub amount_received: i64,
+    /// The payment-provider fee paid on top of it (043).
+    pub fee_paid: i64,
     pub interest_paid: i64,
     pub principal_paid: i64,
     /// Anything beyond what the loan owed becomes a fresh deposit lot.
@@ -106,7 +109,20 @@ pub async fn repay(
             return Err(e);
         }
     };
+    // Three numbers, kept apart (043):
+    //   received      the gross the borrower paid
+    //   applies       exactly what reaches the loan — the installment or arrears
+    //   provider_fee  what PayPal/Stripe actually kept, as they report it
+    // The borrower paid `received - applies` on top as the estimated fee.
     let received = captured.centavos;
+    let applies = claimed.applies.unwrap_or(claimed.amount);
+    let rules_fees = rules.params.payment_fees.for_rail(rail);
+    let provider_fee = captured.fee.unwrap_or_else(|| domain::receive_fee_estimate(received, rules_fees));
+    let fee_paid = received - applies;
+    // Estimate minus reality: positive if the provider kept less than the
+    // borrower paid for, negative if more. Booked so `cash` matches the
+    // provider balance exactly.
+    let fee_variance = fee_paid - provider_fee;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin repay"))?;
 
@@ -174,7 +190,7 @@ pub async fn repay(
             .collect();
         domain::next_installment_due(&rows).map(|(_, owed)| owed)
     };
-    if received != claimed.amount || due_now != Some(claimed.amount) {
+    if received != claimed.amount || due_now != Some(applies) {
         drop(tx);
         return Err(intents::refund(&pool, &claimed, &captured.capture_id, "repayment no longer matched the amount due").await);
     }
@@ -200,7 +216,7 @@ pub async fn repay(
     // still paid before principal within an installment (Lesson 8). Since 041
     // the payment is exactly the next installment, so nothing is left over:
     // `excess` stays 0, and the database refuses a payment row where it isn't.
-    let mut remaining = received;
+    let mut remaining = applies;
     let mut interest_total: i64 = 0;
     let mut principal_total: i64 = 0;
     for row in &mut schedule {
@@ -247,8 +263,16 @@ pub async fn repay(
 
     // The books: one event, postings that tie to the received centavo.
     //
+    // `cash` rises by what really reached the provider balance: the gross less
+    // the provider's own fee. The loan side is credited exactly `applies`, and
+    // the difference between the fee the borrower paid and the fee the
+    // provider kept is the variance (043).
+    //
     // Two shapes, because the money means two different things.
-    let mut postings = vec![Posting { account: "cash", amount: received }];
+    let mut postings = vec![Posting { account: "cash", amount: received - provider_fee }];
+    if fee_variance != 0 {
+        postings.push(Posting { account: "payment_fee_variance", amount: -fee_variance });
+    }
     // The interest split exactly as booked below, recorded beside the event
     // (037), and every member's slice of it (039). All stay empty on a
     // settlement, which collects no interest.
@@ -266,7 +290,7 @@ pub async fn repay(
         // So the payment undoes the loss instead: guarantors made whole first,
         // then the reserve, then anything left back to the borrower. See
         // `reconcile::settle` for why that order and not the strict reverse.
-        let split = reconcile::settle(&mut tx, p.loan_id, user_id, received).await?;
+        let split = reconcile::settle(&mut tx, p.loan_id, user_id, applies).await?;
         if split.to_guarantors > 0 {
             postings.push(Posting { account: "member_deposits", amount: -split.to_guarantors });
         }
@@ -353,7 +377,7 @@ pub async fn repay(
 
     // Before the ledger event: the 041 trigger refuses a repayment event that
     // doesn't match a claimed intent carrying this capture reference.
-    intents::consume(&mut tx, claimed.id, &captured.capture_id).await?;
+    intents::consume(&mut tx, claimed.id, &captured.capture_id, provider_fee).await?;
 
     let event_id = commit_event(
         &mut tx,
@@ -365,7 +389,9 @@ pub async fn repay(
             rail_ref: Some(captured.capture_id.clone()),
             payload: serde_json::json!({
                 "rail": rail,
-                "received": received, "interest": interest_total,
+                "received": received, "applies": applies,
+                "fee_paid": fee_paid, "provider_fee": provider_fee,
+                "interest": interest_total,
                 "principal": principal_total, "excess": excess
             }),
             actor_id: Some(user_id),
@@ -442,17 +468,21 @@ pub async fn repay(
     // credit, so by here this capture is known-unique.
     sqlx::query(
         "INSERT INTO public.loan_payments
-            (loan_id, user_id, amount_received, interest_paid, principal_paid, excess, rail_ref, paid_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            (loan_id, user_id, amount_received, interest_paid, principal_paid, excess, rail_ref, paid_at,
+             fee_paid, provider_fee)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(p.loan_id)
     .bind(user_id)
-    .bind(received)
+    // What was applied to the loan; the fee paid on top is its own column.
+    .bind(applies)
     .bind(interest_total)
     .bind(principal_total)
     .bind(excess)
     .bind(&captured.capture_id)
     .bind(now)
+    .bind(fee_paid)
+    .bind(provider_fee)
     .execute(&mut *tx)
     .await
     .map_err(|e| db_err(e, "record payment"))?;
@@ -640,7 +670,8 @@ pub async fn repay(
     }
 
     Ok(Json(RepayResponse {
-        amount_received: received,
+        amount_received: applies,
+        fee_paid,
         interest_paid: interest_total,
         principal_paid: principal_total,
         // On a settlement the "excess" the schedule allocation computed is not
