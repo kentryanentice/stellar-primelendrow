@@ -27,9 +27,9 @@ export default function ImageLightbox({ detail, lightboxOpen, closeLightbox }: I
                 <div className='admin-lightbox-grid'>
                     <figure className='admin-lightbox-figure'>
                         {detail.selfie_image_url
-                            ? <img src={detail.selfie_image_url} alt='Live selfie, full size' />
+                            ? <img src={detail.selfie_image_url} alt='Submitted selfie, full size' />
                             : <div className='admin-lightbox-placeholder'><User aria-hidden='true' /></div>}
-                        <figcaption>Live selfie</figcaption>
+                        <figcaption>{detail.liveness_passed ? 'Live selfie' : 'Selfie — liveness needs review'}</figcaption>
                     </figure>
                     <figure className='admin-lightbox-figure'>
                         {detail.id_image_url

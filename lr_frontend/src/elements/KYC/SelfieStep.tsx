@@ -1,4 +1,4 @@
-import { CheckCircle, Camera, ShieldCheck } from 'lucide-react'
+import { CheckCircle, Camera } from 'lucide-react'
 import type { KYCState } from './types'
 import { LIVENESS_PASS_PERCENT, type LivenessStatus } from '../../functions/KYC/liveness'
 
@@ -6,9 +6,10 @@ const LIVENESS_COPY: Record<Exclude<LivenessStatus, 'idle'>, string> = {
     loading: 'Loading liveness check…',
     'no-face': 'Position your face in the frame',
     'position-face': 'Fit your face inside the outline',
+    calibrating: 'Look at the camera with your eyes open…',
     'awaiting-blink': 'Blink to confirm you’re really there',
+    'blink-detected': 'Blink detected — hold still while we confirm the live camera feed…',
     'spoof-warning': 'We can’t confirm a live camera feed — make sure you’re not holding up a photo or screen',
-    passed: 'Liveness confirmed — hold still…',
     bypassed: 'Liveness check unavailable — frame your face and capture manually',
     timeout: 'We couldn’t auto-confirm liveness — frame your face and capture manually. Your submission will be reviewed.',
 }
@@ -16,14 +17,14 @@ const LIVENESS_COPY: Record<Exclude<LivenessStatus, 'idle'>, string> = {
 type SelfieStepProps = Pick<KYCState,
     | 'selfieImageUrl' | 'resetSelfie'
     | 'idImageUrl' | 'idFaceUrl' | 'comparing' | 'faceModelsLoading' | 'matched' | 'matchScore'
-    | 'livenessStatus' | 'livenessPassed' | 'liveScore'
+    | 'livenessStatus' | 'canCaptureSelfie' | 'livenessVerified' | 'liveScore'
     | 'cameraTarget' | 'videoRef' | 'openCamera' | 'closeCamera' | 'captureSelfie'
 >
 
 export default function SelfieStep({
     selfieImageUrl, resetSelfie,
     idImageUrl, idFaceUrl, comparing, faceModelsLoading, matched, matchScore,
-    livenessStatus, livenessPassed, liveScore,
+    livenessStatus, canCaptureSelfie, livenessVerified, liveScore,
     cameraTarget, videoRef, openCamera, closeCamera, captureSelfie,
 }: SelfieStepProps) {
     if (cameraTarget === 'selfie') {
@@ -33,7 +34,6 @@ export default function SelfieStep({
                     <video ref={videoRef} autoPlay playsInline muted className='kyc-camera-video' />
                     <div className={
                         'kyc-camera-guide'
-                        + (livenessStatus === 'passed' ? ' kyc-camera-guide--ok' : '')
                         + (livenessStatus === 'spoof-warning' ? ' kyc-camera-guide--warn' : '')
                     } />
                 </div>
@@ -45,7 +45,7 @@ export default function SelfieStep({
                         </div>
                         <div className='kyc-live-meter-track'>
                             <div
-                                className={'kyc-live-meter-fill' + (liveScore >= LIVENESS_PASS_PERCENT ? ' kyc-live-meter-fill--ok' : '')}
+                                className='kyc-live-meter-fill'
                                 style={{ width: `${liveScore}%` }}
                             />
                             <div className='kyc-live-meter-target' style={{ left: `${LIVENESS_PASS_PERCENT}%` }} />
@@ -55,17 +55,15 @@ export default function SelfieStep({
                 {livenessStatus !== 'idle' && (
                     <p className={
                         'kyc-liveness'
-                        + (livenessStatus === 'passed' ? ' kyc-liveness--ok' : '')
                         + (livenessStatus === 'spoof-warning' ? ' kyc-liveness--warn' : '')
                     }>
-                        {livenessStatus === 'passed' && <ShieldCheck />}
                         {LIVENESS_COPY[livenessStatus]}
                     </p>
                 )}
                 <div className='kyc-camera-actions'>
                     <button type='button' className='kyc-btn-ghost' onClick={closeCamera}>Cancel</button>
                     {(livenessStatus === 'bypassed' || livenessStatus === 'timeout') && (
-                        <button type='button' className='kyc-btn-primary' disabled={!livenessPassed} onClick={captureSelfie}>Capture</button>
+                        <button type='button' className='kyc-btn-primary' disabled={!canCaptureSelfie} onClick={captureSelfie}>Capture</button>
                     )}
                 </div>
             </div>
@@ -95,6 +93,9 @@ export default function SelfieStep({
                         <span>Match confirmed</span>
                     </div>
                     <p className='kyc-preview-sub'>{matchScore}% match to your ID photo</p>
+                    {!livenessVerified && (
+                        <p className='kyc-preview-sub kyc-preview-sub--warn'>Liveness was not auto-confirmed and needs manual review.</p>
+                    )}
                     <button type='button' className='kyc-btn-outline' onClick={() => { resetSelfie(); openCamera('selfie') }}>Retake selfie</button>
                 </div>
             </div>
@@ -109,7 +110,11 @@ export default function SelfieStep({
                     <p className='kyc-preview-title'>
                         {faceModelsLoading ? 'Loading face model…' : comparing ? 'Comparing your photos…' : 'Selfie captured'}
                     </p>
-                    <p className='kyc-preview-sub'>Liveness confirmed — ready to compare against your ID photo.</p>
+                    <p className='kyc-preview-sub'>
+                        {livenessVerified
+                            ? 'Liveness confirmed — ready to compare against your ID photo.'
+                            : 'Selfie captured — liveness could not be auto-confirmed and will be reviewed.'}
+                    </p>
                     {matchScore !== null && !comparing && (
                         <p className='kyc-preview-sub kyc-preview-sub--warn'>{matchScore}% match — not a strong enough match, please try again</p>
                     )}

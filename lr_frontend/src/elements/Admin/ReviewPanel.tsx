@@ -42,13 +42,15 @@ export default function ReviewPanel({
                     </div>
 
                     <div className='admin-panel-scroll'>
-                        {/* comparison row: live selfie, score ring, submitted ID */}
+                        {/* comparison row: captured selfie, score ring, submitted ID */}
                         <div className='admin-compare'>
                             <button type='button' className='admin-compare-photo' onClick={openLightbox}>
                                 {detail.selfie_image_url
-                                    ? <img src={detail.selfie_image_url} alt='Live selfie' />
+                                    ? <img src={detail.selfie_image_url} alt='Submitted selfie' />
                                     : <div className='admin-compare-placeholder'><User aria-hidden='true' /></div>}
-                                <span className='admin-compare-tag is-live'>LIVE SELFIE</span>
+                                <span className={`admin-compare-tag${detail.liveness_passed ? ' is-live' : ''}`}>
+                                    {detail.liveness_passed ? 'LIVE SELFIE' : 'SELFIE — REVIEW'}
+                                </span>
                                 <span className='admin-compare-expand'><Maximize2 aria-hidden='true' /></span>
                                 <span className='admin-compare-caption'>Captured on device</span>
                             </button>
@@ -116,7 +118,7 @@ export default function ReviewPanel({
                                     <span className={`admin-signal-dot${detail.liveness_passed ? ' is-strong' : ' is-review'}`} />
                                 </div>
                                 <p className={`admin-signal-value${detail.liveness_passed ? ' is-strong' : ' is-review'}`}>
-                                    {detail.liveness_passed ? 'Passed' : 'Bypassed'}
+                                    {detail.liveness_passed ? 'Passed' : 'Needs review'}
                                 </p>
                             </div>
                         </div>

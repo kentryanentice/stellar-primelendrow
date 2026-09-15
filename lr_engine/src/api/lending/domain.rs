@@ -483,12 +483,42 @@ pub fn gross_up(applies: i64, fees: &RailFees) -> (i64, i64) {
     (total, total - applies)
 }
 
-/// The fee deducted from a payout of `amount`: the rate, rounded half-even,
-/// capped. Never the whole amount — at least a centavo is always sent.
+/// What the provider charges the sender for a payout that SENDS `sent`: the
+/// rate on the amount sent, rounded half-even, capped. PayPal takes this on top
+/// of the transfer, out of the business balance.
+pub fn payout_charge(sent: i64, fees: &RailFees) -> i64 {
+    let fee = round_half_even(sent.max(0) as i128 * fees.payout_bps as i128, 10_000);
+    if fees.payout_cap > 0 { fee.min(fees.payout_cap) } else { fee }
+}
+
+/// The fee deducted from a payout claim of `amount`, so that what is sent plus
+/// what the provider charges for sending it fits inside the claim: the largest
+/// `sent` with `sent + payout_charge(sent) <= amount`, and the fee is the rest.
+/// The pool therefore pays out exactly the member's claim.
+///
+/// Taking the rate from the claim instead undercounts, because PayPal charges
+/// its percentage on what it SENDS, on top: a ₱20,000 withdrawal that sent
+/// ₱19,950 cost the business ₱399 more, not ₱50. Never the whole amount — at
+/// least a centavo is always sent.
 pub fn payout_fee(amount: i64, fees: &RailFees) -> i64 {
-    let fee = round_half_even(amount.max(0) as i128 * fees.payout_bps as i128, 10_000);
-    let fee = if fees.payout_cap > 0 { fee.min(fees.payout_cap) } else { fee };
-    fee.clamp(0, (amount - 1).max(0))
+    let amount = amount.max(0);
+    if amount <= 1 {
+        return 0;
+    }
+    // Start near the answer — uncapped, sent = amount / (1 + rate); with a cap,
+    // sent is at least amount - cap — then settle the rounding exactly.
+    let mut sent = (amount as i128 * 10_000 / (10_000 + fees.payout_bps as i128)) as i64;
+    if fees.payout_cap > 0 {
+        sent = sent.max(amount - fees.payout_cap);
+    }
+    sent = sent.clamp(1, amount);
+    while sent > 1 && sent + payout_charge(sent, fees) > amount {
+        sent -= 1;
+    }
+    while sent < amount && sent + 1 + payout_charge(sent + 1, fees) <= amount {
+        sent += 1;
+    }
+    amount - sent
 }
 
 // ===========================================================================
@@ -1274,11 +1304,40 @@ mod tests {
         let f = paypal_ph();
         // ₱20,000 in: 3.40% = ₱680 + ₱15 = ₱695.
         assert_eq!(receive_fee_estimate(2_000_000, &f), 69_500);
-        // ₱5,000 out: 2% = ₱100, capped at ₱50. ₱200 out: 2% = ₱4.
+        // ₱5,000 out with the ₱50 cap: ₱4,950 sent, ₱50 charged on top.
         assert_eq!(payout_fee(500_000, &f), 5_000);
-        assert_eq!(payout_fee(20_000, &f), 400);
         // Never the whole payout.
         assert_eq!(payout_fee(1, &f), 0);
+    }
+
+    #[test]
+    fn a_payout_plus_its_charge_is_exactly_the_claim() {
+        // What the sandbox charged: 2% of what it sent, no cap.
+        let uncapped = RailFees { receive_bps: 340, receive_fixed: 1_500, payout_bps: 200, payout_cap: 0 };
+        // ₱20,000 claimed: ₱19,607.84 sent, ₱392.16 charged, ₱20,000.00 in all.
+        let fee = payout_fee(2_000_000, &uncapped);
+        assert_eq!(fee, 39_216);
+        assert_eq!(2_000_000 - fee + payout_charge(2_000_000 - fee, &uncapped), 2_000_000);
+        // The withdrawal that lost money: sending ₱19,950 costs ₱399 on top.
+        assert_eq!(payout_charge(1_995_000, &uncapped), 39_900);
+
+        let mut next = lcg(0x0A70);
+        for _ in 0..20_000 {
+            let amount = 2 + next(100_000_000) as i64;
+            let fees = RailFees {
+                receive_bps: 0,
+                receive_fixed: 0,
+                payout_bps: next(1_000) as i64,
+                payout_cap: if next(2) == 0 { 0 } else { next(20_000) as i64 },
+            };
+            let fee = payout_fee(amount, &fees);
+            let sent = amount - fee;
+            assert!(sent >= 1 && fee >= 0);
+            // Sent plus the provider's charge fits inside the claim...
+            assert!(sent + payout_charge(sent, &fees) <= amount, "overdrawn at {amount}");
+            // ...and nothing more could have been sent.
+            assert!(sent == amount || sent + 1 + payout_charge(sent + 1, &fees) > amount, "sent too little at {amount}");
+        }
     }
 
     #[test]
