@@ -6,7 +6,7 @@
 //! Money is whole centavos in i64; intermediate products use i128 so a cap
 //! times a percentage can never overflow on the way to a valid result.
 
-use super::policy::{Band, GuarantorTier, InterestSplit, PolicyParams};
+use super::policy::{Band, DepositLimitTier, GuarantorTier, InterestSplit, PolicyParams};
 
 pub const CENTAVOS_PER_XLM_UNIT: i64 = 10_000_000; // stroops in 1 XLM
 
@@ -414,6 +414,124 @@ pub fn pool_funded_amount(principal: i64, own_deposit_backing: i64) -> i64 {
     (principal - own_deposit_backing.max(0)).max(0)
 }
 
+// ===========================================================================
+// Exact repayments
+// ===========================================================================
+
+/// The one amount a repayment may be: everything still owed on the earliest
+/// installment that isn't fully paid — its outstanding interest plus its
+/// outstanding principal — with that installment's number. `None` when every
+/// installment is settled.
+///
+/// `rows` are `(installment, interest_due, interest_paid, principal_due,
+/// principal_paid)` in installment order. A member pays exactly this, never
+/// more (no overpayment turned into a deposit) and never less (no partial
+/// installment), which is what lets the engine set the amount on the payment
+/// page itself rather than accept one.
+pub fn next_installment_due(rows: &[(i16, i64, i64, i64, i64)]) -> Option<(i16, i64)> {
+    rows.iter().find_map(|(installment, interest_due, interest_paid, principal_due, principal_paid)| {
+        let owed = (interest_due - interest_paid).max(0) + (principal_due - principal_paid).max(0);
+        (owed > 0).then_some((*installment, owed))
+    })
+}
+
+// ===========================================================================
+// AML deposit limits
+// ===========================================================================
+
+/// A member's effective deposit limits, in centavos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DepositLimitsFor {
+    pub per_deposit: i64,
+    pub daily: i64,
+    pub monthly: i64,
+    pub max_balance: i64,
+}
+
+/// The deposit-limit table is internally consistent: at least one tier,
+/// contiguous and ascending by score up to the top of the 0–150 range, every
+/// limit positive, `per_deposit <= daily <= monthly` and `per_deposit <=
+/// max_balance` within a tier, no limit falling as score rises, and a
+/// below-floor percent in 1..=100. Checked when the rulebook loads.
+pub fn check_deposit_limits(params: &PolicyParams) -> Result<(), &'static str> {
+    let limits = &params.deposit_limits;
+    let (Some(first), Some(last)) = (limits.tiers.first(), limits.tiers.last()) else {
+        return Err("no deposit limit tiers");
+    };
+    if !(1..=100).contains(&limits.below_floor_pct) {
+        return Err("below_floor_pct must be 1..=100");
+    }
+    if first.min_score < 0 || last.max_score < 150 {
+        return Err("deposit tiers must reach score 150");
+    }
+    for t in &limits.tiers {
+        if t.min_score > t.max_score {
+            return Err("deposit tier min_score above max_score");
+        }
+        if t.per_deposit <= 0 || t.daily <= 0 || t.monthly <= 0 || t.max_balance <= 0 {
+            return Err("deposit limits must be positive");
+        }
+        if t.per_deposit > t.daily || t.daily > t.monthly || t.per_deposit > t.max_balance {
+            return Err("deposit limits must satisfy per_deposit <= daily <= monthly and per_deposit <= max_balance");
+        }
+    }
+    for w in limits.tiers.windows(2) {
+        if w[1].min_score != w[0].max_score + 1 {
+            return Err("deposit tiers must be contiguous and ascending");
+        }
+        let (a, b) = (&w[0], &w[1]);
+        if b.per_deposit < a.per_deposit || b.daily < a.daily || b.monthly < a.monthly || b.max_balance < a.max_balance {
+            return Err("deposit limits must not fall as score rises");
+        }
+    }
+    Ok(())
+}
+
+/// The limits for a score. Inside a tier: that tier. Below the lowest tier
+/// (a member whose score has dropped under 50): `below_floor_pct` of the
+/// lowest tier's limits, rounded down. Above the highest: the highest.
+pub fn deposit_limits_for(score: i16, params: &PolicyParams) -> DepositLimitsFor {
+    let limits = &params.deposit_limits;
+    let of = |t: &DepositLimitTier| DepositLimitsFor {
+        per_deposit: t.per_deposit,
+        daily: t.daily,
+        monthly: t.monthly,
+        max_balance: t.max_balance,
+    };
+    if let Some(t) = limits.tiers.iter().find(|t| score >= t.min_score && score <= t.max_score) {
+        return of(t);
+    }
+    match (limits.tiers.first(), limits.tiers.last()) {
+        (Some(first), _) if score < first.min_score => {
+            let scale = |v: i64| (v as i128 * limits.below_floor_pct as i128 / 100) as i64;
+            DepositLimitsFor {
+                per_deposit: scale(first.per_deposit),
+                daily: scale(first.daily),
+                monthly: scale(first.monthly),
+                max_balance: scale(first.max_balance),
+            }
+        }
+        (_, Some(last)) => of(last),
+        // `check_deposit_limits` refuses an empty table when the rulebook
+        // loads, so this is unreachable; zero means "nothing allowed".
+        _ => DepositLimitsFor { per_deposit: 0, daily: 0, monthly: 0, max_balance: 0 },
+    }
+}
+
+/// The largest deposit a member may start right now: the tightest of their
+/// per-deposit limit, what is left of the 24-hour and 30-day limits, and what
+/// is left under the balance cap. `used_*` and `balance` already include
+/// deposits the member has started and not yet finished, so two checkouts
+/// opened at once can't both fit under the same limit. Never negative.
+pub fn deposit_allowance(limits: DepositLimitsFor, used_24h: i64, used_30d: i64, balance: i64) -> i64 {
+    limits
+        .per_deposit
+        .min(limits.daily - used_24h)
+        .min(limits.monthly - used_30d)
+        .min(limits.max_balance - balance)
+        .max(0)
+}
+
 /// The guarantor tier a score falls in — the split's counterpart to `band_for`.
 pub fn guarantor_tier_for(score: i16, split: &InterestSplit) -> Option<&GuarantorTier> {
     split
@@ -585,6 +703,20 @@ mod tests {
             min_deposit: 10_000,
             min_loan: 50_000,
             interest_split: sow_split(),
+            deposit_limits: sow_deposit_limits(),
+        }
+    }
+
+    fn sow_deposit_limits() -> crate::api::lending::policy::DepositLimits {
+        let tier = |min_score, max_score, per_deposit, daily, monthly, max_balance| DepositLimitTier {
+            min_score, max_score, per_deposit, daily, monthly, max_balance,
+        };
+        crate::api::lending::policy::DepositLimits {
+            tiers: vec![
+                tier(0, 69, 2_000_000, 5_000_000, 10_000_000, 20_000_000),
+                tier(70, 150, 5_000_000, 10_000_000, 25_000_000, 50_000_000),
+            ],
+            below_floor_pct: 50,
         }
     }
 
@@ -1073,6 +1205,80 @@ mod tests {
             }
             assert_eq!(locked, 0, "funding left locked on a repaid loan");
         }
+    }
+
+    #[test]
+    fn a_repayment_is_exactly_the_next_unpaid_installment() {
+        // (installment, interest_due, interest_paid, principal_due, principal_paid)
+        let rows = [
+            (1, 2_000, 2_000, 33_333, 33_333), // paid
+            (2, 1_333, 500, 33_333, 0),        // interest part-paid
+            (3, 667, 0, 33_334, 0),
+        ];
+        assert_eq!(next_installment_due(&rows), Some((2, 833 + 33_333)));
+        // Everything paid: nothing is due, so nothing may be paid.
+        assert_eq!(next_installment_due(&[(1, 10, 10, 90, 90)]), None);
+        assert_eq!(next_installment_due(&[]), None);
+    }
+
+    fn limits_params(tiers: Vec<DepositLimitTier>, below_floor_pct: i64) -> PolicyParams {
+        let mut p = params();
+        p.deposit_limits = crate::api::lending::policy::DepositLimits { tiers, below_floor_pct };
+        p
+    }
+
+    fn dtier(min_score: i16, max_score: i16, per_deposit: i64, daily: i64, monthly: i64, max_balance: i64) -> DepositLimitTier {
+        DepositLimitTier { min_score, max_score, per_deposit, daily, monthly, max_balance }
+    }
+
+    #[test]
+    fn below_fifty_gets_half_of_the_lowest_tier() {
+        let p = limits_params(
+            vec![dtier(50, 69, 2_000_001, 5_000_000, 10_000_000, 20_000_000), dtier(70, 150, 5_000_000, 10_000_000, 25_000_000, 50_000_000)],
+            50,
+        );
+        assert_eq!(check_deposit_limits(&p), Ok(()));
+        let entry = deposit_limits_for(50, &p);
+        assert_eq!(entry, DepositLimitsFor { per_deposit: 2_000_001, daily: 5_000_000, monthly: 10_000_000, max_balance: 20_000_000 });
+        // Score 49 and score 0 alike: half, rounded down (never above half).
+        for score in [49, 30, 0] {
+            assert_eq!(
+                deposit_limits_for(score, &p),
+                DepositLimitsFor { per_deposit: 1_000_000, daily: 2_500_000, monthly: 5_000_000, max_balance: 10_000_000 }
+            );
+        }
+        assert_eq!(deposit_limits_for(150, &p).per_deposit, 5_000_000);
+    }
+
+    #[test]
+    fn a_malformed_deposit_table_is_refused() {
+        let ok = || vec![dtier(50, 69, 100, 200, 300, 400), dtier(70, 150, 100, 200, 300, 400)];
+        assert_eq!(check_deposit_limits(&limits_params(ok(), 50)), Ok(()));
+        let broken = |f: fn(&mut Vec<DepositLimitTier>)| {
+            let mut t = ok();
+            f(&mut t);
+            check_deposit_limits(&limits_params(t, 50))
+        };
+        assert!(broken(|t| t.clear()).is_err());
+        assert!(broken(|t| t[1].min_score = 71).is_err()); // gap
+        assert!(broken(|t| t[1].max_score = 149).is_err()); // stops short of 150
+        assert!(broken(|t| t[0].per_deposit = 250).is_err()); // per_deposit > daily
+        assert!(broken(|t| t[0].daily = 350).is_err()); // daily > monthly
+        assert!(broken(|t| t[1].monthly = 250).is_err()); // falls as score rises
+        assert!(broken(|t| t[0].max_balance = 0).is_err());
+        assert!(check_deposit_limits(&limits_params(ok(), 0)).is_err());
+        assert!(check_deposit_limits(&limits_params(ok(), 101)).is_err());
+    }
+
+    #[test]
+    fn the_allowance_is_the_tightest_remaining_limit() {
+        let l = DepositLimitsFor { per_deposit: 2_000_000, daily: 5_000_000, monthly: 10_000_000, max_balance: 20_000_000 };
+        assert_eq!(deposit_allowance(l, 0, 0, 0), 2_000_000); // per deposit binds
+        assert_eq!(deposit_allowance(l, 4_000_000, 4_000_000, 0), 1_000_000); // 24h binds
+        assert_eq!(deposit_allowance(l, 0, 9_500_000, 0), 500_000); // 30 days binds
+        assert_eq!(deposit_allowance(l, 0, 0, 19_900_000), 100_000); // balance binds
+        assert_eq!(deposit_allowance(l, 6_000_000, 0, 0), 0); // already over: nothing, never negative
+        assert_eq!(deposit_allowance(l, 0, 0, 25_000_000), 0); // interest carried them past the cap
     }
 
     #[test]

@@ -82,7 +82,7 @@ function LendingSkeleton() {
                     </div>
                     <div className='lending-tier-summary-divider' />
                     <div className='lending-tier-summary-stats'>
-                        {[54, 46, 60].map((w, i) => (
+                        {[54, 46, 60, 70].map((w, i) => (
                             <div key={i}>
                                 <span className='lending-stat-label'><SkeletonBone width={w} height={11} /></span>
                                 <span className='lending-stat-value'><SkeletonBone width={w + 10} height={15} /></span>

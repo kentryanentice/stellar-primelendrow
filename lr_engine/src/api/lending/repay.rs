@@ -17,13 +17,14 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::domain;
+use super::intents::{self, Claim};
 use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
 use super::policy;
 use super::rails::{self, Captured, PaymentRef};
 // Settling a reopened default is an admin-initiated flow, but the payment
 // itself arrives here on the borrower's own rail — so this is the one place
-// the borrower side reaches into `admin`, and only for the split.
+// the borrower side reaches into `admin`, and only for the split and arrears.
 use super::admin::reconcile;
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
@@ -68,6 +69,7 @@ struct MemberCredit {
 
 struct ScheduleRow {
     id: i64,
+    installment: i16,
     interest_due: i64,
     interest_paid: i64,
     principal_due: i64,
@@ -83,19 +85,27 @@ pub async fn repay(
 
     let rules = policy::active(&pool).await?;
 
-    // Can this loan take a payment at all? Asked BEFORE the provider is
-    // charged, because everything below this line happens after the money has
-    // already moved — refusing then would mean rejecting a capture that has
-    // already hit the borrower's card. In particular this is what stops a
-    // settled-but-unconfirmed loan from accepting payment after payment that
-    // `settle` can only hand straight back.
-    // The answer is discarded: the authoritative status read happens below,
-    // under the loan's row lock. What matters is that this ran and did not
-    // refuse, while refusing was still free.
-    reconcile::check_payable(&pool, p.loan_id, user_id).await?;
+    // The payment must be a repayment the engine started, for this member and
+    // THIS loan, for exactly what was due when it started (041). Claimed before
+    // capture: a PayPal order that doesn't qualify is refused without being
+    // charged, and no newer payment can replace it mid-capture.
+    let claimed = match intents::claim(&pool, user_id, &p.payment, "repay").await? {
+        Claim::Proceed(claimed) => claimed,
+        Claim::Stale(claimed) => return Err(intents::refund_stale(&pool, user_id, &p.payment, &claimed).await),
+    };
+    if claimed.loan_id != Some(p.loan_id) {
+        intents::release_claim(&pool, claimed.id).await;
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, "That payment was started for a different loan"));
+    }
 
     // Verify before the transaction: no locks held across a payment provider.
-    let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
+    let Captured { rail, payment: captured } = match rails::capture(&p.payment, user_id).await {
+        Ok(captured) => captured,
+        Err(e) => {
+            intents::release_claim(&pool, claimed.id).await;
+            return Err(e);
+        }
+    };
     let received = captured.centavos;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin repay"))?;
@@ -122,11 +132,9 @@ pub async fn repay(
     if status != "active" && !settling {
         return Err((StatusCode::CONFLICT, "This loan is not active"));
     }
-    // No arrears re-check here, deliberately. The pre-capture guard above
-    // already refused a settled loan while that was free; if a concurrent
-    // payment cleared the arrears in between, this money is already captured,
-    // and `settle` returns it as a deposit lot. Refuse early, never refuse
-    // late — a rejection at this point would charge the borrower for nothing.
+    // The arrears (or next installment) are re-checked below, once the rows
+    // this payment touches are locked: a payment that no longer matches is
+    // refunded, never applied as more or less than what's due.
 
     // A settlement does not touch the schedule at all — see the block comment
     // on the allocation below for why — so its rows are neither read nor
@@ -134,8 +142,8 @@ pub async fn repay(
     // no-op without needing a branch of its own.
     let mut schedule: Vec<ScheduleRow> = Vec::new();
     if !settling {
-        let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
-            "SELECT id, interest_due, interest_paid, principal_due, principal_paid
+        let rows: Vec<(i64, i16, i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT id, installment, interest_due, interest_paid, principal_due, principal_paid
                FROM public.loan_schedule
               WHERE loan_id = $1
               ORDER BY installment
@@ -147,10 +155,28 @@ pub async fn repay(
         .map_err(|e| db_err(e, "lock schedule"))?;
         schedule = rows
             .into_iter()
-            .map(|(id, interest_due, interest_paid, principal_due, principal_paid)| ScheduleRow {
-                id, interest_due, interest_paid, principal_due, principal_paid,
+            .map(|(id, installment, interest_due, interest_paid, principal_due, principal_paid)| ScheduleRow {
+                id, installment, interest_due, interest_paid, principal_due, principal_paid,
             })
             .collect();
+    }
+
+    // Exact, re-checked under the locks: what arrived must be what the intent
+    // asked for, and that must still be exactly what's due now. A mismatch here
+    // is money already taken, so it is given back in full rather than applied
+    // as more or less than the installment (041).
+    let due_now = if settling {
+        Some(reconcile::arrears(&mut tx, p.loan_id).await?)
+    } else {
+        let rows: Vec<(i16, i64, i64, i64, i64)> = schedule
+            .iter()
+            .map(|r| (r.installment, r.interest_due, r.interest_paid, r.principal_due, r.principal_paid))
+            .collect();
+        domain::next_installment_due(&rows).map(|(_, owed)| owed)
+    };
+    if received != claimed.amount || due_now != Some(claimed.amount) {
+        drop(tx);
+        return Err(intents::refund(&pool, &claimed, &captured.capture_id, "repayment no longer matched the amount due").await);
     }
 
     // Allocation, oldest installment first — for an ordinary repayment.
@@ -171,8 +197,9 @@ pub async fn repay(
     // current one, then future ones — instead of vacuuming every month's
     // interest across the whole loan first (which pre-paid interest that wasn't
     // due and left each "paid" installment still owing principal). Interest is
-    // still paid before principal within an installment (Lesson 8). Anything
-    // past the final installment is excess and becomes a deposit lot.
+    // still paid before principal within an installment (Lesson 8). Since 041
+    // the payment is exactly the next installment, so nothing is left over:
+    // `excess` stays 0, and the database refuses a payment row where it isn't.
     let mut remaining = received;
     let mut interest_total: i64 = 0;
     let mut principal_total: i64 = 0;
@@ -323,6 +350,10 @@ pub async fn repay(
         }
         None
     };
+
+    // Before the ledger event: the 041 trigger refuses a repayment event that
+    // doesn't match a claimed intent carrying this capture reference.
+    intents::consume(&mut tx, claimed.id, &captured.capture_id).await?;
 
     let event_id = commit_event(
         &mut tx,

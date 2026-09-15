@@ -58,6 +58,33 @@ pub struct InterestSplit {
     pub guarantor_tiers: Vec<GuarantorTier>,
 }
 
+/// One row of the AML deposit-limit table (042), in whole centavos. Its own
+/// score cutoffs, like `GuarantorTier`, so compliance can recalibrate deposit
+/// limits without moving borrowing caps or guarantor pay.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct DepositLimitTier {
+    pub min_score: i16,
+    pub max_score: i16,
+    /// The largest single deposit.
+    pub per_deposit: i64,
+    /// Gross deposits in any rolling 24 hours.
+    pub daily: i64,
+    /// Gross deposits in any rolling 30 days.
+    pub monthly: i64,
+    /// The most a member's whole deposit balance may reach through deposits.
+    /// Interest credited to them is exempt and may carry them past it.
+    pub max_balance: i64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct DepositLimits {
+    /// Contiguous, ascending by score.
+    pub tiers: Vec<DepositLimitTier>,
+    /// A member scored below the lowest tier gets this percent of that tier's
+    /// limits, rounded down (50 = half).
+    pub below_floor_pct: i64,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct PolicyParams {
     pub bands: Vec<Band>,
@@ -76,6 +103,7 @@ pub struct PolicyParams {
     pub min_deposit: i64,
     pub min_loan: i64,
     pub interest_split: InterestSplit,
+    pub deposit_limits: DepositLimits,
 }
 
 pub struct Policy {
@@ -107,6 +135,13 @@ pub async fn active<'e, X: PgExecutor<'e>>(executor: X) -> Result<Policy, E> {
     // 100 would silently invent or lose centavos on every repayment.
     super::domain::check_interest_split(&params).map_err(|why| {
         tracing::error!("policy {id} interest_split invalid: {why}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
+    })?;
+    // Same for the AML table: a tier whose daily limit is below its per-deposit
+    // limit, or a gap in the score cutoffs, would enforce something nobody
+    // decided.
+    super::domain::check_deposit_limits(&params).map_err(|why| {
+        tracing::error!("policy {id} deposit_limits invalid: {why}");
         (StatusCode::INTERNAL_SERVER_ERROR, "Unable to load lending rules")
     })?;
     Ok(Policy { id, params })

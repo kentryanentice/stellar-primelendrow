@@ -41,6 +41,7 @@ const FALLBACK_POLICY: PolicyParams = {
         guarantor_cap: 0,
         guarantor_tiers: [],
     },
+    deposit_limits: { tiers: [], below_floor_pct: 50 },
 }
 
 /**

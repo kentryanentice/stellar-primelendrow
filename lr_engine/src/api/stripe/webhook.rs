@@ -153,28 +153,58 @@ async fn dispatch(pool: &PgPool, event: &Event) -> Result<(), sqlx::Error> {
                 return Ok(());
             };
             let purpose = event.data.object.metadata.purpose.as_deref().unwrap_or("");
-            // A repayment has to be applied against a schedule, not dropped
-            // into the pool. Until that path is wired here, saying so is the
-            // only safe thing: crediting it as a deposit would put a
-            // borrower's payment in their savings and leave the loan open.
-            if purpose != "deposit" {
-                tracing::info!(session_id, purpose, "stripe session not a deposit — left to the redirect");
-                return Ok(());
-            }
             let Ok(user_id) = user.parse::<uuid::Uuid>() else {
                 tracing::warn!(session_id, user, "stripe session carries an unreadable member id");
                 return Ok(());
             };
+            let payment = crate::api::lending::rails_ref_for_session(session_id);
+
+            // A repayment has to be applied against a schedule, and that stays
+            // with the redirect. The one thing this event must still catch is
+            // a repayment page paid after a newer payment replaced it: nobody
+            // is coming back to claim that money, so it is refunded here.
+            if purpose != "deposit" {
+                if matches!(crate::api::lending::intents::is_stale(pool, session_id).await, Ok(true)) {
+                    if let Ok(crate::api::lending::intents::Claim::Stale(claimed)) =
+                        crate::api::lending::intents::claim(pool, user_id, &payment, purpose).await
+                    {
+                        let (_, message) =
+                            crate::api::lending::intents::refund_stale(pool, user_id, &payment, &claimed).await;
+                        tracing::warn!(session_id, purpose, message, "stale stripe payment handled from webhook");
+                    }
+                } else {
+                    tracing::info!(session_id, purpose, "stripe session not a deposit — left to the redirect");
+                }
+                return Ok(());
+            }
+
+            // Same path the redirect takes (041): claim the intent, read the
+            // session, credit only an exact match. Whichever of the two gets
+            // there first consumes the intent; the other is told it was
+            // already processed.
+            let claimed = match crate::api::lending::intents::claim(pool, user_id, &payment, "deposit").await {
+                Ok(crate::api::lending::intents::Claim::Proceed(claimed)) => claimed,
+                Ok(crate::api::lending::intents::Claim::Stale(claimed)) => {
+                    let (_, message) =
+                        crate::api::lending::intents::refund_stale(pool, user_id, &payment, &claimed).await;
+                    tracing::warn!(session_id, message, "stale stripe deposit handled from webhook");
+                    return Ok(());
+                }
+                Err((status, message)) => {
+                    tracing::info!(session_id, %status, message, "webhook deposit not claimed");
+                    return Ok(());
+                }
+            };
 
             match crate::infra::stripe::capture_session(session_id, user).await {
                 Ok(captured) => {
-                    match crate::api::lending::credit_deposit(pool, user_id, "stripe", captured).await {
+                    let captured = crate::api::lending::Captured { rail: "stripe", payment: captured };
+                    match crate::api::lending::credit_deposit(pool, user_id, &claimed, captured).await {
                         Ok(done) => {
                             tracing::info!(%user_id, session_id, amount = done.amount, "deposit credited from webhook");
                         }
                         // The redirect got there first. That is the system
-                        // working, not a failure — the rail_ref wall is
-                        // exactly what makes two prompts safe.
+                        // working, not a failure.
                         Err((status, message)) if status == StatusCode::CONFLICT => {
                             tracing::info!(session_id, message, "deposit already credited");
                         }
@@ -184,6 +214,7 @@ async fn dispatch(pool: &PgPool, event: &Event) -> Result<(), sqlx::Error> {
                     }
                 }
                 Err(message) => {
+                    crate::api::lending::intents::release_claim(pool, claimed.id).await;
                     tracing::error!(session_id, message, "webhook could not verify the session");
                 }
             }

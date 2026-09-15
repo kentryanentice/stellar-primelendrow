@@ -205,7 +205,9 @@
 
 .dash-limits {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* 2 × 2: loan and deposit on top, the two rates beneath — four figures
+       don't fit side by side in the narrow rail. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
 
     > div {

@@ -60,6 +60,12 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const depositCentavos = parsePesoInput(depositInput)
     const withdrawCentavos = parsePesoInput(withdrawInput)
     const depositTooSmall = depositCentavos !== null && depositCentavos < params.policy.min_deposit
+    // The engine's number (042): the tightest of the per-deposit, 24-hour,
+    // 30-day and balance limits for this member's score tier. It refuses
+    // anything larger when the payment is started; this only says so first.
+    const limits = me.deposit_limits ?? null
+    const depositTooBig = limits !== null && depositCentavos !== null && depositCentavos > limits.allowance
+    const depositBlocked = depositTooSmall || depositTooBig
     const withdrawTooBig = withdrawCentavos !== null && withdrawCentavos > me.available
 
     const locked = me.lent + me.collateral + me.pledged
@@ -121,11 +127,24 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     </div>
                     {depositTooSmall ? (
                         <p className='lending-field-error'>Minimum deposit is {pesos(params.policy.min_deposit)}.</p>
+                    ) : depositTooBig && limits ? (
+                        <p className='lending-field-error'>
+                            {limits.allowance > 0
+                                ? `You can deposit up to ${pesos(limits.allowance)} right now.`
+                                : 'You’ve reached your deposit limit for now.'}
+                        </p>
                     ) : (
                         <p className='lending-muted'>Minimum {pesos(params.policy.min_deposit)} · funds are lent out as borrowers request</p>
                     )}
+                    {limits && (
+                        <p className='lending-muted lending-deposit-limits'>
+                            Up to <b>{pesos(limits.allowance)}</b> now · {pesosCompact(Math.max(0, limits.limits.daily - limits.used_24h))} left today
+                            {' '}· {pesosCompact(Math.max(0, limits.limits.monthly - limits.used_30d))} left this month
+                            {' '}· balance cap {pesosCompact(limits.limits.max_balance)}
+                        </p>
+                    )}
                     <PayPalButton
-                        amountCentavos={depositTooSmall ? null : depositCentavos}
+                        amountCentavos={depositBlocked ? null : depositCentavos}
                         purpose='deposit'
                         onApproved={orderId => {
                             setDepositInput('')
@@ -139,9 +158,9 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                         clearing it would leave a blank form behind if they
                         cancel and come back. */}
                     <StripeButton
-                        amountCentavos={depositTooSmall ? null : depositCentavos}
+                        amountCentavos={depositBlocked ? null : depositCentavos}
                         purpose='deposit'
-                        label={depositCentavos && !depositTooSmall
+                        label={depositCentavos && !depositBlocked
                             ? `Pay ${pesos(depositCentavos)} by card`
                             : 'Pay by card'}
                     />

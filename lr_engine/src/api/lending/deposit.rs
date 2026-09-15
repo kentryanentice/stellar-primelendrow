@@ -4,8 +4,10 @@
 //! order id, or a Stripe Checkout Session id. The engine verifies it
 //! server-side (`rails::capture`, provider secrets never leave the backend)
 //! and credits exactly what the provider says was collected — the client's
-//! screen never decides a centavo. A re-sent reference bounces off the
-//! ledger's unique rail_ref (idempotent money-in, Lesson 9).
+//! screen never decides a centavo. The reference must belong to a deposit the
+//! engine started for this member, within their AML limits, for exactly the
+//! amount collected (041). A re-sent reference is refused as already
+//! processed, and the ledger's unique rail_ref backs that up (Lesson 9).
 
 use axum::{Extension, Json, http::HeaderMap};
 use serde::{Deserialize, Serialize};
@@ -13,7 +15,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::ledger::{EventDraft, LedgerError, Posting, commit_event};
-use super::policy;
+use super::intents::{self, Claim, Claimed};
 use super::rails::{self, Captured, PaymentRef};
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
@@ -41,38 +43,50 @@ pub async fn deposit(
 ) -> Result<Json<DepositResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
 
+    // The payment must be a deposit the engine started for this member (041).
+    // Claimed before capture, so a PayPal order that doesn't qualify is refused
+    // without being charged.
+    let claimed = match intents::claim(&pool, user_id, &p.payment, "deposit").await? {
+        Claim::Proceed(claimed) => claimed,
+        Claim::Stale(claimed) => return Err(intents::refund_stale(&pool, user_id, &p.payment, &claimed).await),
+    };
+
     // Network call happens BEFORE the transaction — no DB locks are ever
     // held across a round-trip to a payment provider.
-    let Captured { rail, payment: captured } = rails::capture(&p.payment, user_id).await?;
+    let captured = match rails::capture(&p.payment, user_id).await {
+        Ok(captured) => captured,
+        Err(e) => {
+            intents::release_claim(&pool, claimed.id).await;
+            return Err(e);
+        }
+    };
 
-    credit(&pool, user_id, rail, captured).await.map(Json)
+    credit(&pool, user_id, &claimed, captured).await.map(Json)
 }
 
-/// Turns a verified payment into a deposit lot and the postings behind it.
+/// Turns a verified, claimed payment into a deposit lot and the postings
+/// behind it.
 ///
 /// Split out from the handler because the Stripe webhook credits through here
 /// too: a member who pays and never comes back through the redirect would
 /// otherwise have money at the provider and nothing in the pool. Both callers
-/// arrive with a payment the provider itself confirmed, and both rely on the
-/// same wall — the ledger's unique `rail_ref` — so whichever gets here first
-/// wins and the second bounces off the schema.
+/// claim the intent first and both mark it consumed inside this transaction,
+/// so whichever gets here first wins and the second is refused.
 pub(crate) async fn credit(
     pool: &PgPool,
     user_id: Uuid,
-    rail: &'static str,
-    captured: rails::CapturedPayment,
+    claimed: &Claimed,
+    captured: Captured,
 ) -> Result<DepositResponse, E> {
-    let rules = policy::active(pool).await?;
+    let Captured { rail, payment: captured } = captured;
 
-    if captured.centavos < rules.params.min_deposit {
-        // The money was really captured; refusing the lot would strand it.
-        // This is a display-side floor — enforce it in the UI before order
-        // creation, accept anything actually captured here, but log it.
-        tracing::warn!(%user_id, centavos = captured.centavos, "deposit below policy minimum accepted");
+    // The provider charged what the engine asked for, or the payment is given
+    // back — never credited at a different amount than the limits allowed.
+    if captured.centavos != claimed.amount {
+        return Err(intents::refund(pool, claimed, &captured.capture_id, "deposit amount did not match its intent").await);
     }
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin deposit"))?;
-
 
     let lot_id: Uuid = sqlx::query_scalar(
         "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
@@ -83,6 +97,10 @@ pub(crate) async fn credit(
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| db_err(e, "insert lot"))?;
+
+    // Before the ledger event: the 041 trigger refuses a deposit event that
+    // doesn't match a claimed intent carrying this capture reference.
+    intents::consume(&mut tx, claimed.id, &captured.capture_id).await?;
 
     let amount = captured.centavos;
     match commit_event(

@@ -20,6 +20,7 @@ mod deposit;
 mod deposits_list;
 mod domain;
 mod guarantors;
+pub(crate) mod intents;
 pub(crate) mod ledger;
 mod loans;
 mod lots;
@@ -47,10 +48,6 @@ pub use admin::loans::list as admin_loans;
 // Settling a defaulted loan (033): reopening it for payment and accepting it as
 // settled are two separate admin decisions, so they are two separate handlers.
 pub use admin::reconcile::{mark_paid as loan_mark_paid, reopen as loan_reopen};
-// "May this loan take a payment right now?" — asked by every entry point
-// BEFORE the provider is charged, so a refusal costs the borrower nothing.
-// Exported because the Stripe checkout starts a payment from outside `lending`.
-pub(crate) use admin::reconcile::check_payable as check_loan_payable;
 pub use apply::apply;
 pub use cancel::cancel as loan_cancel;
 pub use collateral::confirm as collateral_confirm;
@@ -59,6 +56,12 @@ pub use deposit::deposit;
 // The Stripe webhook credits through the same routine the redirect does, so a
 // member who never comes back to the app is still credited.
 pub(crate) use deposit::credit as credit_deposit;
+pub(crate) use rails::Captured;
+
+/// A Stripe session id as the payment reference the lending handlers take.
+pub(crate) fn rails_ref_for_session(session_id: &str) -> rails::PaymentRef {
+    rails::PaymentRef { order_id: None, session_id: Some(session_id.to_string()) }
+}
 pub use deposits_list::list as deposits_list;
 pub use guarantors::{invites as guarantor_invites, respond as guarantor_respond};
 pub use loans::{history as loans_history, list as loans_list};

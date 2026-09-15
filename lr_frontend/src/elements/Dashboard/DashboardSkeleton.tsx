@@ -98,7 +98,7 @@ function DashboardSkeleton() {
                     <section className='lending-card'>
                         <SkeletonBone width={110} height={11} />
                         <div className='dash-limits'>
-                            {[0, 1, 2].map(i => (
+                            {[0, 1, 2, 3].map(i => (
                                 <div key={i}>
                                     <SkeletonBone width={60} height={11} />
                                     <SkeletonBone width={64} height={16} />
