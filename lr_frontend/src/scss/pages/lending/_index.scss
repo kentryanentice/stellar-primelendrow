@@ -986,6 +986,15 @@ select.lending-input option {
     color: #eef1f6;
 }
 
+/* the fee line under a deposit/withdrawal amount in the transaction record */
+.lending-tx-fee {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #8492ac;
+}
+
 /* ---- transaction record (TransactionsCard) ---- */
 
 /* The movement cell stacks its label over the provider's reference: the label
@@ -1670,6 +1679,7 @@ select.lending-input option {
     white-space: nowrap;
 
     .is-interest { color: #f5b942; }
+    .is-fee { color: #8492ac; }
 }
 
 /* routes to the Pay page — the actual repay flow lives there now, not inline */

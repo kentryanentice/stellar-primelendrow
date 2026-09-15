@@ -24,7 +24,7 @@ export type PayPalButtonsInstance = {
 
 export type PayPalNamespace = {
     Buttons: (config: {
-        style?: { layout?: string; color?: string; shape?: string; height?: number; label?: string }
+        style?: { layout?: string; color?: string; shape?: string; height?: number; label?: string; tagline?: boolean }
         createOrder: (data: unknown, actions: PayPalOrderActions) => Promise<string>
         onApprove: (data: { orderID: string }) => Promise<void>
         onError?: (err: unknown) => void

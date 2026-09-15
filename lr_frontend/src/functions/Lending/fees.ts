@@ -1,4 +1,25 @@
-import type { RailFees } from './types'
+import { pesos } from './money'
+import type { Payment, RailFees, Transaction } from './types'
+
+/** The fee line for a deposit or withdrawal, from the engine's own recorded
+ *  numbers (043): what was paid and credited, or withdrawn and received. Null
+ *  when the movement carried no fee (anything before fees were passed on). */
+export function transactionFeeNote(tx: Transaction): string | null {
+    if (!tx.fee || tx.fee <= 0) return null
+    if (tx.kind === 'deposit' && tx.paid !== null) {
+        return `${pesos(tx.paid)} paid · ${pesos(tx.fee)} fee`
+    }
+    if (tx.kind === 'withdrawal' && tx.received !== null) {
+        return `${pesos(tx.received)} received · ${pesos(tx.fee)} fee`
+    }
+    return null
+}
+
+/** The fee line for a repayment: what the borrower paid on top of the
+ *  installment for the payment provider. Null when there was none. */
+export function paymentFeeNote(payment: Payment): string | null {
+    return payment.fee_paid > 0 ? `${pesos(payment.fee_paid)} fee` : null
+}
 
 /**
  * Payment-provider fee ESTIMATES for display, from the engine's own policy

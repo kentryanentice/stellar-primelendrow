@@ -1,6 +1,7 @@
 import { Receipt, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import type usePayments from '../../functions/Lending/usePayments'
 import { formatDate, pesos } from '../../functions/Lending/money'
+import { paymentFeeNote } from '../../functions/Lending/fees'
 import { PaymentRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 /**
@@ -43,6 +44,12 @@ function PaymentHistoryCard({ payments }: { payments: ReturnType<typeof usePayme
                                 <span className='lending-payment-row-split'>
                                     <span>{pesos(pmt.principal_paid)} principal</span>
                                     <span className='is-interest'>{pesos(pmt.interest_paid)} interest</span>
+                                    {/* Paid on top of the installment for the
+                                        payment provider (engine 043) — not
+                                        part of what reached the loan. */}
+                                    {paymentFeeNote(pmt) && (
+                                        <span className='is-fee'>+ {paymentFeeNote(pmt)}</span>
+                                    )}
                                 </span>
                             </li>
                         ))}

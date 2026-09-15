@@ -18,8 +18,8 @@ use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 
 /// One repayment in SELECT order: id, loan_id, product, amount_received,
-/// interest_paid, principal_paid, excess, paid_at.
-type PaymentRow = (i64, Uuid, String, i64, i64, i64, i64, i64);
+/// interest_paid, principal_paid, excess, paid_at, fee_paid.
+type PaymentRow = (i64, Uuid, String, i64, i64, i64, i64, i64, i64);
 
 fn default_page() -> i64 {
     1
@@ -43,6 +43,9 @@ pub struct PaymentView {
     pub principal_paid: i64,
     pub excess: i64,
     pub paid_at: i64,
+    /// The payment-provider fee the borrower paid on top of `amount_received`
+    /// (043). 0 on repayments made before fees were passed on.
+    pub fee_paid: i64,
 }
 
 #[derive(Serialize)]
@@ -50,6 +53,8 @@ pub struct PaymentTotals {
     pub amount_received: i64,
     pub interest_paid: i64,
     pub principal_paid: i64,
+    /// All provider fees paid on top of the repayments.
+    pub fee_paid: i64,
 }
 
 #[derive(Serialize)]
@@ -80,10 +85,11 @@ pub async fn list(
 
     // All-time totals — a separate aggregate query rather than summing the
     // page in hand, since the page is only ever a slice of the full history.
-    let (amount_received, interest_paid, principal_paid): (i64, i64, i64) = sqlx::query_as(
+    let (amount_received, interest_paid, principal_paid, fee_paid): (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT COALESCE(SUM(amount_received), 0)::BIGINT,
                 COALESCE(SUM(interest_paid), 0)::BIGINT,
-                COALESCE(SUM(principal_paid), 0)::BIGINT
+                COALESCE(SUM(principal_paid), 0)::BIGINT,
+                COALESCE(SUM(fee_paid), 0)::BIGINT
            FROM public.loan_payments
           WHERE user_id = $1",
     )
@@ -94,7 +100,7 @@ pub async fn list(
 
     let rows: Vec<PaymentRow> = sqlx::query_as(
         "SELECT p.id, p.loan_id, l.product,
-                p.amount_received, p.interest_paid, p.principal_paid, p.excess, p.paid_at
+                p.amount_received, p.interest_paid, p.principal_paid, p.excess, p.paid_at, p.fee_paid
            FROM public.loan_payments p
            JOIN public.loans l ON l.id = p.loan_id
           WHERE p.user_id = $1
@@ -110,8 +116,8 @@ pub async fn list(
 
     let items = rows
         .into_iter()
-        .map(|(id, loan_id, product, amount_received, interest_paid, principal_paid, excess, paid_at)| PaymentView {
-            id, loan_id, product, amount_received, interest_paid, principal_paid, excess, paid_at,
+        .map(|(id, loan_id, product, amount_received, interest_paid, principal_paid, excess, paid_at, fee_paid)| PaymentView {
+            id, loan_id, product, amount_received, interest_paid, principal_paid, excess, paid_at, fee_paid,
         })
         .collect();
 
@@ -123,6 +129,6 @@ pub async fn list(
         page,
         page_size: PAGE_SIZE,
         total_pages,
-        totals: PaymentTotals { amount_received, interest_paid, principal_paid },
+        totals: PaymentTotals { amount_received, interest_paid, principal_paid, fee_paid },
     }))
 }

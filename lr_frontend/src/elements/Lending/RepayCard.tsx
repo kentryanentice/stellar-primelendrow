@@ -202,8 +202,12 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                             {withFee && (
                                 <p className='lending-muted lending-fee-note'>
                                     {pesos(payNow)} goes to your loan. With PayPal you pay{' '}
-                                    <b>{pesos(withFee.paypal.total)}</b> ({pesos(withFee.paypal.fee)} PayPal fee); by card{' '}
-                                    <b>{pesos(withFee.card.total)}</b> ({pesos(withFee.card.fee)} fee).
+                                    <b>{pesos(withFee.paypal.total)}</b> ({pesos(withFee.paypal.fee)} PayPal fee)
+                                    {data.params.stripe_ready ? (
+                                        <>
+                                            ; by card <b>{pesos(withFee.card.total)}</b> ({pesos(withFee.card.fee)} fee).
+                                        </>
+                                    ) : '.'}
                                 </p>
                             )}
                             {data.params.paypal_ready && (
@@ -229,14 +233,16 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                             {/* The card rail. Same money, same books — a
                                 second way to pay for borrowers without PayPal,
                                 and the one the deposit form has offered since
-                                the Stripe rail landed. This card was the last
-                                place still PayPal-only. */}
-                            <StripeButton
-                                amountCentavos={payNow}
-                                purpose='repay'
-                                loanId={activeLoan.id}
-                                label={`Pay ${pesos(withFee?.card.total ?? payNow)} by card`}
-                            />
+                                the Stripe rail landed. Only offered when the
+                                engine has Stripe switched on. */}
+                            {data.params.stripe_ready && (
+                                <StripeButton
+                                    amountCentavos={payNow}
+                                    purpose='repay'
+                                    loanId={activeLoan.id}
+                                    label={`Pay ${pesos(withFee?.card.total ?? payNow)} by card`}
+                                />
+                            )}
                         </div>
                     ) : repayingId === activeLoan.id ? null : settling ? (
                         <p className='lending-muted'>

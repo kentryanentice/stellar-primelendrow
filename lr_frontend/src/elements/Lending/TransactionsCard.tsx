@@ -3,6 +3,7 @@ import type useTransactions from '../../functions/Lending/useTransactions'
 import { formatDate, pesos, xlm } from '../../functions/Lending/money'
 import { shortId, txLink } from '../../functions/Lending/explorer'
 import { TRANSACTION_KIND_LABEL, TRANSACTION_STATUS_META, type Transaction } from '../../functions/Lending/types'
+import { transactionFeeNote } from '../../functions/Lending/fees'
 import { TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 /** On-chain references are checkable on a block explorer; a PayPal capture or
@@ -24,6 +25,12 @@ function Reference({ tx }: { tx: Transaction }) {
         )
     }
     return <span className='lending-tx-ref'>{shortId(tx.reference)}</span>
+}
+
+/** The fee line under a deposit or withdrawal amount (engine 043). */
+function FeeNote({ tx }: { tx: Transaction }) {
+    const note = transactionFeeNote(tx)
+    return note ? <span className='lending-tx-fee'>{note}</span> : null
 }
 
 /**
@@ -100,6 +107,7 @@ function TransactionsCard({ transactions }: { transactions: ReturnType<typeof us
                                             </td>
                                             <td className='lending-ledger-amount'>
                                                 {tx.asset === 'php' ? pesos(tx.amount) : xlm(tx.amount)}
+                                                <FeeNote tx={tx} />
                                             </td>
                                             <td>
                                                 <span className={`lending-tx-status ${status.cls}`}>{status.label}</span>

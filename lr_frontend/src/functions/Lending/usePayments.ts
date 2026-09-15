@@ -5,7 +5,7 @@ import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 
-export type PaymentTotals = { amount_received: number; interest_paid: number; principal_paid: number }
+export type PaymentTotals = { amount_received: number; interest_paid: number; principal_paid: number; fee_paid: number }
 
 type PaymentsPage = {
     items: Payment[]
@@ -16,7 +16,7 @@ type PaymentsPage = {
     totals: PaymentTotals
 }
 
-const ZERO_TOTALS: PaymentTotals = { amount_received: 0, interest_paid: 0, principal_paid: 0 }
+const ZERO_TOTALS: PaymentTotals = { amount_received: 0, interest_paid: 0, principal_paid: 0, fee_paid: 0 }
 
 /**
  * The caller's repayment history (POST /loans/payments), paginated, plus

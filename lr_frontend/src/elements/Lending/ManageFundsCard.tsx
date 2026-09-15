@@ -165,19 +165,27 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                         second way to pay in, for members without PayPal. The
                         input isn't cleared here: this navigates away, and
                         clearing it would leave a blank form behind if they
-                        cancel and come back. */}
-                    <StripeButton
-                        amountCentavos={depositBlocked ? null : depositCentavos}
-                        purpose='deposit'
-                        label={depositCentavos && !depositBlocked
-                            ? `Pay ${pesos(depositCentavos)} by card`
-                            : 'Pay by card'}
-                    />
+                        cancel and come back. Only offered when the engine has
+                        Stripe switched on. */}
+                    {params.stripe_ready && (
+                        <StripeButton
+                            amountCentavos={depositBlocked ? null : depositCentavos}
+                            purpose='deposit'
+                            label={depositCentavos && !depositBlocked
+                                ? `Pay ${pesos(depositCentavos)} by card`
+                                : 'Pay by card'}
+                        />
+                    )}
                     {depositFees && depositCentavos && (
                         <p className='lending-muted lending-fee-note'>
                             PayPal keeps about {pesos(depositFees.paypal)}, so you’re credited about{' '}
-                            <b>{pesos(depositCentavos - depositFees.paypal)}</b>. By card: about{' '}
-                            {pesos(depositFees.card)} fee, <b>{pesos(depositCentavos - depositFees.card)}</b> credited.
+                            <b>{pesos(depositCentavos - depositFees.paypal)}</b>.
+                            {params.stripe_ready && (
+                                <>
+                                    {' '}By card: about {pesos(depositFees.card)} fee,{' '}
+                                    <b>{pesos(depositCentavos - depositFees.card)}</b> credited.
+                                </>
+                            )}
                         </p>
                     )}
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}
