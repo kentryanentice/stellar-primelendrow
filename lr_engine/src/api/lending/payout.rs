@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::domain;
+use super::policy;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::rails::SubmitError;
@@ -51,7 +53,12 @@ pub struct PayoutView {
     /// name the member's own account rather than whichever provider the
     /// wording happened to be written against.
     pub provider: String,
+    /// The member's claim: the proceeds or the withdrawal requested.
     pub amount: i64,
+    /// The provider's payout fee, deducted from `amount` (043).
+    pub fee: i64,
+    /// What actually reaches the member: `amount - fee`.
+    pub sent: i64,
     pub status: String,
     /// PayPal's own reference, once there is one to look up.
     pub batch_id: Option<String>,
@@ -171,6 +178,7 @@ pub async fn request(
 ) -> Result<Json<PayoutResponse>, E> {
     let user_id = require_verified_user(&pool, &headers).await?;
     let destination = destination(&pool, user_id).await?;
+    let rules = policy::active(&pool).await?;
 
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin payout"))?;
 
@@ -197,9 +205,13 @@ pub async fn request(
         ));
     }
 
+    // The provider's payout fee comes out of what is sent (043), so the pool
+    // pays out exactly the proceeds it owes and not a centavo more.
+    let fee = domain::payout_fee(principal, rules.params.payment_fees.for_rail(destination.provider));
+
     let payout_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider)
-         VALUES ($1, $2, 'loan_proceeds', $3, $4, $5)
+        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider, fee)
+         VALUES ($1, $2, 'loan_proceeds', $3, $4, $5, $6)
          RETURNING id",
     )
     .bind(user_id)
@@ -207,6 +219,7 @@ pub async fn request(
     .bind(principal)
     .bind(&destination.account)
     .bind(destination.provider)
+    .bind(fee)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
@@ -229,7 +242,7 @@ pub async fn request(
         &pool,
         payout_id,
         &destination,
-        principal,
+        principal - fee,
         &format!("PrimeLendRow loan {}", p.loan_id),
     )
     .await;
@@ -390,6 +403,7 @@ type PayoutRow = (
     String,
     String,
     i64,
+    i64,
     String,
     Option<String>,
     Option<String>,
@@ -398,14 +412,15 @@ type PayoutRow = (
     Option<String>,
 );
 
-const PAYOUT_COLUMNS: &str = "id, loan_id, kind, provider, amount, status, batch_id,
+const PAYOUT_COLUMNS: &str = "id, loan_id, kind, provider, amount, fee, status, batch_id,
                               transaction_id, created_at, settled_at, last_error";
 
 fn view(row: PayoutRow) -> PayoutView {
-    let (id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
+    let (id, loan_id, kind, provider, amount, fee, status, batch_id, transaction_id, created_at, settled_at, last_error) = row;
     PayoutView {
         note: note_for(&status, &kind, last_error),
-        id, loan_id, kind, provider, amount, status, batch_id, transaction_id, created_at, settled_at,
+        sent: amount - fee,
+        id, loan_id, kind, provider, amount, fee, status, batch_id, transaction_id, created_at, settled_at,
     }
 }
 

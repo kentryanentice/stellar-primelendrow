@@ -16,8 +16,12 @@ pub struct CapturedPayment {
     /// unique `rail_ref`, which is what makes a re-sent confirmation bounce
     /// off the schema instead of crediting twice.
     pub capture_id: String,
-    /// Whole centavos actually received.
+    /// Whole centavos actually received — the gross the member paid.
     pub centavos: i64,
+    /// The fee the provider reports keeping out of `centavos`, in PHP
+    /// centavos. `None` when the provider didn't report one in pesos; the
+    /// caller then falls back to the policy estimate.
+    pub fee: Option<i64>,
 }
 
 /// Where a payout has got to. Only `Paid` is allowed to move the books.
@@ -33,6 +37,9 @@ pub enum PayoutOutcome {
     Paid {
         item_id: String,
         transaction_id: Option<String>,
+        /// The fee the provider reports charging for the transfer, in PHP
+        /// centavos, when it reports one.
+        fee: Option<i64>,
     },
     /// Accepted, still moving.
     Pending { item_id: Option<String> },

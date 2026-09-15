@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardList, CircleCheckBig, Wallet, Check, Loader2 } from 'lucide-react'
 import { formatDate, pesos, rate } from '../../functions/Lending/money'
+import { grossUp } from '../../functions/Lending/fees'
 import { PRODUCT_LABEL, type Loan, type PoolResponse } from '../../functions/Lending/types'
 import type { RepayRef } from '../../functions/Lending/useLoans'
 import { RepayCardBody } from './PaySkeleton'
@@ -79,6 +80,13 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
      *  defaulted month as due, and always will, because settling deliberately
      *  doesn't rewrite it. */
     const payNow = settling ? arrears : (next?.total ?? 0)
+    // What each rail will actually charge (engine 043): the installment plus
+    // the provider's fee, grossed up so the loan still receives exactly
+    // `payNow`. The engine sets the real amount; this mirrors its formula.
+    const fees = data.params.policy.payment_fees ?? null
+    const withFee = fees && payNow > 0
+        ? { paypal: grossUp(payNow, fees.paypal), card: grossUp(payNow, fees.stripe) }
+        : null
 
     return (
         <section className='lending-card lending-card-repay'>
@@ -120,8 +128,8 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                             This loan defaulted and has been reopened so you can settle it.
                             {arrears > 0
                                 ? <> You owe <b>{pesos(arrears)}</b> — not the whole loan: what your own
-                                    deposit already covered when it defaulted isn’t charged again. You can pay
-                                    it in parts.</>
+                                    deposit already covered when it defaulted isn’t charged again. It’s paid
+                                    in one payment, for exactly that amount.</>
                                 : <> Nothing is outstanding; an administrator will confirm the settlement.</>}
                             {' '}Once it’s confirmed, the credit penalty is returned and you can apply again.
                         </p>
@@ -191,6 +199,13 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                     {payNow > 0 ? (
                         <div className='lending-repay-methods' hidden={repayingId === activeLoan.id}>
                             <label className='lending-label'>Payment method</label>
+                            {withFee && (
+                                <p className='lending-muted lending-fee-note'>
+                                    {pesos(payNow)} goes to your loan. With PayPal you pay{' '}
+                                    <b>{pesos(withFee.paypal.total)}</b> ({pesos(withFee.paypal.fee)} PayPal fee); by card{' '}
+                                    <b>{pesos(withFee.card.total)}</b> ({pesos(withFee.card.fee)} fee).
+                                </p>
+                            )}
                             {data.params.paypal_ready && (
                                 <div className='lending-payment-method'>
                                     <span className='lending-payment-method-icon'><Wallet aria-hidden='true' /></span>
@@ -220,7 +235,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                                 amountCentavos={payNow}
                                 purpose='repay'
                                 loanId={activeLoan.id}
-                                label={`Pay ${pesos(payNow)} by card`}
+                                label={`Pay ${pesos(withFee?.card.total ?? payNow)} by card`}
                             />
                         </div>
                     ) : repayingId === activeLoan.id ? null : settling ? (

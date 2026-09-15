@@ -6,7 +6,7 @@
 //! Money is whole centavos in i64; intermediate products use i128 so a cap
 //! times a percentage can never overflow on the way to a valid result.
 
-use super::policy::{Band, DepositLimitTier, GuarantorTier, InterestSplit, PolicyParams};
+use super::policy::{Band, DepositLimitTier, GuarantorTier, InterestSplit, PolicyParams, RailFees};
 
 pub const CENTAVOS_PER_XLM_UNIT: i64 = 10_000_000; // stroops in 1 XLM
 
@@ -436,6 +436,62 @@ pub fn next_installment_due(rows: &[(i16, i64, i64, i64, i64)]) -> Option<(i16, 
 }
 
 // ===========================================================================
+// Payment provider fees
+// ===========================================================================
+
+/// The fee table is usable: rates in 0–99.99%, fixed fees and caps not
+/// negative. A receive rate of 100% or more would make grossing a repayment up
+/// impossible.
+pub fn check_payment_fees(params: &PolicyParams) -> Result<(), &'static str> {
+    for fees in [&params.payment_fees.paypal, &params.payment_fees.stripe] {
+        if !(0..10_000).contains(&fees.receive_bps) || !(0..10_000).contains(&fees.payout_bps) {
+            return Err("fee rates must be 0..10000 bps");
+        }
+        if fees.receive_fixed < 0 || fees.payout_cap < 0 {
+            return Err("fixed fees and caps must not be negative");
+        }
+    }
+    Ok(())
+}
+
+/// What the provider is expected to keep when `charged` centavos are paid in:
+/// the rate, rounded half-even, plus the fixed fee. An estimate — the
+/// provider's own reported fee always wins once the payment is captured.
+pub fn receive_fee_estimate(charged: i64, fees: &RailFees) -> i64 {
+    round_half_even(charged.max(0) as i128 * fees.receive_bps as i128, 10_000) + fees.receive_fixed
+}
+
+/// The total to charge so that, after the expected receiving fee, exactly
+/// `applies` centavos are left: the smallest total whose estimated fee leaves
+/// at least `applies`. Returns `(total, fee)`, `total = applies + fee`.
+///
+/// This is how a repayment passes the fee to the borrower while the loan still
+/// receives exactly its installment.
+pub fn gross_up(applies: i64, fees: &RailFees) -> (i64, i64) {
+    let applies = applies.max(0);
+    // Closed form first: total = (applies + fixed) / (1 - rate), rounded up...
+    let denom = (10_000 - fees.receive_bps) as i128;
+    let mut total = (((applies + fees.receive_fixed) as i128 * 10_000 + denom - 1) / denom) as i64;
+    // ...then nudge for the half-even rounding of the fee, so the guarantee
+    // holds exactly rather than approximately.
+    while total > applies && total - 1 - receive_fee_estimate(total - 1, fees) >= applies {
+        total -= 1;
+    }
+    while total - receive_fee_estimate(total, fees) < applies {
+        total += 1;
+    }
+    (total, total - applies)
+}
+
+/// The fee deducted from a payout of `amount`: the rate, rounded half-even,
+/// capped. Never the whole amount — at least a centavo is always sent.
+pub fn payout_fee(amount: i64, fees: &RailFees) -> i64 {
+    let fee = round_half_even(amount.max(0) as i128 * fees.payout_bps as i128, 10_000);
+    let fee = if fees.payout_cap > 0 { fee.min(fees.payout_cap) } else { fee };
+    fee.clamp(0, (amount - 1).max(0))
+}
+
+// ===========================================================================
 // AML deposit limits
 // ===========================================================================
 
@@ -704,7 +760,13 @@ mod tests {
             min_loan: 50_000,
             interest_split: sow_split(),
             deposit_limits: sow_deposit_limits(),
+            payment_fees: crate::api::lending::policy::PaymentFees { paypal: paypal_ph(), stripe: paypal_ph() },
         }
+    }
+
+    /// PayPal Philippines' published rates: 3.40% + ₱15 in, 2% capped at ₱50 out.
+    fn paypal_ph() -> RailFees {
+        RailFees { receive_bps: 340, receive_fixed: 1_500, payout_bps: 200, payout_cap: 5_000 }
     }
 
     fn sow_deposit_limits() -> crate::api::lending::policy::DepositLimits {
@@ -1205,6 +1267,53 @@ mod tests {
             }
             assert_eq!(locked, 0, "funding left locked on a repaid loan");
         }
+    }
+
+    #[test]
+    fn fee_estimates_match_the_published_rates() {
+        let f = paypal_ph();
+        // ₱20,000 in: 3.40% = ₱680 + ₱15 = ₱695.
+        assert_eq!(receive_fee_estimate(2_000_000, &f), 69_500);
+        // ₱5,000 out: 2% = ₱100, capped at ₱50. ₱200 out: 2% = ₱4.
+        assert_eq!(payout_fee(500_000, &f), 5_000);
+        assert_eq!(payout_fee(20_000, &f), 400);
+        // Never the whole payout.
+        assert_eq!(payout_fee(1, &f), 0);
+    }
+
+    #[test]
+    fn a_grossed_up_repayment_leaves_exactly_the_installment() {
+        let f = paypal_ph();
+        // A ₱35,333.00 installment.
+        let (total, fee) = gross_up(3_533_300, &f);
+        assert_eq!(total, 3_533_300 + fee);
+        assert_eq!(total - receive_fee_estimate(total, &f), 3_533_300);
+        // And for every amount, the total is the smallest that covers it.
+        let mut next = lcg(0xFEE5);
+        for _ in 0..20_000 {
+            let applies = 1 + next(50_000_000) as i64;
+            let fees = RailFees {
+                receive_bps: next(1_000) as i64,
+                receive_fixed: next(5_000) as i64,
+                payout_bps: 0,
+                payout_cap: 0,
+            };
+            let (total, fee) = gross_up(applies, &fees);
+            assert_eq!(total, applies + fee);
+            assert!(total - receive_fee_estimate(total, &fees) >= applies, "short: {applies} {total}");
+            assert!(total - 1 - receive_fee_estimate(total - 1, &fees) < applies, "not smallest: {applies} {total}");
+        }
+    }
+
+    #[test]
+    fn a_bad_fee_table_is_refused() {
+        let mut p = params();
+        assert_eq!(check_payment_fees(&p), Ok(()));
+        p.payment_fees.paypal.receive_bps = 10_000;
+        assert!(check_payment_fees(&p).is_err());
+        let mut p = params();
+        p.payment_fees.stripe.payout_cap = -1;
+        assert!(check_payment_fees(&p).is_err());
     }
 
     #[test]

@@ -42,6 +42,10 @@ const FALLBACK_POLICY: PolicyParams = {
         guarantor_tiers: [],
     },
     deposit_limits: { tiers: [], below_floor_pct: 50 },
+    payment_fees: {
+        paypal: { receive_bps: 0, receive_fixed: 0, payout_bps: 0, payout_cap: 0 },
+        stripe: { receive_bps: 0, receive_fixed: 0, payout_bps: 0, payout_cap: 0 },
+    },
 }
 
 /**

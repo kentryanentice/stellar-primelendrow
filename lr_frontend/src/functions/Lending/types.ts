@@ -30,6 +30,17 @@ export type PolicyParams = {
     min_loan: number
     interest_split: InterestSplit
     deposit_limits: DepositLimits
+    payment_fees: { paypal: RailFees; stripe: RailFees }
+}
+
+/** One payment rail's fees as the provider charges them (engine 043). */
+export type RailFees = {
+    /** Receiving: basis points of the amount charged, plus a fixed fee. */
+    receive_bps: number
+    receive_fixed: number
+    /** Paying out: basis points of the amount, capped (0 = no cap). */
+    payout_bps: number
+    payout_cap: number
 }
 
 /** One row of the deposit-limit table (engine 042), whole centavos. Its own
@@ -407,7 +418,12 @@ export type Payout = {
     /** Which rail carried it. Pinned when the payout was created, so it stays
      *  true even after the member relinks or the deployment switches rails. */
     provider: 'paypal' | 'stripe'
+    /** The member's claim: the proceeds or the withdrawal requested. */
     amount: number
+    /** The provider's payout fee, deducted from `amount` (engine 043). */
+    fee: number
+    /** What actually reaches the member: `amount - fee`. */
+    sent: number
     /** `unclaimed` only ever occurs on the PayPal rail — a Stripe transfer has
      *  nothing for a recipient to accept. */
     status: 'pending' | 'sent' | 'paid' | 'unclaimed' | 'returned' | 'failed'

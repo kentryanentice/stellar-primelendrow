@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash};
 use super::lots;
+use super::domain;
 use super::payout::{self, PayoutView};
+use super::policy;
 use super::shared::{db_err, ledger_err, validate_centavos};
 use crate::api::users::shared::{E, require_verified_user};
 
@@ -141,9 +143,15 @@ pub async fn withdraw(
     // The destination AND the rail are pinned to the row now, for the same
     // reason: relinking an account later — or an operator flipping
     // PAYOUT_RAIL — must not redirect a transfer that is already in flight.
+    // The provider's payout fee comes out of what is sent (043): the member's
+    // balance falls by `amount`, they receive `amount - fee`, and the pool's
+    // cash falls by exactly `amount` once the provider's own charge is added.
+    let rules = policy::active(&mut *tx).await?;
+    let fee = domain::payout_fee(amount, rules.params.payment_fees.for_rail(destination.provider));
+
     let payout_id: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider, request_key)
-         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3, $4, $5)
+        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider, request_key, fee)
+         VALUES ($1, NULL, 'deposit_withdrawal', $2, $3, $4, $5, $6)
          RETURNING id",
     )
     .bind(user_id)
@@ -151,6 +159,7 @@ pub async fn withdraw(
     .bind(&destination.account)
     .bind(destination.provider)
     .bind(request_key)
+    .bind(fee)
     .fetch_one(&mut *tx)
     .await;
     let payout_id: Uuid = match payout_id {
@@ -197,7 +206,7 @@ pub async fn withdraw(
     tx.commit().await.map_err(|e| db_err(e, "commit withdraw"))?;
 
     let (status, message) =
-        payout::submit(&pool, payout_id, &destination, amount, "PrimeLendRow withdrawal").await;
+        payout::submit(&pool, payout_id, &destination, amount - fee, "PrimeLendRow withdrawal").await;
 
     // Refused on the spot — give the money back before answering, so the
     // member sees their balance intact rather than a hole they have to ask
