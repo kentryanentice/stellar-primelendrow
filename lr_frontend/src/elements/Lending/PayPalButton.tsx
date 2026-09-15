@@ -45,7 +45,10 @@ function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved 
     useEffect(() => {
         if (!paypal || !containerRef.current) return
         const buttons = paypal.Buttons({
-            style: { layout: 'horizontal', height: 40, label: 'pay' },
+            // tagline: false — PayPal's "The safer, easier way to pay" line
+            // renders in dark text under a horizontal button, which is
+            // near-invisible on the dark cards and reads as a glitch.
+            style: { layout: 'horizontal', height: 40, label: 'pay', tagline: false },
             // The engine creates the order, not this page. That is what puts
             // the caller's ownership stamp on it (`custom_id`), which the
             // capture then checks — without it an order id is a bearer

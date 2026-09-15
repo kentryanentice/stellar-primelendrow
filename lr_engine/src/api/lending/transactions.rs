@@ -75,6 +75,14 @@ pub struct TransactionView {
     pub reference: Option<String>,
     pub loan_id: Option<Uuid>,
     pub at: i64,
+    /// Deposits: what the member paid in, before the provider's fee. `amount`
+    /// is what was credited (043).
+    pub paid: Option<i64>,
+    /// Withdrawals: what actually reached the member, after the payout fee.
+    /// `amount` is what left their balance (043).
+    pub received: Option<i64>,
+    /// The payment provider's fee on this movement, when there was one.
+    pub fee: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -101,7 +109,12 @@ const MOVEMENTS: &str = "
            'completed'::text                       AS status,
            e.rail_ref::text                        AS reference,
            NULL::uuid                              AS loan_id,
-           'deposit:' || e.id::text                AS id
+           'deposit:' || e.id::text                AS id,
+           -- the gross paid and the provider's fee, from the event (043);
+           -- a deposit from before 043 has no fee on record
+           (e.payload->>'amount')::bigint          AS paid,
+           NULL::bigint                            AS received,
+           (e.payload->>'fee')::bigint             AS fee
       FROM public.ledger_events e
       JOIN public.ledger_postings p
         ON p.event_id = e.id AND p.account = 'member_deposits'
@@ -119,7 +132,11 @@ const MOVEMENTS: &str = "
            COALESCE(po.status, 'recorded'),
            COALESCE(po.transaction_id, po.batch_id),
            NULL::uuid,
-           'withdrawal:' || e.id::text
+           'withdrawal:' || e.id::text,
+           NULL,
+           -- what reached the member: the claim less the payout fee (043)
+           p.amount - COALESCE(po.fee, 0),
+           po.fee
       FROM public.ledger_events e
       JOIN public.ledger_postings p
         ON p.event_id = e.id AND p.account = 'member_deposits'
@@ -142,7 +159,8 @@ const MOVEMENTS: &str = "
            'completed',
            e.rail_ref::text,
            NULL::uuid,
-           'refund:' || e.id::text
+           'refund:' || e.id::text,
+           NULL, NULL, NULL
       FROM public.ledger_events e
       JOIN public.ledger_postings p
         ON p.event_id = e.id AND p.account = 'member_deposits'
@@ -159,7 +177,8 @@ const MOVEMENTS: &str = "
            'confirmed',
            c.lock_tx_hash,
            c.loan_id,
-           'lock:' || c.id::text
+           'lock:' || c.id::text,
+           NULL, NULL, NULL
       FROM public.xlm_collateral c
       JOIN public.loans l ON l.id = c.loan_id
      WHERE l.borrower_id = $1 AND c.locked_at IS NOT NULL
@@ -176,7 +195,8 @@ const MOVEMENTS: &str = "
            CASE WHEN a.status = 'done' THEN 'confirmed' ELSE 'queued' END,
            a.tx_hash,
            c.loan_id,
-           'action:' || a.id::text
+           'action:' || a.id::text,
+           NULL, NULL, NULL
       FROM public.collateral_actions a
       JOIN public.xlm_collateral c ON c.id = a.collateral_id
       JOIN public.loans l ON l.id = c.loan_id
@@ -195,7 +215,8 @@ const MOVEMENTS: &str = "
            'completed',
            NULL,
            r.loan_id,
-           'recovery:' || r.id::text
+           'recovery:' || r.id::text,
+           NULL, NULL, NULL
       FROM public.loan_recoveries r
      WHERE r.user_id = $1 AND r.source <> 'borrower_xlm'
 
@@ -212,12 +233,26 @@ const MOVEMENTS: &str = "
            'completed',
            NULL,
            d.loan_id,
-           'interest:' || d.id::text
+           'interest:' || d.id::text,
+           NULL, NULL, NULL
       FROM public.member_interest d
      WHERE d.user_id = $1 AND d.amount > 0
 ";
 
-type MovementRow = (i64, String, String, i64, String, Option<String>, Option<Uuid>, String);
+/// at, kind, asset, amount, status, reference, loan_id, id, paid, received, fee
+type MovementRow = (
+    i64,
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<Uuid>,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
 
 pub async fn list(
     Extension(pool): Extension<PgPool>,
@@ -241,7 +276,7 @@ pub async fn list(
     // disbursement it triggers), and a page boundary that falls between them
     // must not shuffle on every request.
     let rows: Vec<MovementRow> = sqlx::query_as(&format!(
-        "SELECT at, kind, asset, amount, status, reference, loan_id, id
+        "SELECT at, kind, asset, amount, status, reference, loan_id, id, paid, received, fee
            FROM ({MOVEMENTS}) m
           ORDER BY at DESC, id
           LIMIT $2 OFFSET $3"
@@ -255,8 +290,8 @@ pub async fn list(
 
     let items = rows
         .into_iter()
-        .map(|(at, kind, asset, amount, status, reference, loan_id, id)| TransactionView {
-            id, kind, asset, amount, status, reference, loan_id, at,
+        .map(|(at, kind, asset, amount, status, reference, loan_id, id, paid, received, fee)| TransactionView {
+            id, kind, asset, amount, status, reference, loan_id, at, paid, received, fee,
         })
         .collect();
 

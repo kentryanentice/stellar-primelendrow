@@ -31,6 +31,12 @@ export default function StripeCard() {
         else toast.error(result.message)
     }, [toast])
 
+    // Stripe switched off on the engine: no card at all, rather than a card
+    // that only says it can't be used. PayPal-only deployments show just the
+    // PayPal card. (Still shown while checking, so the page doesn't jump for
+    // deployments where Stripe is on.)
+    if (!loading && !account?.stripe_ready) return null
+
     return (
         <section className='settings-card settings-card-stripe'>
             <div className='settings-card-head'>
@@ -43,12 +49,8 @@ export default function StripeCard() {
                 ask you to type an account number, so there’s nothing to get wrong.
             </p>
 
-            {loading ? (
+            {loading || !account ? (
                 <p className='settings-muted'>Checking…</p>
-            ) : !account?.stripe_ready ? (
-                <p className='settings-muted'>
-                    <CircleAlert /> Stripe payouts aren’t enabled on this deployment yet.
-                </p>
             ) : account.connected ? (
                 <>
                     <div className='settings-paypal-row'>

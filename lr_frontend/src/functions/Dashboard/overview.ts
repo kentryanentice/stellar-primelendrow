@@ -1,4 +1,5 @@
 import { pesos, rate, xlm } from '../Lending/money'
+import { paymentFeeNote, transactionFeeNote } from '../Lending/fees'
 import {
     PRODUCT_LABEL,
     TRANSACTION_KIND_LABEL,
@@ -112,12 +113,13 @@ export function recentActivity(transactions: Transaction[], payments: Payment[],
 
     for (const tx of transactions) {
         const status = TRANSACTION_STATUS_META[tx.status]
+        const feeNote = transactionFeeNote(tx)
         rows.push({
             key: `tx-${tx.id}`,
             side: SIDE[tx.kind],
             glyph: GLYPH[tx.kind],
             amount: tx.asset === 'php' ? pesos(tx.amount) : xlm(tx.amount),
-            detail: TRANSACTION_KIND_LABEL[tx.kind],
+            detail: feeNote ? `${TRANSACTION_KIND_LABEL[tx.kind]} · ${feeNote}` : TRANSACTION_KIND_LABEL[tx.kind],
             status: status.label,
             tone: status.cls,
             at: tx.at,
@@ -128,6 +130,9 @@ export function recentActivity(transactions: Transaction[], payments: Payment[],
         const parts = [`${pesos(payment.principal_paid)} principal`, `${pesos(payment.interest_paid)} interest`]
         // an overpayment becomes a fresh deposit lot, so say where it went
         if (payment.excess > 0) parts.push(`${pesos(payment.excess)} to your deposits`)
+        // paid on top for the payment provider, not part of what the loan got
+        const feeNote = paymentFeeNote(payment)
+        if (feeNote) parts.push(`+ ${feeNote}`)
         rows.push({
             key: `payment-${payment.id}`,
             side: 'borrowing',

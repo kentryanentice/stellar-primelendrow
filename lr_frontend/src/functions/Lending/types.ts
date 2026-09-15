@@ -188,6 +188,14 @@ export type Transaction = {
     reference: string | null
     loan_id: string | null
     at: number
+    /** Deposits: what was paid in before the provider's fee (`amount` is what
+     *  was credited). Null for other kinds. */
+    paid: number | null
+    /** Withdrawals: what reached the member after the payout fee (`amount` is
+     *  what left their balance). Null for other kinds. */
+    received: number | null
+    /** The payment provider's fee on this movement, when there was one. */
+    fee: number | null
 }
 
 /** POST /pool/transactions — the caller's movements, paginated. */
@@ -266,6 +274,8 @@ export type PoolResponse = {
         fx: FxQuote
         collateral_contract: string | null
         paypal_ready: boolean
+        /** The card rail is switched on. False hides every Stripe control. */
+        stripe_ready: boolean
         /** The published worked example, split by the engine. */
         split_example: SplitExample
     }
@@ -559,6 +569,8 @@ export type Payment = {
     principal_paid: number
     excess: number
     paid_at: number
+    /** The payment-provider fee paid on top of `amount_received`. */
+    fee_paid: number
 }
 
 export type Invite = {

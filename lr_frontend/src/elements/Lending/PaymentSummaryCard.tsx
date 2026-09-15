@@ -29,6 +29,14 @@ function PaymentSummaryCard({ totals, count }: { totals: PaymentTotals; count: n
                     <span>Interest paid</span>
                     <b>{pesos(totals.interest_paid)}</b>
                 </div>
+                {/* Paid on top of the repayments for PayPal/Stripe (engine
+                    043) — not part of "repaid", so it sits beside it. */}
+                {totals.fee_paid > 0 && (
+                    <div className='lending-quote-row'>
+                        <span>Payment fees</span>
+                        <b>{pesos(totals.fee_paid)}</b>
+                    </div>
+                )}
             </div>
         </section>
     )

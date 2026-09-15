@@ -14,7 +14,7 @@ use super::policy::{self, PolicyParams};
 use super::pricing;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
-use crate::infra::{paypal, stellar};
+use crate::infra::{paypal, stellar, stripe};
 
 #[derive(Serialize)]
 pub struct PoolStats {
@@ -71,6 +71,10 @@ pub struct Params {
     pub fx: pricing::Priced,
     pub collateral_contract: Option<String>,
     pub paypal_ready: bool,
+    /// Whether the card rail is switched on (`STRIPE_SECRET_KEY` set). The
+    /// pages hide every Stripe control when it isn't, so a PayPal-only
+    /// deployment is just a missing key — no code change either way.
+    pub stripe_ready: bool,
     /// The published worked example, split by the engine so the screen only
     /// draws it.
     pub split_example: SplitExample,
@@ -245,6 +249,7 @@ pub async fn summary(
             fx,
             collateral_contract: stellar::contract_id(),
             paypal_ready: paypal::is_configured(),
+            stripe_ready: stripe::is_configured(),
         },
     }))
 }
