@@ -26,13 +26,14 @@ type PayPalButtonProps = {
  */
 function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved }: PayPalButtonProps) {
     const { paypal, failed, configured } = usePayPal()
-    const { createOrder } = usePayPalOrder()
+    const { createOrder, cancelOrder } = usePayPalOrder()
     const toast = useToast()
     const containerRef = useRef<HTMLDivElement>(null)
 
     const amountRef = useRef(amountCentavos)
     const onApprovedRef = useRef(onApproved)
     const createOrderRef = useRef((centavos: number) => createOrder(centavos, purpose, loanId))
+    const cancelOrderRef = useRef(cancelOrder)
     // Refs are synced in an effect, not during render — required by the
     // React Compiler this repo builds with (a render-time ref write can be
     // memoized away silently).
@@ -40,6 +41,7 @@ function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved 
         amountRef.current = amountCentavos
         onApprovedRef.current = onApproved
         createOrderRef.current = (centavos: number) => createOrder(centavos, purpose, loanId)
+        cancelOrderRef.current = cancelOrder
     })
 
     useEffect(() => {
@@ -67,6 +69,13 @@ function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved 
             },
             onError: () => {
                 toast.error('PayPal ran into a problem — nothing was charged, try again')
+            },
+            // Closed the PayPal window without paying. Nothing was charged,
+            // but the engine has been holding this amount against the member's
+            // deposit limit since the order was created — tell it to let go.
+            onCancel: data => {
+                if (data.orderID) void cancelOrderRef.current(data.orderID)
+                toast.info('Payment cancelled — nothing was charged')
             },
         })
         void buttons.render(containerRef.current)

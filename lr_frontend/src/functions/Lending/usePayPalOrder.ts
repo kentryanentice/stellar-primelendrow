@@ -49,5 +49,30 @@ export default function usePayPalOrder() {
         return order_id
     }, [csrfToken])
 
-    return { createOrder }
+    /**
+     * Tells the engine the member closed PayPal's window without paying.
+     *
+     * Nothing was charged — a PayPal order is only captured after they
+     * confirm — but the engine holds the amount against their deposit limit
+     * from the moment the order is created, so this releases it instead of
+     * making them wait an hour. Best effort: if the call fails, the hold
+     * simply times out as before.
+     */
+    const cancelOrder = useCallback(async (orderId: string) => {
+        try {
+            await apiFetch(`${API}/paypal/order/cancel`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+                },
+                body: JSON.stringify({ order_id: orderId }),
+            })
+        } catch {
+            // Nothing to tell the member: no money moved either way.
+        }
+    }, [csrfToken])
+
+    return { createOrder, cancelOrder }
 }

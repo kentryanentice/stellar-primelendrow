@@ -16,4 +16,5 @@ mod order;
 
 pub use account::{disconnect, status};
 pub use connect::{callback, start};
+pub use order::cancel as cancel_order;
 pub use order::create as create_order;

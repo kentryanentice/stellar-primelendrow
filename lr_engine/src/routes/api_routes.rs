@@ -125,6 +125,12 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/paypal/order",
             post(paypal::create_order).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // The member closed PayPal's window: release the hold that started
+        // payment has on their deposit limit. Charges nothing either way.
+        .route(
+            "/paypal/order/cancel",
+            post(paypal::cancel_order).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         .route("/paypal/connect", get(paypal::start))
         .route("/paypal/callback", get(paypal::callback))
         .route("/paypal/account", get(paypal::status))
