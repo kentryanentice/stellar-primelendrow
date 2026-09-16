@@ -1464,4 +1464,167 @@ mod tests {
         assert_eq!(share(150), Some(25));
         assert_eq!(share(151), None);
     }
+
+    // =======================================================================
+    // Reviewer evidence (SOW deliverable 3)
+    // =======================================================================
+
+    /// Centavos as pesos, with thousands separators: 3_533_300 -> "35,333.00".
+    fn peso(centavos: i64) -> String {
+        let whole = (centavos / 100).abs();
+        let mut grouped = String::new();
+        for (i, ch) in whole.to_string().chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                grouped.push(',');
+            }
+            grouped.push(ch);
+        }
+        let sign = if centavos < 0 { "-" } else { "" };
+        format!("{sign}{}.{:02}", grouped.chars().rev().collect::<String>(), (centavos % 100).abs())
+    }
+
+    const HEADER: &str =
+        "    interest |  platform |    reserve |  depositors |  guarantor |     recovery |          sum | case";
+
+    fn row(interest: i64, note: &str, p: &InterestParts) -> String {
+        format!(
+            "{:>12} | {:>9} | {:>10} | {:>11} | {:>10} | {:>12} | {:>12} | {}",
+            peso(interest),
+            peso(p.platform),
+            peso(p.reserve),
+            peso(p.depositors),
+            peso(p.guarantor),
+            peso(p.recovery_fund),
+            peso(p.platform + p.reserve + p.depositors + p.guarantor + p.recovery_fund),
+            note,
+        )
+    }
+
+    /// The reviewer's evidence for the interest split, printed as a report and
+    /// asserted line by line. Run it on its own with the output shown:
+    ///
+    /// ```text
+    /// cargo test --quiet interest_split_evidence -- --nocapture
+    /// ```
+    ///
+    /// It covers the deliverable's acceptance criteria that the allocation
+    /// engine can answer on its own: the published worked examples to the
+    /// centavo, repayments whose interest does not divide evenly, and that
+    /// across many thousands of random amounts every component always sums
+    /// back to the interest collected. (The remaining criterion — at least ten
+    /// repayments RECORDED — is evidence from a live run, listed in the admin
+    /// interest history.)
+    #[test]
+    fn interest_split_evidence() {
+        let split = sow_split();
+        let mut checked = 0usize;
+
+        println!("\n================ INTEREST SPLIT — EVIDENCE ================");
+        println!(
+            "Published rule: platform {}% · reserve {}% · depositors {}% · risk band {}% (guarantor capped at {}%)",
+            split.platform, split.reserve, split.depositors, split.risk_band, split.guarantor_cap
+        );
+        println!("Whole centavos throughout, one rounding rule (banker's), risk band takes the remainder.\n");
+
+        // ---- 1. the published worked example -------------------------------
+        println!("1. Worked example — ₱1,000 loan at 2%/mo, first payment's interest ₱20.00");
+        println!("{HEADER}");
+        let pool = [400_000, 400_000];
+        let expected: [(Option<i16>, i64, i64, &str); 3] = [
+            (None, 0, 600, "no guarantor"),
+            (Some(50), 200, 400, "guarantor @ 10% (entry tier)"),
+            (Some(130), 500, 100, "guarantor @ 25% (top tier, hard cap)"),
+        ];
+        for (score, guarantor, recovery_fund, note) in expected {
+            let guarantors: Vec<GuarantorStake> = score.map(|s| stake(50_000, s)).into_iter().collect();
+            let booked = book_interest(2_000, &split, &pool, &guarantors);
+            println!("{}", row(2_000, note, &booked.parts));
+            assert_eq!(
+                booked.parts,
+                InterestParts { platform: 200, reserve: 400, depositors: 800, guarantor, recovery_fund },
+                "worked example mismatch: {note}"
+            );
+            checked += 1;
+        }
+
+        // ---- 2. interest that does not divide evenly -----------------------
+        println!("\n2. Interest that does not divide evenly (every split still sums back exactly)");
+        println!("{HEADER}");
+        let uneven: [(i64, Option<i16>, &str); 10] = [
+            (1, None, "one centavo"),
+            (7, Some(50), "seven centavos, entry tier"),
+            (33, Some(130), "₱0.33, top tier"),
+            (333, None, "₱3.33"),
+            (1_667, Some(80), "₱16.67, 15% tier"),
+            (12_345, Some(105), "₱123.45, 20% tier"),
+            (99_999, Some(50), "₱999.99, entry tier"),
+            (100_001, None, "₱1,000.01"),
+            (333_333, Some(130), "₱3,333.33, top tier"),
+            (1_234_567, Some(80), "₱12,345.67, 15% tier"),
+        ];
+        for (interest, score, note) in uneven {
+            let guarantors: Vec<GuarantorStake> = score.map(|s| stake(50_000, s)).into_iter().collect();
+            let booked = book_interest(interest, &split, &pool, &guarantors);
+            let p = booked.parts;
+            println!("{}", row(interest, note, &p));
+            let sum = p.platform + p.reserve + p.depositors + p.guarantor + p.recovery_fund;
+            assert_eq!(sum, interest, "{note}: parts summed to {sum}, not {interest}");
+            assert!(
+                [p.platform, p.reserve, p.depositors, p.guarantor, p.recovery_fund].iter().all(|v| *v >= 0),
+                "{note}: a component went negative"
+            );
+            assert_eq!(booked.to_depositors.iter().sum::<i64>(), p.depositors, "{note}: depositor slices");
+            assert_eq!(booked.to_guarantors.iter().sum::<i64>(), p.guarantor, "{note}: guarantor slices");
+            checked += 1;
+        }
+
+        // ---- 3. the same payment always produces the same split ------------
+        let once = book_interest(1_234_567, &split, &pool, &[stake(50_000, 80)]).parts;
+        for _ in 0..1_000 {
+            assert_eq!(book_interest(1_234_567, &split, &pool, &[stake(50_000, 80)]).parts, once);
+        }
+        println!("\n3. Deterministic: ₱12,345.67 split 1,000 times — identical every time.");
+
+        // ---- 4. thousands of random repayments -----------------------------
+        const SWEEP: usize = 100_000;
+        let mut next = lcg(0x0005_9117);
+        let (mut largest, mut with_guarantors, mut uneven_count) = (0i64, 0usize, 0usize);
+        for _ in 0..SWEEP {
+            let interest = next(50_000_000) as i64;
+            let depositors: Vec<i64> = (0..1 + next(40)).map(|_| next(20_000_000) as i64).collect();
+            let guarantors: Vec<GuarantorStake> = (0..next(3))
+                .map(|_| stake(1 + next(5_000_000) as i64, next(151) as i16))
+                .collect();
+
+            let booked = book_interest(interest, &split, &depositors, &guarantors);
+            let p = booked.parts;
+            let parts = [p.platform, p.reserve, p.depositors, p.guarantor, p.recovery_fund];
+
+            // The deliverable's promise, on every single one.
+            assert_eq!(parts.iter().sum::<i64>(), interest, "parts did not sum back for {interest}");
+            assert!(parts.iter().all(|v| *v >= 0), "negative component for {interest}");
+            assert_eq!(booked.to_depositors.iter().sum::<i64>(), p.depositors, "depositor slices for {interest}");
+            assert_eq!(booked.to_guarantors.iter().sum::<i64>(), p.guarantor, "guarantor slices for {interest}");
+            // Guarantors are paid ONLY out of the risk band, never beyond the cap.
+            assert!(p.guarantor + p.recovery_fund == interest - p.platform - p.reserve - p.depositors);
+            assert!(p.guarantor <= round_half_even(interest as i128 * split.guarantor_cap as i128, 100) + 1);
+
+            largest = largest.max(interest);
+            if !guarantors.is_empty() {
+                with_guarantors += 1;
+            }
+            if interest % 10 != 0 {
+                uneven_count += 1;
+            }
+            checked += 1;
+        }
+        println!(
+            "4. Random sweep: {SWEEP} repayments (largest ₱{}, {with_guarantors} with guarantors, {uneven_count} not divisible by 10 centavos)",
+            peso(largest)
+        );
+        println!("   Every one: components summed back to the interest exactly, none negative,");
+        println!("   guarantor paid only from the risk band, recovery fund took the remainder.");
+        println!("\nChecked {checked} splits in total — no centavo created or lost.");
+        println!("===========================================================\n");
+    }
 }
