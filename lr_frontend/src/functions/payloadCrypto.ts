@@ -29,14 +29,32 @@ const toBase64 = (bytes: Uint8Array) => {
 
 export type ApiFetch = (input: string, init?: RequestInit) => Promise<Response>
 
-export function createEncryptedFetch(serverPublicKey: string, baseFetch: typeof fetch = fetch): ApiFetch {
+/**
+ * The engine's tunnel address (`TUNNEL_PATH` in payload.rs). With tunnelling
+ * on, every call leaves the browser as `POST <origin>/x`: the real method,
+ * path and query string travel inside the sealed body, ahead of the real
+ * body, so the network tab shows one meaningless address instead of the API's
+ * route names. Framing: `u32 big-endian head length || head JSON || body`.
+ */
+const TUNNEL_PATH = '/x'
+
+export type EncryptedFetchOptions = { tunnel?: boolean }
+
+export function createEncryptedFetch(
+    serverPublicKey: string,
+    baseFetch: typeof fetch = fetch,
+    { tunnel = false }: EncryptedFetchOptions = {},
+): ApiFetch {
     // Imported once; a malformed key rejects on the first call rather than at load.
     const serverKey = crypto.subtle.importKey('raw', fromBase64(serverPublicKey), { name: 'ECDH', namedCurve: 'P-256' }, false, [])
 
     return async (input, init = {}) => {
         const method = (init.method ?? 'GET').toUpperCase()
         const url = new URL(input, globalThis.location?.href)
-        const requestAad = `${method} ${url.pathname}`
+        // What the browser actually sends: the tunnel address, or the call itself.
+        const wireMethod = tunnel ? 'POST' : method
+        const wirePath = tunnel ? TUNNEL_PATH : url.pathname
+        const requestAad = `${wireMethod} ${wirePath}`
 
         const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']) as CryptoKeyPair
         const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: await serverKey }, ephemeral.privateKey, 256)
@@ -48,27 +66,49 @@ export function createEncryptedFetch(serverPublicKey: string, baseFetch: typeof 
         const headers = new Headers(init.headers)
         headers.set('x-payload-key', toBase64(new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey))))
 
-        let body = init.body
-        if (body != null) {
-            // Every engine call sends JSON.stringify(...) — anything else is a
-            // new caller that needs thought, not silent plaintext.
-            if (typeof body !== 'string') throw new TypeError('apiFetch only encrypts string bodies')
+        const seal = async (plain: Uint8Array<ArrayBuffer>) => {
             const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH))
             const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
                 { name: 'AES-GCM', iv, additionalData: encoder.encode(requestAad) },
                 requestKey,
-                encoder.encode(body),
+                plain,
             ))
             const sealed = new Uint8Array(IV_LENGTH + ciphertext.length)
             sealed.set(iv)
             sealed.set(ciphertext, IV_LENGTH)
+            return sealed
+        }
+
+        let body = init.body
+        // Every engine call sends JSON.stringify(...) — anything else is a
+        // new caller that needs thought, not silent plaintext.
+        if (body != null && typeof body !== 'string') throw new TypeError('apiFetch only encrypts string bodies')
+
+        if (tunnel) {
+            // Always sealed, even a GET: the head is what's being hidden.
+            const bodyBytes = body != null ? encoder.encode(body) : new Uint8Array(0)
+            const head = encoder.encode(JSON.stringify({
+                m: method,
+                p: `${url.pathname}${url.search}`,
+                ...(body != null ? { t: headers.get('content-type') ?? 'application/json' } : {}),
+            }))
+            const frame = new Uint8Array(4 + head.length + bodyBytes.length)
+            new DataView(frame.buffer).setUint32(0, head.length)
+            frame.set(head, 4)
+            frame.set(bodyBytes, 4 + head.length)
+            headers.delete('x-payload-type')
+            headers.set('content-type', 'application/octet-stream')
+            headers.set('x-payload-enc', '1')
+            body = await seal(frame)
+        } else if (body != null) {
             headers.set('x-payload-type', headers.get('content-type') ?? 'application/json')
             headers.set('content-type', 'application/octet-stream')
             headers.set('x-payload-enc', '1')
-            body = sealed
+            body = await seal(encoder.encode(body))
         }
 
-        const res = await baseFetch(input, { ...init, headers, body })
+        const target = tunnel ? `${url.origin}${TUNNEL_PATH}` : input
+        const res = await baseFetch(target, { ...init, method: wireMethod, headers, body })
 
         // Rejections from outside the payload layer (CORS, CSRF, rate limits)
         // and empty bodies arrive unsealed — hand those back untouched.
