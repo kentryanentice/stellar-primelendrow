@@ -64,7 +64,32 @@ export default function useStripeCheckout() {
         }
     }, [csrfToken, toast])
 
-    return { startCheckout, starting }
+    /**
+     * Came back from Stripe without paying. Tells the engine to close the
+     * checkout page and release the hold it had on the member's deposit
+     * limit — the same thing the PayPal rail does on cancel.
+     *
+     * Nothing was charged and nothing reaches the books either way; a page
+     * that turns out to have been paid is left alone by the engine. Best
+     * effort: if the call fails, the hold simply times out as before.
+     */
+    const cancelCheckout = useCallback(async (purpose: CheckoutPurpose) => {
+        try {
+            await apiFetch(`${API}/stripe/checkout/cancel`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+                },
+                body: JSON.stringify({ purpose }),
+            })
+        } catch {
+            // Nothing to tell the member: no money moved either way.
+        }
+    }, [csrfToken])
+
+    return { startCheckout, cancelCheckout, starting }
 }
 
 /**

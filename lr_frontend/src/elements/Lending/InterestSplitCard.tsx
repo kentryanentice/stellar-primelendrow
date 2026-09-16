@@ -43,6 +43,10 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
     const selected = scenarios.find(s => s.id === selectedId) ?? scenarios[0]
     const drawn = RECIPIENTS.filter(r => selected.parts[r.key] > 0)
     const collectedDrawn = RECIPIENTS.filter(r => collected.parts[r.key] > 0)
+    /** A part as a share of the payment it came out of — the engine's amounts,
+     *  said a second way. Drawing only, never a figure sent back. */
+    const sharePct = (part: number, whole: number) =>
+        whole > 0 ? `${((part / whole) * 100).toFixed(1).replace(/\.0$/, '')}%` : '—'
 
     return (
         <section className='lending-card lending-card-split'>
@@ -61,7 +65,15 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
                                 <span className={`lending-split-swatch is-${r.key}`} aria-hidden='true' />
                                 {r.label}
                             </span>
-                            <span className='lending-stat-value'>{pesosCompact(collected.parts[r.key])}</span>
+                            <span className='lending-stat-value'>
+                                {pesosCompact(collected.parts[r.key])}
+                                {/* What that is as a share of the interest
+                                    collected so far — the fixed shares read
+                                    10/20/40%, the band's two split by tier. */}
+                                {collected.total > 0 && (
+                                    <span className='lending-split-pct'>{sharePct(collected.parts[r.key], collected.total)}</span>
+                                )}
+                            </span>
                         </div>
                     ))}
                 </div>
@@ -142,7 +154,7 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
                             >
                                 {hovered === r.key && (
                                     <span className='lending-split-tip' role='tooltip'>
-                                        <span>{r.label}</span>
+                                        <span>{r.label} · {sharePct(selected.parts[r.key], example.interest)}</span>
                                         <b>{pesos(selected.parts[r.key])}</b>
                                     </span>
                                 )}
@@ -175,6 +187,7 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
                                         {scenarios.map(s => (
                                             <td key={s.id} className={s.id === selected.id ? 'is-mine' : undefined}>
                                                 {pesos(s.parts[r.key])}
+                                                <span className='lending-split-pct'>{sharePct(s.parts[r.key], example.interest)}</span>
                                             </td>
                                         ))}
                                     </tr>
@@ -184,6 +197,7 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
                                     {scenarios.map(s => (
                                         <td key={s.id} className={s.id === selected.id ? 'is-mine' : undefined}>
                                             {pesos(example.interest)}
+                                            <span className='lending-split-pct'>100%</span>
                                         </td>
                                     ))}
                                 </tr>

@@ -25,6 +25,7 @@ mod connect;
 mod webhook;
 
 pub use account::{disconnect, status};
+pub use checkout::cancel as checkout_cancel;
 pub use checkout::start as checkout;
 pub use connect::{callback, refresh, start};
 pub use webhook::handle as webhook;

@@ -158,6 +158,12 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/stripe/checkout",
             post(stripe::checkout).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
         )
+        // Came back from Stripe without paying: close the page and release the
+        // hold it had on the member's deposit limit. Charges nothing.
+        .route(
+            "/stripe/checkout/cancel",
+            post(stripe::checkout_cancel).layer(DefaultBodyLimit::max(LENDING_BODY_LIMIT)),
+        )
         // Signed by Stripe, not by a session — the CSRF guard only enforces on
         // requests carrying a session cookie, and this one never does. The
         // handler refuses anything whose signature doesn't verify against

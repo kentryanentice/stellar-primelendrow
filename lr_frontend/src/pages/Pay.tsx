@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import useLendingPool from '../functions/Lending/useLendingPool'
 import useLoans from '../functions/Lending/useLoans'
 import usePayments from '../functions/Lending/usePayments'
-import { stripeCheckoutResult } from '../functions/Lending/useStripeCheckout'
+import useStripeCheckout, { stripeCheckoutResult } from '../functions/Lending/useStripeCheckout'
 import { useToast } from '../providers/useToast'
 import PaymentSummaryCard from '../elements/Lending/PaymentSummaryCard'
 import PaySkeleton, { RepayCardSkeleton, PaymentHistoryCardSkeleton } from '../elements/Lending/PaySkeleton'
@@ -28,6 +28,10 @@ function Pay() {
     const { loans, loading: loansLoading, error: loansError, repay, repayingId } = useLoans(
         () => Promise.all([refresh(), payments.refresh()]),
     )
+    // Repayments are PayPal-only on the page now; this is here for the return
+    // trip of a card payment started before that, so a cancelled one releases
+    // its hold rather than blocking the loan's next payment for an hour.
+    const { cancelCheckout } = useStripeCheckout()
     const toast = useToast()
 
     // Coming back from Stripe Checkout. A card repayment is confirmed on page
@@ -44,6 +48,9 @@ function Pay() {
         const result = stripeCheckoutResult()
         if (!result) return
         if ('cancelled' in result) {
+            // Close the checkout page and release what it was holding, so a
+            // cancelled card payment leaves nothing behind.
+            void cancelCheckout('repay')
             toast.error('Payment cancelled — nothing was charged')
             return
         }

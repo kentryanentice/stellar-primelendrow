@@ -10,9 +10,6 @@ import { RepayCardBody } from './PaySkeleton'
 // Lazy so the page shell (and the summary/history cards next to it) paint
 // before the PayPal SDK bootstrap loads.
 const PayPalButton = lazy(() => import('./PayPalButton'))
-// No SDK behind this one — it asks the engine for a Checkout Session and
-// navigates — so it doesn't need the lazy treatment PayPal gets.
-import StripeButton from './StripeButton'
 
 const STATUS_CLS: Record<Loan['status'], string> = {
     pending: 'is-pending',
@@ -202,12 +199,7 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                             {withFee && (
                                 <p className='lending-muted lending-fee-note'>
                                     {pesos(payNow)} goes to your loan. With PayPal you pay{' '}
-                                    <b>{pesos(withFee.paypal.total)}</b> ({pesos(withFee.paypal.fee)} PayPal fee)
-                                    {data.params.stripe_ready ? (
-                                        <>
-                                            ; by card <b>{pesos(withFee.card.total)}</b> ({pesos(withFee.card.fee)} fee).
-                                        </>
-                                    ) : '.'}
+                                    <b>{pesos(withFee.paypal.total)}</b> ({pesos(withFee.paypal.fee)} PayPal fee).
                                 </p>
                             )}
                             {data.params.paypal_ready && (
@@ -230,19 +222,6 @@ function RepayCard({ data, loans, loading, error, repay, repayingId }: {
                                     }}
                                 />
                             </Suspense>
-                            {/* The card rail. Same money, same books — a
-                                second way to pay for borrowers without PayPal,
-                                and the one the deposit form has offered since
-                                the Stripe rail landed. Only offered when the
-                                engine has Stripe switched on. */}
-                            {data.params.stripe_ready && (
-                                <StripeButton
-                                    amountCentavos={payNow}
-                                    purpose='repay'
-                                    loanId={activeLoan.id}
-                                    label={`Pay ${pesos(withFee?.card.total ?? payNow)} by card`}
-                                />
-                            )}
                         </div>
                     ) : repayingId === activeLoan.id ? null : settling ? (
                         <p className='lending-muted'>

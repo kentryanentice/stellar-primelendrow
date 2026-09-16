@@ -556,6 +556,15 @@ select.lending-input option {
 
 .lending-split-mine .lending-muted { font-size: 12px; }
 
+/* the share-of-interest a figure represents, beside the peso amount */
+.lending-split-pct {
+    margin-left: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #8492ac;
+    font-variant-numeric: tabular-nums;
+}
+
 @each $key in depositors, reserve, platform, guarantor, recovery_fund {
     .lending-split-seg.is-#{$key},
     .lending-split-swatch.is-#{$key} { background: var(--split-#{$key}); }
