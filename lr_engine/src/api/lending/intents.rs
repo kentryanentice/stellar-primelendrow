@@ -148,6 +148,10 @@ pub async fn reserve_deposit(pool: &PgPool, user_id: Uuid, rail: &str, amount: i
         .await
         .map_err(|e| db_err(e, "lock member"))?;
 
+    // Payments they started and never finished stop counting against their
+    // limits the moment they time out; this just makes the rows say so.
+    expire_stale(&mut tx, user_id).await?;
+
     let status = deposit_status(&mut tx, user_id, &rules.params).await?;
     if amount > status.allowance {
         return Err((
@@ -327,6 +331,48 @@ pub async fn abandon(pool: &PgPool, id: Uuid) {
     if let Err(e) = result {
         tracing::error!(%id, "could not release payment intent: {e}");
     }
+}
+
+/// The member closed PayPal's window without approving: release the payment
+/// now rather than leaving it holding their deposit limit until it expires.
+///
+/// PayPal only, and deliberately: a PayPal order cannot be captured without a
+/// claim, so releasing one is safe. A Stripe checkout page can still be paid
+/// after the member navigates away, so those are left to expire (and a payment
+/// that lands on an expired one is refunded).
+///
+/// Nothing happens if it was already approved, captured or replaced.
+pub async fn cancel(pool: &PgPool, user_id: Uuid, provider_ref: &str) -> Result<(), E> {
+    sqlx::query(
+        "UPDATE public.payment_intents
+            SET status = 'expired', updated_at = $3, last_error = 'Cancelled by the member'
+          WHERE provider_ref = $1 AND user_id = $2 AND rail = 'paypal' AND status = 'open'",
+    )
+    .bind(provider_ref)
+    .bind(user_id)
+    .bind(now())
+    .execute(pool)
+    .await
+    .map_err(|e| db_err(e, "cancel payment intent"))?;
+    Ok(())
+}
+
+/// Marks a member's timed-out payments expired. Nothing depends on it — every
+/// query that counts live payments already tests `expires_at` — but it keeps
+/// abandoned rows from sitting in `open` forever, which reads as if the member
+/// still has a payment waiting.
+async fn expire_stale(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> Result<(), E> {
+    sqlx::query(
+        "UPDATE public.payment_intents
+            SET status = 'expired', updated_at = $2
+          WHERE user_id = $1 AND status IN ('reserved', 'open') AND expires_at <= $2",
+    )
+    .bind(user_id)
+    .bind(now())
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "expire stale payments"))?;
+    Ok(())
 }
 
 /// Closes Stripe pages a newer payment replaced, so they can't be paid. Best

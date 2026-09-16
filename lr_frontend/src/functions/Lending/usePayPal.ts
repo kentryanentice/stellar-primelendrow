@@ -28,7 +28,8 @@ export type PayPalNamespace = {
         createOrder: (data: unknown, actions: PayPalOrderActions) => Promise<string>
         onApprove: (data: { orderID: string }) => Promise<void>
         onError?: (err: unknown) => void
-        onCancel?: () => void
+        /** The member closed PayPal's window. Carries the order it abandoned. */
+        onCancel?: (data: { orderID?: string }) => void
     }) => PayPalButtonsInstance
 }
 

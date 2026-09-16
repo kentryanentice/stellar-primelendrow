@@ -49,6 +49,41 @@ pub struct OrderResponse {
     pub order_id: String,
 }
 
+#[derive(Deserialize)]
+pub struct CancelInput {
+    order_id: String,
+}
+
+/// POST /paypal/order/cancel — the member closed PayPal's window without
+/// paying.
+///
+/// Nothing was charged: a PayPal order is only ever captured after the engine
+/// claims its payment intent, and that only happens when the member confirms.
+/// What this releases is the HOLD the started payment has on their deposit
+/// limit, so cancelling and trying again doesn't cost them an hour's headroom.
+///
+/// Always answers 200: the member's own record is the only thing at stake, and
+/// an order that was already approved, captured or replaced is simply left
+/// alone.
+pub async fn cancel(
+    Extension(pool): Extension<PgPool>,
+    headers: HeaderMap,
+    Json(p): Json<CancelInput>,
+) -> Result<Json<CancelledResponse>, E> {
+    let user_id = require_verified_user(&pool, &headers).await?;
+    let order_id = p.order_id.trim();
+    if !order_id.is_empty() && order_id.len() <= 64 {
+        intents::cancel(&pool, user_id, order_id).await?;
+        tracing::info!(%user_id, order_id, "paypal order cancelled by the member");
+    }
+    Ok(Json(CancelledResponse { cancelled: true }))
+}
+
+#[derive(Serialize)]
+pub struct CancelledResponse {
+    pub cancelled: bool,
+}
+
 pub async fn create(
     Extension(pool): Extension<PgPool>,
     headers: HeaderMap,
