@@ -333,13 +333,64 @@ pub async fn abandon(pool: &PgPool, id: Uuid) {
     }
 }
 
+/// The member came back from Stripe without paying: close the checkout page so
+/// it can never be paid, then release the payment.
+///
+/// The order matters. A Stripe page stays payable after the member navigates
+/// away, so the record is only released once Stripe confirms the page is shut.
+/// If Stripe refuses — which is what happens when the page was in fact
+/// completed — the record is left exactly as it was, so the payment can still
+/// be applied (or refunded) through the ordinary path. Nothing is charged and
+/// nothing is credited here either way.
+pub async fn cancel_stripe(pool: &PgPool, user_id: Uuid, purpose: &str) -> Result<(), E> {
+    // The member's own live Stripe pages for this purpose. The cancel redirect
+    // carries no session id — Stripe only substitutes one into the success
+    // URL — so they are found by owner, which is equally specific: a member
+    // has at most one live checkout per purpose.
+    let sessions: Vec<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT id, provider_ref FROM public.payment_intents
+          WHERE user_id = $1 AND purpose = $2 AND rail = 'stripe'
+            AND status = 'open' AND expires_at > $3",
+    )
+    .bind(user_id)
+    .bind(purpose)
+    .bind(now())
+    .fetch_all(pool)
+    .await
+    .map_err(|e| db_err(e, "live stripe payments"))?;
+
+    for (id, provider_ref) in sessions {
+        let Some(session_id) = provider_ref else { continue };
+        if stripe::expire_session(&session_id).await.is_err() {
+            // Already completed, already expired, or Stripe was unreachable.
+            // Leaving it open is the safe reading: a paid page must still be
+            // applicable, and an unpaid one expires on its own within the hour.
+            tracing::info!(%user_id, session_id, "stripe page not closed on cancel — left to expire");
+            continue;
+        }
+        let released = sqlx::query(
+            "UPDATE public.payment_intents
+                SET status = 'expired', updated_at = $2, last_error = 'Cancelled by the member'
+              WHERE id = $1 AND status = 'open'",
+        )
+        .bind(id)
+        .bind(now())
+        .execute(pool)
+        .await
+        .map_err(|e| db_err(e, "release stripe payment"))?;
+        if released.rows_affected() == 1 {
+            tracing::info!(%user_id, session_id, "stripe checkout cancelled by the member");
+        }
+    }
+    Ok(())
+}
+
 /// The member closed PayPal's window without approving: release the payment
 /// now rather than leaving it holding their deposit limit until it expires.
 ///
 /// PayPal only, and deliberately: a PayPal order cannot be captured without a
-/// claim, so releasing one is safe. A Stripe checkout page can still be paid
-/// after the member navigates away, so those are left to expire (and a payment
-/// that lands on an expired one is refunded).
+/// claim, so releasing one is safe. Stripe's equivalent is `cancel_stripe`,
+/// which has to close the page with Stripe first.
 ///
 /// Nothing happens if it was already approved, captured or replaced.
 pub async fn cancel(pool: &PgPool, user_id: Uuid, provider_ref: &str) -> Result<(), E> {

@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, Lock } from 'lucide-react'
 import useMyFunds from '../../functions/Lending/useMyFunds'
 import usePayouts from '../../functions/Lending/usePayouts'
-import { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
+import useStripeCheckout, { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
 import { useToast } from '../../providers/useToast'
 import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
 import { payoutFee, receiveFee } from '../../functions/Lending/fees'
 import { PAYOUT_LABEL, payoutNeedsAttention, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
-import StripeButton from './StripeButton'
 
 type Tab = 'deposit' | 'withdraw'
 
@@ -36,6 +35,10 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const { me, params } = data
     const { confirmDeposit, confirming } = useMyFunds(onChanged)
     const { requestWithdrawal, withdrawing, withdrawals } = usePayouts()
+    // Deposits are PayPal-only on the page now; this is here for the return
+    // trip of a card payment started before that, so a cancelled one releases
+    // its hold instead of waiting out the hour.
+    const { cancelCheckout } = useStripeCheckout()
     const toast = useToast()
 
     // Coming back from Stripe Checkout. Unlike PayPal — where approval happens
@@ -48,11 +51,14 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
         const result = stripeCheckoutResult()
         if (!result) return
         if ('cancelled' in result) {
+            // Release the hold the started payment had on their deposit limit,
+            // rather than leaving it until it times out.
+            void cancelCheckout('deposit')
             toast.error('Payment cancelled — nothing was charged')
             return
         }
         void confirmDeposit({ session_id: result.sessionId })
-    }, [confirmDeposit, toast])
+    }, [cancelCheckout, confirmDeposit, toast])
 
     const [tab, setTab] = useState<Tab>('deposit')
     const [depositInput, setDepositInput] = useState('')
@@ -160,32 +166,10 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                             return confirmDeposit({ order_id: orderId })
                         }}
                     />
-                    {/* The card rail. Not an alternative *destination* — both
-                        land in the same pool and the same books — just a
-                        second way to pay in, for members without PayPal. The
-                        input isn't cleared here: this navigates away, and
-                        clearing it would leave a blank form behind if they
-                        cancel and come back. Only offered when the engine has
-                        Stripe switched on. */}
-                    {params.stripe_ready && (
-                        <StripeButton
-                            amountCentavos={depositBlocked ? null : depositCentavos}
-                            purpose='deposit'
-                            label={depositCentavos && !depositBlocked
-                                ? `Pay ${pesos(depositCentavos)} by card`
-                                : 'Pay by card'}
-                        />
-                    )}
                     {depositFees && depositCentavos && (
                         <p className='lending-muted lending-fee-note'>
                             PayPal keeps about {pesos(depositFees.paypal)}, so you’re credited about{' '}
                             <b>{pesos(depositCentavos - depositFees.paypal)}</b>.
-                            {params.stripe_ready && (
-                                <>
-                                    {' '}By card: about {pesos(depositFees.card)} fee,{' '}
-                                    <b>{pesos(depositCentavos - depositFees.card)}</b> credited.
-                                </>
-                            )}
                         </p>
                     )}
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}

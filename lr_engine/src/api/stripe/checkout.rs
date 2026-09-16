@@ -141,3 +141,40 @@ pub async fn start(
         session_id: session.id,
     }))
 }
+
+#[derive(Deserialize)]
+pub struct CancelInput {
+    /// "deposit" or "repay" — which of the member's live pages to close.
+    purpose: String,
+}
+
+#[derive(Serialize)]
+pub struct CancelledResponse {
+    pub cancelled: bool,
+}
+
+/// POST /stripe/checkout/cancel — the member came back from Stripe without
+/// paying.
+///
+/// Nothing was charged, and nothing reaches the books: money only ever enters
+/// through `/pool/deposit` or `/loans/repay` verifying a real payment. What
+/// this does is close the checkout page with Stripe and release the record it
+/// was holding — the same thing the PayPal rail does on cancel — so the
+/// member's deposit limit is free again immediately rather than in an hour.
+///
+/// A page that turns out to have been paid is left alone, so it can still be
+/// applied or refunded through the ordinary path.
+pub async fn cancel(
+    Extension(pool): Extension<PgPool>,
+    headers: HeaderMap,
+    Json(p): Json<CancelInput>,
+) -> Result<Json<CancelledResponse>, E> {
+    let user_id = require_verified_user(&pool, &headers).await?;
+    let purpose = match p.purpose.as_str() {
+        "deposit" => "deposit",
+        "repay" => "repay",
+        _ => return Err((StatusCode::UNPROCESSABLE_ENTITY, "Unknown payment purpose")),
+    };
+    intents::cancel_stripe(&pool, user_id, purpose).await?;
+    Ok(Json(CancelledResponse { cancelled: true }))
+}
