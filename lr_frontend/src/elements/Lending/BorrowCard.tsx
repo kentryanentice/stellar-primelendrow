@@ -6,6 +6,13 @@ import { pesos, rate, since, xlm, xlmRate } from '../../functions/Lending/money'
 import { PRODUCT_LABEL, type Loan, type PoolResponse, type Product } from '../../functions/Lending/types'
 import type { BorrowFormState } from '../../functions/Lending/useBorrowForm'
 
+const AMOUNT_SHARES = [
+    { pct: 25, label: '25%' },
+    { pct: 50, label: '50%' },
+    { pct: 75, label: '75%' },
+    { pct: 100, label: 'Max' },
+]
+
 /**
  * The apply wizard's form: product -> amount/term -> the ENGINE's quote
  * (rate, cap, collateral requirement — displayed verbatim, never computed
@@ -110,6 +117,17 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
     // first") is generic — when the blocker IS the open loan we already have
     // on hand (principal_outstanding), name the actual amount instead. Falls
     // back to the engine's string for any other ineligibility reason.
+    // Quick-fill shares of what can actually be borrowed right now: the
+    // engine's cap for this product (credit score, and for deposit-backed the
+    // withdrawable deposit), and never more than the pool's free cash, since
+    // a disbursement past that is refused. They only fill the input — the
+    // engine re-checks the amount against every one of those limits on apply.
+    const borrowable = productQuote ? Math.max(0, Math.min(productQuote.max_amount, data.pool.cash_available)) : 0
+    const amountShares = AMOUNT_SHARES.map(share => ({
+        ...share,
+        centavos: Math.floor((borrowable * share.pct) / 100),
+    }))
+
     const blocked = quote && !quote.eligible
     const blockedReason = blocked
         ? (openLoan ? `Open loan active — submission unlocks once ${pesos(openLoan.principal_outstanding)} is repaid.` : productQuote?.reason ?? 'You already have an open loan — repay it first.')
@@ -172,6 +190,25 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                                 value={amountInput}
                                 onChange={e => setAmountInput(e.target.value)}
                             />
+                            <div className='lending-amount-shares' role='group' aria-label='Fill a share of what you can borrow'>
+                                {amountShares.map(share => (
+                                    <button
+                                        key={share.pct}
+                                        type='button'
+                                        className={`lending-amount-share${amountCentavos === share.centavos && share.centavos > 0 ? ' is-active' : ''}`}
+                                        disabled={share.centavos < params.policy.min_loan}
+                                        title={share.centavos > 0 ? pesos(share.centavos) : undefined}
+                                        onClick={() => setAmountInput((share.centavos / 100).toFixed(2))}
+                                    >
+                                        {share.label}
+                                    </button>
+                                ))}
+                            </div>
+                            {productQuote && borrowable < productQuote.max_amount && (
+                                <small className='lending-muted'>
+                                    Limited to {pesos(borrowable)} — what the pool has free to lend right now.
+                                </small>
+                            )}
                         </div>
                         <div className='lending-field'>
                             <label className='lending-label' htmlFor='lending-borrow-term'>Term</label>

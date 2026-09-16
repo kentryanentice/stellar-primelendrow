@@ -61,6 +61,9 @@ export function BorrowCardSkeleton() {
                         <div className='lending-field'>
                             <span className='lending-label'><SkeletonBone width={80} height={12} /></span>
                             <div className='lending-input' aria-hidden='true'><SkeletonBone width={70} height={16} /></div>
+                            <div className='lending-amount-shares' aria-hidden='true'>
+                                {[0, 1, 2, 3].map(i => <SkeletonBone key={i} width='100%' height={27} radius={8} />)}
+                            </div>
                         </div>
                         <div className='lending-field'>
                             <span className='lending-label'><SkeletonBone width={40} height={12} /></span>

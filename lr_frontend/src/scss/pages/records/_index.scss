@@ -1,0 +1,255 @@
+@use '../../core/globals';
+@use '../../core/styles';
+
+/* The public loan book (pages/Records.tsx).
+
+   Built out of the lending pages' own pieces — .lending-card, .lending-loan,
+   .lending-rates-table, the split bar — so a loan reads the same here as it
+   does to the member who holds it. Only what exists nowhere else is defined
+   below: the page ground (it sits outside the app shell, under the landing
+   header), the filters, and the record's head, facts and timeline. */
+
+/* Same brand backdrop as the landing and auth pages — gradient base,
+   hero-bg texture, radial glow — since it sits under the same header and is
+   reached from the landing page. See .landing-bg for why the texture is fixed
+   and sized to 100lvh. */
+.records {
+    position: relative;
+    min-height: 100vh;
+    background: var(--auth-brand-grad);
+    // clear the fixed .site-header
+    padding-top: 72px;
+
+    // the texture's glow, above the texture and below the page
+    &::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background: radial-gradient(90% 60% at 75% 18%, rgba(var(--auth-primary-rgb), .32) 0%, rgba(var(--auth-primary-rgb), 0) 60%);
+    }
+
+    > .lending-page {
+        position: relative;
+        z-index: 2;
+    }
+}
+
+.records-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100lvh;
+    object-fit: cover;
+    opacity: .20;
+    mix-blend-mode: screen;
+    pointer-events: none;
+}
+
+.records-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--lending-link);
+    text-decoration: none;
+
+    svg { width: 15px; height: 15px; }
+
+    &:hover { color: #eef1f6; }
+}
+
+/* ---- the list ---- */
+
+.records-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .lending-tab-group { flex-wrap: wrap; }
+    .lending-tab {
+        flex: 1 1 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 8px 12px;
+        font-size: 12.5px;
+        white-space: nowrap;
+    }
+}
+
+.records-count {
+    min-width: 18px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.records-row {
+    text-decoration: none;
+
+    &:hover { background: rgba(255, 255, 255, .03); }
+    &:focus-visible { outline: 2px solid var(--auth-primary); outline-offset: -2px; }
+
+    .lending-loan-title span + span { color: #9fadc6; }
+}
+
+.records-ref {
+    margin-left: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #66748d;
+}
+
+/* ---- one loan ---- */
+
+.records-detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+
+    > div {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+    }
+}
+
+.records-detail-amount {
+    font-size: 24px;
+    font-weight: 700;
+    color: #eef1f6;
+    font-variant-numeric: tabular-nums;
+}
+
+.records-ref-full {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    color: #66748d;
+    overflow-wrap: anywhere;
+}
+
+.records-timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+
+    li {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        padding-left: 14px;
+
+        &::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 6px;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--auth-primary);
+        }
+
+        &.is-bad::before { background: #ff8f8f; }
+        &.is-good::before { background: #6fd99a; }
+    }
+
+    b { font-size: 12.5px; color: #dfe6f2; }
+    .lending-muted { font-size: 12px; }
+}
+
+.records-facts {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px;
+
+    > div {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, .03);
+    }
+
+    dt {
+        font-size: 11.5px;
+        color: #8492ac;
+    }
+
+    dd {
+        margin: 2px 0 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: #eef1f6;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.records-payment {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, .06);
+
+    &:first-of-type { border-top: 0; padding-top: 0; }
+}
+
+.records-payment-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+
+    > svg { width: 16px; height: 16px; margin-top: 2px; color: var(--auth-primary); flex-shrink: 0; }
+
+    > div {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+    }
+
+    b { font-size: 14px; color: #eef1f6; font-variant-numeric: tabular-nums; }
+}
+
+/* ---- loading (RecordsSkeleton.tsx) ---- */
+
+// the detail skeleton's cards stack with the page's own gap
+.records-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+// stands in for the payment's receipt icon, same box
+.records-skeleton-icon {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, .08);
+    flex-shrink: 0;
+}
+
+// the reference bone sits beside the amount bone, centred on it
+.records-ref .skeleton { vertical-align: middle; }
+
+@include styles.respond-to(phone) {
+    .records { padding-top: 64px; }
+    .records-detail-head { flex-direction: column; }
+}

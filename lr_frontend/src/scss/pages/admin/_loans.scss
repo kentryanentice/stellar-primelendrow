@@ -293,14 +293,38 @@
    Each payment is a .lending-card-split so it inherits the recipient colors
    the member-facing split card defines — one color per recipient everywhere. */
 
+/* The input takes the row; the button is a fixed square beside it. Both
+   inherit `width: 100%` from their lending classes, which in a flex row lets
+   the button crush the input — so both widths are set here explicitly. */
 .admin-interest-search {
     display: flex;
-    gap: 6px;
+    align-items: stretch;
+    gap: 8px;
     min-width: 0;
     flex: 1 1 260px;
-    max-width: 360px;
+    max-width: 380px;
 
-    .lending-btn { flex-shrink: 0; padding-inline: 12px; }
+    .lending-input {
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+        height: 40px;
+    }
+
+    .lending-btn {
+        flex: 0 0 40px;
+        width: 40px;
+        height: 40px;
+        min-height: 40px;
+        padding: 0;
+        border-radius: 10px;
+
+        &:hover:not(:disabled) {
+            border-color: var(--auth-primary);
+            color: #eef1f6;
+        }
+    }
+
     svg { width: 16px; height: 16px; }
 }
 

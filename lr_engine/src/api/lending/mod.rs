@@ -29,6 +29,7 @@ mod payout;
 mod policy;
 mod pool;
 mod pricing;
+mod public;
 mod quote;
 mod rails;
 mod recovery;
@@ -73,6 +74,8 @@ pub use payout::{list as payouts_list, request as payout_request};
 // disagree about which provider, or which idempotency key, a payout uses.
 pub(crate) use payout::submit_to as submit_payout;
 pub use pool::summary as pool_summary;
+// The anonymised loan book — the only lending reads that take no session.
+pub use public::{detail as public_loan, list as public_loans};
 pub use quote::quote as loan_quote;
 pub use repay::repay;
 pub use transactions::list as transactions_list;
