@@ -394,7 +394,13 @@ pub async fn list(
                 // `reconcile::arrears` is the same sum against the same rows.
                 arrears: recoveries
                     .iter()
-                    .filter(|r| r.0 == id && (r.2 == "guarantor_deposit" || r.2 == "reserve_fund"))
+                    // What third parties are still out of pocket: the
+                    // guarantors, plus whichever pool fund absorbed the rest
+                    // (045). The borrower's own seized assets are not arrears.
+                    .filter(|r| {
+                        r.0 == id
+                            && matches!(r.2.as_str(), "guarantor_deposit" | "recovery_fund" | "reserve_fund")
+                    })
                     .map(|r| r.4 - r.7)
                     .sum(),
                 id, borrower, product, principal, principal_outstanding, rate_bps,

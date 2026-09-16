@@ -26,7 +26,7 @@ export type AdminCollateral = {
 /** One settled step of the ARCHITECTURE §5.9 waterfall. */
 export type AdminRecovery = {
     step: number
-    source: 'borrower_deposit' | 'borrower_xlm' | 'guarantor_deposit' | 'reserve_fund'
+    source: 'borrower_deposit' | 'borrower_xlm' | 'guarantor_deposit' | 'recovery_fund' | 'reserve_fund'
     username: string | null
     amount: number
     /** How much of this step a settlement has given back. Only the guarantor

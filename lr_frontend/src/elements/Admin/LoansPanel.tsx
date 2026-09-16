@@ -53,7 +53,10 @@ const RECOVERY_LABEL: Record<string, string> = {
     borrower_deposit: 'Borrower deposit',
     borrower_xlm: 'Borrower XLM',
     guarantor_deposit: 'Guarantor deposit',
-    reserve_fund: 'Reserve fund',
+    // The risk band's remainder, funded by every repayment's interest split —
+    // the pot that absorbs defaults first (engine 045).
+    recovery_fund: 'Recovery fund',
+    reserve_fund: 'Lending reserve',
 }
 
 /** The unpaid remainder of one installment — what defaulting would call in. */

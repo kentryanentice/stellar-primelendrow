@@ -203,7 +203,7 @@ async fn build_loan_view(pool: &PgPool, rules: &Policy, fx: i64, row: LoanRow) -
         sqlx::query_scalar(
             "SELECT COALESCE(SUM(amount - refunded), 0)::BIGINT
                FROM public.loan_recoveries
-              WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'reserve_fund')",
+              WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'recovery_fund', 'reserve_fund')",
         )
         .bind(id)
         .fetch_one(pool)
