@@ -51,8 +51,26 @@ pub struct Progress {
 /// `posting` is the account the value came FROM, in the ledger's terms —
 /// `member_deposits` when a member's deposit was taken (their liability
 /// shrinks), `treasury_assets` when seized coins landed in the treasury,
-/// `reserve_fund` when the pool ate the rest. Every one of them is paired
-/// against `loans_receivable`: the debt is what recovery destroys.
+/// `recovery_fund` then `reserve_fund` when the pool ate the rest. Every one of
+/// them is paired against `loans_receivable`: the debt is what recovery
+/// destroys.
+/// What the recovery fund holds right now, never negative.
+///
+/// Credit-normal, so its postings sum to a negative number and the balance is
+/// that negated. The waterfall may take at most this much: a fund charged past
+/// its balance would be lending the pool money it never collected, and the
+/// deficit would sit in an account nobody reads as a debt.
+async fn recovery_fund_balance(tx: &mut Transaction<'_, Postgres>) -> Result<i64, E> {
+    let balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(-SUM(amount), 0)::BIGINT FROM public.ledger_postings
+          WHERE account = 'recovery_fund'",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "recovery fund balance"))?;
+    Ok(balance.max(0))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn apply(
     tx: &mut Transaction<'_, Postgres>,
@@ -404,11 +422,24 @@ pub async fn advance(
     // step means giving guarantors a collateral position of their own first.
 
     // ---- what nobody covered ----------------------------------------------
-    // The pool absorbs it. Booking the loss is not optional: leaving
-    // `loans_receivable` standing against a settled loan would overstate the
-    // pool's assets by exactly the amount it just lost.
+    // The pool absorbs it, and WHICH pot matters (045). The recovery fund is
+    // the one the published interest rule funds for exactly this — the rest of
+    // the risk band after guarantors — so it pays first, up to what it holds.
+    // The lending reserve, funded by the fixed 20% to keep the pool lending,
+    // covers only what the recovery fund cannot.
+    //
+    // Booking the loss is not optional: leaving `loans_receivable` standing
+    // against a settled loan would overstate the pool's assets by exactly the
+    // amount it just lost.
     if shortfall > 0 {
-        apply(tx, loan_id, 4, "reserve_fund", "reserve_fund", None, shortfall, None, actor_id).await?;
+        let from_recovery = shortfall.min(recovery_fund_balance(tx).await?);
+        if from_recovery > 0 {
+            apply(tx, loan_id, 4, "recovery_fund", "recovery_fund", None, from_recovery, None, actor_id).await?;
+            shortfall -= from_recovery;
+        }
+    }
+    if shortfall > 0 {
+        apply(tx, loan_id, 5, "reserve_fund", "reserve_fund", None, shortfall, None, actor_id).await?;
         shortfall = 0;
     }
 

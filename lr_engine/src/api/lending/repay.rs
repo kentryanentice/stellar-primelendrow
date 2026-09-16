@@ -288,15 +288,21 @@ pub async fn repay(
         // the pool has already written off would book a profit twice.
         //
         // So the payment undoes the loss instead: guarantors made whole first,
-        // then the reserve, then anything left back to the borrower. See
-        // `reconcile::settle` for why that order and not the strict reverse.
+        // then the recovery fund, then the lending reserve, then anything left
+        // back to the borrower. See `reconcile::settle` for why that order and
+        // not the strict reverse.
         let split = reconcile::settle(&mut tx, p.loan_id, user_id, applies).await?;
         if split.to_guarantors > 0 {
             postings.push(Posting { account: "member_deposits", amount: -split.to_guarantors });
         }
+        // The pots that absorbed the default, in the order they were charged
+        // (045): the recovery fund first, then the lending reserve.
+        if split.to_recovery > 0 {
+            postings.push(Posting { account: "recovery_fund", amount: -split.to_recovery });
+        }
         if split.to_reserve > 0 {
             postings.push(Posting { account: "reserve_fund", amount: -split.to_reserve });
-        }   
+        }
         if split.to_borrower > 0 {
             postings.push(Posting { account: "member_deposits", amount: -split.to_borrower });
         }
@@ -661,7 +667,7 @@ pub async fn repay(
     if let Some(split) = &settlement {
         tracing::info!(
             %user_id, loan_id = %p.loan_id, received,
-            guarantors = split.to_guarantors, reserve = split.to_reserve,
+            guarantors = split.to_guarantors, recovery = split.to_recovery, reserve = split.to_reserve,
             borrower = split.to_borrower, arrears_after,
             "default settlement received"
         );

@@ -90,7 +90,9 @@ const SCORE_RESTORE_ON_RECONCILE: i16 = 25;
 ///     case: their seized deposit *was* the payment.
 ///   * `guarantor_deposit` — somebody else's money, taken to cover this
 ///     borrower's debt. Still owed, and settling is what gives it back.
-///   * `reserve_fund` — the pool absorbed the rest. Still owed.
+///   * `recovery_fund` / `reserve_fund` — the pool absorbed the rest, the
+///     recovery fund first and the lending reserve for whatever was left
+///     (045). Still owed.
 ///
 /// So the sum below is over the last two only, net of anything a partial
 /// settlement has already refunded. That makes it exactly the pot
@@ -119,7 +121,7 @@ pub(in crate::api::lending) async fn arrears(
     let owed: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount - refunded), 0)::BIGINT
            FROM public.loan_recoveries
-          WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'reserve_fund')",
+          WHERE loan_id = $1 AND source IN ('guarantor_deposit', 'recovery_fund', 'reserve_fund')",
     )
     .bind(loan_id)
     .fetch_one(&mut **tx)
@@ -283,7 +285,10 @@ pub async fn reopen(
 pub(in crate::api::lending) struct Settlement {
     /// Refunded to guarantors who were charged, total.
     pub to_guarantors: i64,
-    /// Returned to the pool's reserve.
+    /// Returned to the recovery fund, which absorbs defaults first (045).
+    pub to_recovery: i64,
+    /// Returned to the pool's lending reserve, which covers whatever the
+    /// recovery fund could not.
     pub to_reserve: i64,
     /// Left over, and handed back to the borrower as a deposit lot.
     pub to_borrower: i64,
@@ -369,20 +374,29 @@ pub(in crate::api::lending) async fn settle(
         remaining -= pay;
     }
 
-    // ---- 2. the pool's reserve --------------------------------------------
+    // ---- 2. the pots that absorbed the rest --------------------------------
+    // Same order the waterfall charged them (045): the recovery fund first,
+    // then the lending reserve. Each is repaid only what it actually lost on
+    // this loan, net of any earlier partial settlement, so a peso can never be
+    // returned to a pot that never paid it.
+    let mut to_recovery = 0i64;
     let mut to_reserve = 0i64;
-    if remaining > 0 {
+    for (source, paid_back) in [("recovery_fund", &mut to_recovery), ("reserve_fund", &mut to_reserve)] {
+        if remaining == 0 {
+            break;
+        }
         let absorbed: Vec<(i64, i64, i64)> = sqlx::query_as(
             "SELECT id, amount, refunded
                FROM public.loan_recoveries
-              WHERE loan_id = $1 AND source = 'reserve_fund' AND refunded < amount
+              WHERE loan_id = $1 AND source = $2 AND refunded < amount
               ORDER BY id
               FOR UPDATE",
         )
         .bind(loan_id)
+        .bind(source)
         .fetch_all(&mut **tx)
         .await
-        .map_err(|e| db_err(e, "reserve absorbed"))?;
+        .map_err(|e| db_err(e, "pool absorbed"))?;
 
         for (recovery_id, amount, refunded) in absorbed {
             if remaining == 0 {
@@ -397,8 +411,8 @@ pub(in crate::api::lending) async fn settle(
                 .bind(recovery_id)
                 .execute(&mut **tx)
                 .await
-                .map_err(|e| db_err(e, "record reserve refund"))?;
-            to_reserve += pay;
+                .map_err(|e| db_err(e, "record pool refund"))?;
+            *paid_back += pay;
             remaining -= pay;
         }
     }
@@ -419,6 +433,7 @@ pub(in crate::api::lending) async fn settle(
 
     Ok(Settlement {
         to_guarantors,
+        to_recovery,
         to_reserve,
         to_borrower: remaining,
     })
