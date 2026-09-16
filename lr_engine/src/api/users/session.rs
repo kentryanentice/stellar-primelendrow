@@ -9,24 +9,39 @@ use uuid::Uuid;
 use super::shared::{
     UserResponse, clear_csrf_cookie, clear_legacy_domain_csrf_cookie, clear_session_cookie,
     csrf_cookie, csrf_cookie_name, extract_cookie_value, extract_session_id, new_csrf_token,
+    session_cookie_name,
 };
 
-/// A 401 from here means the browser's cookies no longer match a live
-/// session row; clear both auth cookies so the stale pair doesn't ride along
-/// (tripping the CSRF guard into 403s) for the rest of its Max-Age.
-fn unauthenticated(msg: &'static str) -> (StatusCode, HeaderMap, &'static str) {
+/// "Nobody is signed in" is an answer, not an error: `200` with a `null`
+/// body, so a signed-out visitor (the landing page, the public loan book)
+/// doesn't log a failed request on every page load. It grants nothing — no
+/// user, no CSRF token — and every protected endpoint checks the session
+/// cookie itself rather than trusting what this said.
+///
+/// When the browser *did* send cookies that no longer match a live session
+/// row, both are cleared so the stale pair doesn't ride along (tripping the
+/// CSRF guard into 403s) for the rest of its Max-Age.
+fn signed_out(stale_cookies: bool) -> (HeaderMap, Json<Option<UserResponse>>) {
     let mut headers = HeaderMap::new();
-    headers.append(SET_COOKIE, clear_session_cookie());
-    headers.append(SET_COOKIE, clear_csrf_cookie());
-    (StatusCode::UNAUTHORIZED, headers, msg)
+    if stale_cookies {
+        headers.append(SET_COOKIE, clear_session_cookie());
+        headers.append(SET_COOKIE, clear_csrf_cookie());
+    }
+    (headers, Json(None))
 }
 
 pub async fn session_handler(
     Extension(pool): Extension<PgPool>,
     headers: HeaderMap,
-) -> Result<(HeaderMap, Json<UserResponse>), (StatusCode, HeaderMap, &'static str)> {
+) -> Result<(HeaderMap, Json<Option<UserResponse>>), (StatusCode, HeaderMap, &'static str)> {
     let now = Utc::now().timestamp();
-    let sid = extract_session_id(&headers).ok_or_else(|| unauthenticated("Not authenticated"))?;
+    let Some(sid) = extract_session_id(&headers) else {
+        // No usable session cookie. A malformed one, or a leftover csrf
+        // cookie, is still worth clearing.
+        let leftover = extract_cookie_value(&headers, session_cookie_name()).is_some()
+            || extract_cookie_value(&headers, csrf_cookie_name()).is_some();
+        return Ok(signed_out(leftover));
+    };
 
     let row = sqlx::query!(
         "SELECT u.id AS \"id: Uuid\", u.username, u.email, u.role, s.expires_at
@@ -41,8 +56,10 @@ pub async fn session_handler(
     .map_err(|e| {
         tracing::error!("DB: {e}");
         (StatusCode::INTERNAL_SERVER_ERROR, HeaderMap::new(), "DB error")
-    })?
-    .ok_or_else(|| unauthenticated("Session expired or not found"))?;
+    })?;
+    let Some(row) = row else {
+        return Ok(signed_out(true));
+    };
 
     // separate runtime-checked query (not folded into the query! above) so
     // this needs no offline sqlx-data regeneration — display-only field
@@ -78,13 +95,13 @@ pub async fn session_handler(
 
     Ok((
         response_headers,
-        Json(UserResponse {
+        Json(Some(UserResponse {
             id: row.id,
             username: row.username,
             email: row.email,
             role: row.role,
             created_at,
             expires_at: row.expires_at,
-        }),
+        })),
     ))
 }

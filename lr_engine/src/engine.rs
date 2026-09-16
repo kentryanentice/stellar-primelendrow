@@ -14,7 +14,7 @@ use dotenvy::dotenv;
 use infra::csrf::enforce_csrf;
 use infra::db::init_db_pool;
 use infra::limiter::{ConcurrencyLimiter, enforce_concurrency};
-use infra::payload::{PayloadCipher, enforce_payload};
+use infra::payload::{PayloadCipher, enforce_payload, enforce_tunnel};
 use infra::rate::{RateLimiter, enforce_rate_limit};
 use routes::api_routes;
 use tower_http::{
@@ -188,7 +188,8 @@ async fn main() {
     // the only place a payout moves the books (028).
     infra::payouts::spawn(db_pool.clone());
 
-    let app = api_routes::routes(mail_rate_limiter)
+    let tunnel_cipher = payload_cipher.clone();
+    let api = api_routes::routes(mail_rate_limiter)
         // Innermost of the global layers: bodies are opened right before the
         // handlers and sealed right after, so CSRF, rate limits and CORS keep
         // working on headers exactly as before.
@@ -197,13 +198,31 @@ async fn main() {
         }))
         .layer(Extension(db_pool))
         .layer(Extension(kyc_storage))
+        // CSRF sits inside the tunnel: it decides on the real method and path
+        // ("GET is safe", the signed auth endpoints), which only exist once a
+        // `POST /x` has been unwrapped.
+        .layer(middleware::from_fn(enforce_csrf));
+
+    // Two routers, because axum runs `Router::layer` middleware *after*
+    // routing: a path rewritten inside the API router's own layers would
+    // already have been routed as `/x`. This outer router matches nothing, so
+    // every request reaches its fallback — the API router — and the layers
+    // below run first, the tunnel included; the API router then routes the
+    // real path the tunnel put back.
+    let app = axum::Router::new()
+        .fallback_service(api)
+        // Unwraps `POST /x` into the call it carries. Inside the rate and
+        // concurrency limits — neither reads the path — so a tunnelled body is
+        // only buffered for a client those limits have already let through.
+        .layer(middleware::from_fn(move |req, next| {
+            enforce_tunnel(tunnel_cipher.clone(), req, next)
+        }))
         .layer(middleware::from_fn(move |req, next| {
             enforce_rate_limit(rate_limiter.clone(), req, next)
         }))
         .layer(middleware::from_fn(move |req, next| {
             enforce_concurrency(limiter.clone(), req, next)
         }))
-        .layer(middleware::from_fn(enforce_csrf))
         .layer(cors)
         .layer(SetResponseHeaderLayer::if_not_present(
             axum::http::header::STRICT_TRANSPORT_SECURITY,

@@ -37,6 +37,12 @@
 //! are both accepted, so the engine can ship before the frontend does. Once
 //! every client encrypts, `PAYLOAD_ENCRYPTION_REQUIRED=true` refuses plaintext
 //! everywhere except the exempt paths.
+//!
+//! The tunnel (`enforce_tunnel`) goes one step further and hides *which*
+//! endpoint was called: every browser call is a `POST /x` whose sealed body
+//! carries the real method, path and query string ahead of the real body. It
+//! is unwrapped before CSRF and the routes run, so everything past it sees the
+//! original request. Direct calls keep working alongside it.
 
 use std::sync::Arc;
 
@@ -83,6 +89,34 @@ const EXEMPT_PATHS: &[&str] = &[
     "/stripe/return",
     "/stripe/refresh",
 ];
+
+/// The one path a tunnelled call shows. Deliberately meaningless.
+pub const TUNNEL_PATH: &str = "/x";
+/// The inner method/path/content-type header of a tunnelled call. A path and
+/// query string are short; this only bounds a malformed frame.
+const TUNNEL_HEAD_MAX: usize = 8 * 1024;
+/// The route isn't known until the frame is opened, so the tunnel has to
+/// allow the largest body any route takes (KYC). The route's own plaintext
+/// limit still applies once the request is unwrapped, and the rate and
+/// concurrency limits run before the tunnel buffers anything.
+const TUNNEL_SEALED_MAX: usize = KYC_SUBMIT_SEALED_MAX + 4 + TUNNEL_HEAD_MAX;
+
+/// Marks a request the tunnel has already opened, so `enforce_payload`
+/// doesn't try to open it again. A server-side extension: a client can't set it.
+#[derive(Clone, Copy)]
+struct Tunneled;
+
+/// What a tunnelled call really was. Short keys: it rides in every request.
+#[derive(serde::Deserialize)]
+struct TunnelHead {
+    /// Method.
+    m: String,
+    /// Path and query string, origin-form ("/loans/quote?amount=1").
+    p: String,
+    /// The body's content type, when there is a body.
+    #[serde(default)]
+    t: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct PayloadCipher {
@@ -149,7 +183,8 @@ impl PayloadCipher {
 /// Opens the request body before the handler sees it and seals the response
 /// body after. Headers-only concerns (CSRF, rate limits, CORS) are untouched.
 pub async fn enforce_payload(cipher: PayloadCipher, req: Request, next: Next) -> Response {
-    if req.method() == Method::OPTIONS {
+    // Opened by the tunnel already, and its response is sealed there.
+    if req.method() == Method::OPTIONS || req.extensions().get::<Tunneled>().is_some() {
         return next.run(req).await;
     }
     let path = req.uri().path().to_owned();
@@ -164,16 +199,7 @@ pub async fn enforce_payload(cipher: PayloadCipher, req: Request, next: Next) ->
     let Some(secret) = cipher.inner.secret.as_ref() else {
         return reject(StatusCode::BAD_REQUEST, "Payload encryption is not enabled on this server");
     };
-    let keys = key_header
-        .to_str()
-        .ok()
-        .and_then(|v| STANDARD.decode(v.trim()).ok())
-        .and_then(|epk| PublicKey::from_sec1_bytes(&epk).ok())
-        .and_then(|epk| {
-            let shared = diffie_hellman(secret.to_nonzero_scalar(), epk.as_affine());
-            directional_keys(shared.raw_secret_bytes())
-        });
-    let Some((request_key, response_key)) = keys else {
+    let Some((request_key, response_key)) = request_keys(secret, key_header) else {
         return reject(StatusCode::BAD_REQUEST, "Invalid payload key");
     };
 
@@ -211,6 +237,126 @@ pub async fn enforce_payload(cipher: PayloadCipher, req: Request, next: Next) ->
 
     let response = next.run(Request::from_parts(parts, body)).await;
     seal_response(response, &response_key, &aad).await
+}
+
+/// Unwraps a tunnelled call (`POST /x`) back into the request it carries.
+///
+/// The sealed body is `u32 big-endian head length || head JSON || real body`,
+/// opened under the AAD `"POST /x"`. The head names the real method and
+/// path-and-query; the request is rebuilt with those, the real body and its
+/// content type, and every original header and extension (cookies, the CSRF
+/// token, the client's address) — then passed on, so CSRF, the route's body
+/// limit, the handler and its logs all see the original call. The response
+/// is sealed under `"POST /x <status>"`, the address the browser used.
+///
+/// Anything that isn't `/x` passes straight through untouched.
+pub async fn enforce_tunnel(cipher: PayloadCipher, req: Request, next: Next) -> Response {
+    if req.uri().path() != TUNNEL_PATH || req.method() == Method::OPTIONS {
+        return next.run(req).await;
+    }
+    if req.method() != Method::POST {
+        return reject(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed");
+    }
+    let Some(secret) = cipher.inner.secret.as_ref() else {
+        return reject(StatusCode::BAD_REQUEST, "Payload encryption is not enabled on this server");
+    };
+    let Some((request_key, response_key)) =
+        req.headers().get(KEY_HEADER).and_then(|key_header| request_keys(secret, key_header))
+    else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid payload key");
+    };
+    if !req.headers().get(ENCRYPTED_HEADER).is_some_and(|v| v == "1") {
+        return reject(StatusCode::BAD_REQUEST, "Encrypted payload required");
+    }
+
+    let aad = format!("POST {TUNNEL_PATH}");
+    let (mut parts, body) = req.into_parts();
+    let Ok(sealed) = to_bytes(body, TUNNEL_SEALED_MAX).await else {
+        return reject(StatusCode::PAYLOAD_TOO_LARGE, "Payload too large");
+    };
+    let Some(plain) = open(&request_key, aad.as_bytes(), &sealed) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid encrypted payload");
+    };
+    let Some((head, inner_body)) = split_tunnel_frame(plain) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid encrypted payload");
+    };
+    let Some((method, uri)) = tunnel_target(&head) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid encrypted payload");
+    };
+
+    parts.method = method;
+    parts.uri = uri;
+    parts.headers.remove(KEY_HEADER);
+    parts.headers.remove(ENCRYPTED_HEADER);
+    parts.headers.remove(TYPE_HEADER);
+    if inner_body.is_empty() {
+        parts.headers.remove(header::CONTENT_TYPE);
+        parts.headers.remove(header::CONTENT_LENGTH);
+    } else {
+        let content_type = head
+            .t
+            .as_deref()
+            .and_then(|t| HeaderValue::from_str(t).ok())
+            .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+        parts.headers.insert(header::CONTENT_TYPE, content_type);
+        parts.headers.insert(header::CONTENT_LENGTH, HeaderValue::from(inner_body.len()));
+    }
+    parts.extensions.insert(Tunneled);
+
+    let response = next.run(Request::from_parts(parts, Body::from(inner_body))).await;
+    seal_response(response, &response_key, &aad).await
+}
+
+/// `u32 BE head length || head JSON || body` -> (head, body).
+fn split_tunnel_frame(mut plain: Vec<u8>) -> Option<(TunnelHead, Vec<u8>)> {
+    let len_bytes: [u8; 4] = plain.get(..4)?.try_into().ok()?;
+    let head_len = u32::from_be_bytes(len_bytes) as usize;
+    if head_len > TUNNEL_HEAD_MAX {
+        return None;
+    }
+    let head: TunnelHead = serde_json::from_slice(plain.get(4..4 + head_len)?).ok()?;
+    // In place rather than copied out: the body can be a 24MB KYC upload.
+    plain.drain(..4 + head_len);
+    Some((head, plain))
+}
+
+/// The real method and origin-form URI a tunnel head names — refusing
+/// anything that isn't a plain API call: another host, the tunnel itself, or
+/// the provider endpoints that are never called from the browser.
+fn tunnel_target(head: &TunnelHead) -> Option<(Method, axum::http::Uri)> {
+    let method = match head.m.as_str() {
+        "GET" => Method::GET,
+        "POST" => Method::POST,
+        "PUT" => Method::PUT,
+        "PATCH" => Method::PATCH,
+        "DELETE" => Method::DELETE,
+        _ => return None,
+    };
+    if !head.p.starts_with('/') || head.p.starts_with("//") {
+        return None;
+    }
+    let uri: axum::http::Uri = head.p.parse().ok()?;
+    if uri.scheme().is_some() || uri.authority().is_some() {
+        return None;
+    }
+    if uri.path() == TUNNEL_PATH || EXEMPT_PATHS.contains(&uri.path()) {
+        return None;
+    }
+    Some((method, uri))
+}
+
+/// ECDH against the client's one-off key in `x-payload-key`, then HKDF:
+/// (request key, response key). None for a header that isn't a P-256 point.
+fn request_keys(secret: &SecretKey, key_header: &HeaderValue) -> Option<([u8; 32], [u8; 32])> {
+    key_header
+        .to_str()
+        .ok()
+        .and_then(|v| STANDARD.decode(v.trim()).ok())
+        .and_then(|epk| PublicKey::from_sec1_bytes(&epk).ok())
+        .and_then(|epk| {
+            let shared = diffie_hellman(secret.to_nonzero_scalar(), epk.as_affine());
+            directional_keys(shared.raw_secret_bytes())
+        })
 }
 
 async fn seal_response(response: Response, key: &[u8; 32], request_aad: &str) -> Response {
@@ -339,6 +485,12 @@ mod tests {
                 }),
             )
             .route("/hello", get(|| async { Json(json!({ "hello": "world" })) }))
+            .route(
+                "/where",
+                get(|uri: axum::http::Uri| async move {
+                    Json(json!({ "path": uri.path(), "query": uri.query() }))
+                }),
+            )
             .route("/stripe/webhook", post(|| async { "ok" }))
             .route("/logout", post(|| async { StatusCode::NO_CONTENT }))
             .layer(middleware::from_fn(move |req, next| {
@@ -485,6 +637,138 @@ mod tests {
         let response = app(cipher).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(response.headers().get(ENCRYPTED_HEADER).is_none());
+    }
+
+    /// The engine's shape: the tunnel on an outer router whose fallback is the
+    /// API router, so the rewritten path is what gets routed.
+    fn tunnelled_app(cipher: PayloadCipher) -> Router {
+        let tunnel = cipher.clone();
+        Router::new()
+            .fallback_service(app(cipher))
+            .layer(middleware::from_fn(move |req, next| enforce_tunnel(tunnel.clone(), req, next)))
+    }
+
+    fn frame(head: Value, body: &[u8]) -> Vec<u8> {
+        let head = serde_json::to_vec(&head).unwrap();
+        let mut out = (head.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&head);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn tunnel_request(epk: &str, request_key: &[u8; 32], aad: &str, plain: &[u8]) -> Request {
+        Request::post(TUNNEL_PATH)
+            .header(KEY_HEADER, epk)
+            .header(ENCRYPTED_HEADER, "1")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(Body::from(seal(request_key, aad.as_bytes(), plain).unwrap()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tunnel_carries_a_get_with_its_query_string() {
+        let cipher = server(true);
+        let (epk, request_key, response_key) = client(&cipher, 20);
+        let plain = frame(json!({ "m": "GET", "p": "/where?page=2&status=active" }), b"");
+        let request = tunnel_request(&epk, &request_key, "POST /x", &plain);
+
+        let response = tunnelled_app(cipher).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let plain = open(&response_key, b"POST /x 200", &body_bytes(response).await)
+            .expect("the response is sealed to the address the browser used");
+        let seen: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(seen, json!({ "path": "/where", "query": "page=2&status=active" }));
+    }
+
+    #[tokio::test]
+    async fn tunnel_carries_a_post_body_and_its_content_type() {
+        let cipher = server(true);
+        let (epk, request_key, response_key) = client(&cipher, 21);
+        let plain = frame(json!({ "m": "POST", "p": "/echo", "t": "application/json" }), br#"{"amount":1500}"#);
+        let request = tunnel_request(&epk, &request_key, "POST /x", &plain);
+
+        let response = tunnelled_app(cipher).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let plain = open(&response_key, b"POST /x 201", &body_bytes(response).await).unwrap();
+        let echoed: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(echoed["content_type"], "application/json");
+        assert_eq!(echoed["body"], r#"{"amount":1500}"#);
+    }
+
+    #[tokio::test]
+    async fn tunnel_keeps_the_real_method() {
+        let cipher = server(true);
+        let (epk, request_key, _) = client(&cipher, 22);
+        // /hello is GET-only: a POST carried inside must still be refused.
+        let plain = frame(json!({ "m": "POST", "p": "/hello" }), b"");
+        let response = tunnelled_app(cipher)
+            .oneshot(tunnel_request(&epk, &request_key, "POST /x", &plain))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn tunnel_refuses_plaintext_and_foreign_ciphertext() {
+        let cipher = server(false);
+        let plaintext = Request::post(TUNNEL_PATH)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"m":"GET","p":"/hello"}"#))
+            .unwrap();
+        let response = tunnelled_app(cipher.clone()).oneshot(plaintext).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Sealed for a different address than the one it was sent to.
+        let (epk, request_key, _) = client(&cipher, 23);
+        let plain = frame(json!({ "m": "GET", "p": "/hello" }), b"");
+        let response = tunnelled_app(cipher)
+            .oneshot(tunnel_request(&epk, &request_key, "POST /hello", &plain))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn tunnel_refuses_targets_that_are_not_api_calls() {
+        let cipher = server(true);
+        for (seed, path) in [
+            (24u8, "/stripe/webhook"),
+            (25, "/x"),
+            (26, "//evil.example/hello"),
+            (27, "https://evil.example/hello"),
+            (28, "hello"),
+        ] {
+            let (epk, request_key, _) = client(&cipher, seed);
+            let plain = frame(json!({ "m": "POST", "p": path }), b"{}");
+            let response = tunnelled_app(cipher.clone())
+                .oneshot(tunnel_request(&epk, &request_key, "POST /x", &plain))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn tunnel_refuses_a_malformed_frame() {
+        let cipher = server(true);
+        let (epk, request_key, _) = client(&cipher, 29);
+        let mut plain = frame(json!({ "m": "GET", "p": "/hello" }), b"");
+        plain[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        let response = tunnelled_app(cipher)
+            .oneshot(tunnel_request(&epk, &request_key, "POST /x", &plain))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn direct_calls_still_work_beside_the_tunnel() {
+        let cipher = server(true);
+        let (epk, _, response_key) = client(&cipher, 30);
+        let request = Request::get("/hello").header(KEY_HEADER, &epk).body(Body::empty()).unwrap();
+        let response = tunnelled_app(cipher).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(open(&response_key, b"GET /hello 200", &body_bytes(response).await).is_some());
     }
 
     #[tokio::test]

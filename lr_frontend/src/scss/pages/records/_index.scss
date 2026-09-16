@@ -34,6 +34,31 @@
         position: relative;
         z-index: 2;
     }
+
+    /* Glass rather than the app's solid panel, so the backdrop reads through —
+       same frosted treatment as the auth page's quote card. Scoped here: the
+       signed-in lending pages keep their solid cards. */
+    .lending-card {
+        background: color-mix(in srgb, var(--auth-panel-bg) 70%, transparent);
+        border-color: rgba(255, 255, 255, .1);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+    }
+
+    /* The book's totals (Applications → Interest collected) sit straight on
+       the backdrop rather than inside a card, so their near-clear tile needs
+       more body — a touch lighter than the cards so they still read as tiles. */
+    > .lending-page > .lending-pool-tiles .lending-funds-tile {
+        background: color-mix(in srgb, var(--auth-panel-bg) 60%, transparent);
+        border-color: rgba(255, 255, 255, .1);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+
+        &.is-good {
+            background: color-mix(in srgb, #6fd99a 10%, color-mix(in srgb, var(--auth-panel-bg) 60%, transparent));
+            border-color: rgba(111, 217, 154, .25);
+        }
+    }
 }
 
 .records-bg {
