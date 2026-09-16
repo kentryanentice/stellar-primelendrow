@@ -207,7 +207,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     )}
                     <button
                         type='button'
-                        className='lending-btn-primary'
+                        className='lending-btn-primary lending-btn-withdraw'
                         disabled={!withdrawCentavos || withdrawTooBig || withdrawing}
                         onClick={async () => {
                             if (!withdrawCentavos) return

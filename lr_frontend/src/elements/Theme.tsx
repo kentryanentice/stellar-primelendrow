@@ -21,6 +21,7 @@ function Header() {
                 <span className="site-header__brand-text">Prime<span>LendRow</span></span>
             </Link>
             <div className="site-header__actions">
+                <Link to="/records" className="site-header__link">Loan records</Link>
                 <Link to="/auth" className="site-header__cta">Get Started</Link>
                 {accentButton}
             </div>

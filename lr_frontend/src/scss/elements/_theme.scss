@@ -56,6 +56,21 @@
         gap: 12px;
     }
 
+    // the public loan book — a quiet text link beside the call to action
+    &__link {
+        font-size: var(--font-size-15);
+        font-weight: var(--font-weight-500);
+        color: var(--color-text);
+        text-decoration: none;
+        opacity: .8;
+        white-space: nowrap;
+        transition: var(--transition);
+
+        &:hover { opacity: 1; }
+
+        @include styles.respond-to(phone) { font-size: 13px; }
+    }
+
     &__cta {
         display: inline-flex;
         align-items: center;

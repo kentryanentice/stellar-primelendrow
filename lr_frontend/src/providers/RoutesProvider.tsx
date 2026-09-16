@@ -24,6 +24,9 @@ const Lending = lazy(() => import('../pages/Lending'))
 const Borrow = lazy(() => import('../pages/Borrow'))
 // Pay pulls the PayPal bootstrap (repayment) — split out the same way
 const Pay = lazy(() => import('../pages/Pay'))
+// The public loan book — mostly visited signed out, so none of the app's
+// weight should ride along with it
+const Records = lazy(() => import('../pages/Records'))
 
 // shared across every page behind the sidebar so the Sidebar (and its
 // collapsed/active state) survives client-side navigation instead of
@@ -47,6 +50,8 @@ function RoutesProvider() {
                             <Routes>
                                 <Route path='/' element={<> <Theme /> <SEOProvider {...seoConfigTypes} /> <Landing /> </>} />
                                 <Route path='/auth' element={<> <SEOProvider {...seoConfigTypes} /> <Auth /> </>} />
+                                <Route path='/records' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><Records /></Suspense> </>} />
+                                <Route path='/records/:loanId' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><Records /></Suspense> </>} />
                                 <Route element={<AppShellLayout />}>
                                     <Route path='/dashboard' element={<> <SEOProvider {...seoConfigTypes} /> <Dashboard /> </>} />
                                     <Route path='/lending' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><Lending /></Suspense> </>} />

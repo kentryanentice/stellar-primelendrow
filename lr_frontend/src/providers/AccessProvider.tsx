@@ -7,6 +7,8 @@ interface Props {
 }
 
 const PUBLIC_ROUTES = ['/', '/auth']
+/** Open to everyone, signed in or not, with no redirect either way. */
+const OPEN_ROUTES = ['/records']
 const ADMIN_ROUTES = ['/dashboard', '/admin', '/settings', '/lending', '/borrow', '/pay']
 const USER_ROUTES = ['/dashboard', '/settings', '/verification', '/lending', '/borrow', '/pay']
 
@@ -14,6 +16,10 @@ function AccessProvider({ children }: Props) {
     const { loading, user } = useSession()
     const location = useLocation()
     const { pathname } = location
+
+    // Before the session check: these pages don't depend on who is looking,
+    // so they needn't wait for the session to load either.
+    if (OPEN_ROUTES.some(r => pathname === r || pathname.startsWith(`${r}/`))) return <>{children}</>
 
     if (loading && !user) return <div className='loader' />
 
