@@ -109,6 +109,31 @@ pub async fn repay(
             return Err(e);
         }
     };
+
+    Ok(Json(apply_captured(&pool, &rules, user_id, p.loan_id, &claimed, rail, &captured).await?))
+}
+
+/// Everything that happens once the money is confirmed: allocate it, split the
+/// interest, move the lots, record it, close the loan if it's the last payment.
+///
+/// Separate from the handler above because the request is not the only thing
+/// that can get this far. If the engine stops between the provider saying
+/// "captured" and this work being written down, the money is real and the loan
+/// knows nothing about it — and the fix is to finish the payment, not to hand
+/// it back and make the borrower pay twice. `intents::recover_stuck_captures`
+/// calls this with the same arguments the handler would have.
+///
+/// Still exact (041): if what arrived is no longer what the loan owes, it is
+/// refunded in full here rather than applied as more or less than is due.
+pub(crate) async fn apply_captured(
+    pool: &PgPool,
+    rules: &policy::Policy,
+    user_id: Uuid,
+    loan_id: Uuid,
+    claimed: &intents::Claimed,
+    rail: &'static str,
+    captured: &rails::CapturedPayment,
+) -> Result<RepayResponse, E> {
     // Three numbers, kept apart (043):
     //   received      the gross the borrower paid
     //   applies       exactly what reaches the loan — the installment or arrears
@@ -130,7 +155,7 @@ pub async fn repay(
         "SELECT borrower_id, product, principal_outstanding, status
            FROM public.loans WHERE id = $1 FOR UPDATE",
     )
-    .bind(p.loan_id)
+    .bind(loan_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| db_err(e, "lock loan"))?;
@@ -165,7 +190,7 @@ pub async fn repay(
               ORDER BY installment
               FOR UPDATE",
         )
-        .bind(p.loan_id)
+        .bind(loan_id)
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| db_err(e, "lock schedule"))?;
@@ -182,7 +207,7 @@ pub async fn repay(
     // is money already taken, so it is given back in full rather than applied
     // as more or less than the installment (041).
     let due_now = if settling {
-        Some(reconcile::arrears(&mut tx, p.loan_id).await?)
+        Some(reconcile::arrears(&mut tx, loan_id).await?)
     } else {
         let rows: Vec<(i16, i64, i64, i64, i64)> = schedule
             .iter()
@@ -192,7 +217,7 @@ pub async fn repay(
     };
     if received != claimed.amount || due_now != Some(applies) {
         drop(tx);
-        return Err(intents::refund(&pool, &claimed, &captured.capture_id, "repayment no longer matched the amount due").await);
+        return Err(intents::refund(pool, claimed, &captured.capture_id, "repayment no longer matched the amount due").await);
     }
 
     // Allocation, oldest installment first — for an ordinary repayment.
@@ -291,7 +316,7 @@ pub async fn repay(
         // then the recovery fund, then the lending reserve, then anything left
         // back to the borrower. See `reconcile::settle` for why that order and
         // not the strict reverse.
-        let split = reconcile::settle(&mut tx, p.loan_id, user_id, applies).await?;
+        let split = reconcile::settle(&mut tx, loan_id, user_id, applies).await?;
         if split.to_guarantors > 0 {
             postings.push(Posting { account: "member_deposits", amount: -split.to_guarantors });
         }
@@ -325,7 +350,7 @@ pub async fn repay(
               WHERE g.loan_id = $1 AND g.status = 'accepted'
               ORDER BY g.guarantor_id",
         )
-        .bind(p.loan_id)
+        .bind(loan_id)
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| db_err(e, "guarantor stakes"))?;
@@ -390,7 +415,7 @@ pub async fn repay(
         EventDraft {
             kind: "repayment_received",
             user_id: Some(user_id),
-            loan_id: Some(p.loan_id),
+            loan_id: Some(loan_id),
             deposit_id: None,
             rail_ref: Some(captured.capture_id.clone()),
             payload: serde_json::json!({
@@ -416,7 +441,7 @@ pub async fn repay(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)",
         )
         .bind(event_id)
-        .bind(p.loan_id)
+        .bind(loan_id)
         .bind(rules.id)
         .bind(interest_total)
         .bind(parts.platform)
@@ -449,7 +474,7 @@ pub async fn repay(
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(event_id)
-        .bind(p.loan_id)
+        .bind(loan_id)
         .bind(credit.user_id)
         .bind(credit.role)
         .bind(credit.weight)
@@ -478,7 +503,7 @@ pub async fn repay(
              fee_paid, provider_fee)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
-    .bind(p.loan_id)
+    .bind(loan_id)
     .bind(user_id)
     // What was applied to the loan; the fee paid on top is its own column.
     .bind(applies)
@@ -515,7 +540,7 @@ pub async fn repay(
         sqlx::query("UPDATE public.loans SET principal_outstanding = $1, updated_at = $2 WHERE id = $3")
             .bind(outstanding_after)
             .bind(now)
-            .bind(p.loan_id)
+            .bind(loan_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "update outstanding"))?;
@@ -527,9 +552,9 @@ pub async fn repay(
         // Unlocked in proportion to the principal returned, pro-rata across
         // the members funding it, with the final payment unlocking the rest.
         if principal_total > 0 {
-            let locked = lots::locked_funding(&mut tx, p.loan_id).await?;
+            let locked = lots::locked_funding(&mut tx, loan_id).await?;
             let release = domain::funding_to_release(locked, principal_total, outstanding_before);
-            lots::release_funding_pro_rata(&mut tx, p.loan_id, release).await?;
+            lots::release_funding_pro_rata(&mut tx, loan_id, release).await?;
         }
     }
 
@@ -545,19 +570,19 @@ pub async fn repay(
     let loan_status = if fully_paid {
         sqlx::query("UPDATE public.loans SET status = 'closed', closed_at = $1, updated_at = $1 WHERE id = $2")
             .bind(now)
-            .bind(p.loan_id)
+            .bind(loan_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "close loan"))?;
 
         // Collateral goes home, whatever shape it took.
-        lots::release_loan_lots(&mut tx, p.loan_id, &["collateral", "pledged"]).await?;
+        lots::release_loan_lots(&mut tx, loan_id, &["collateral", "pledged"]).await?;
         sqlx::query(
             "UPDATE public.loan_guarantors SET status = 'released', updated_at = $1
               WHERE loan_id = $2 AND status = 'accepted'",
         )
         .bind(now)
-        .bind(p.loan_id)
+        .bind(loan_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| db_err(e, "release guarantors"))?;
@@ -578,7 +603,7 @@ pub async fn repay(
                 "SELECT id FROM public.xlm_collateral
                   WHERE loan_id = $1 AND status = 'locked'",
             )
-            .bind(p.loan_id)
+            .bind(loan_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| db_err(e, "collateral position"))?;
@@ -625,7 +650,7 @@ pub async fn repay(
                 .bind(user_id)
                 .bind(old_score)
                 .bind(new_score)
-                .bind(format!("loan {} repaid in full", p.loan_id))
+                .bind(format!("loan {} repaid in full", loan_id))
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| db_err(e, "score log"))?;
@@ -637,7 +662,7 @@ pub async fn repay(
             EventDraft {
                 kind: "loan_closed",
                 user_id: Some(user_id),
-                loan_id: Some(p.loan_id),
+                loan_id: Some(loan_id),
                 deposit_id: None,
                 rail_ref: None,
                 payload: serde_json::json!({ "product": product }),
@@ -658,7 +683,7 @@ pub async fn repay(
     // working down, and the one an admin needs at zero before they can accept
     // the settlement.
     let arrears_after = if settling {
-        reconcile::arrears(&mut tx, p.loan_id).await?
+        reconcile::arrears(&mut tx, loan_id).await?
     } else {
         0
     };
@@ -666,16 +691,16 @@ pub async fn repay(
     tx.commit().await.map_err(|e| db_err(e, "commit repay"))?;
     if let Some(split) = &settlement {
         tracing::info!(
-            %user_id, loan_id = %p.loan_id, received,
+            %user_id, loan_id = %loan_id, received,
             guarantors = split.to_guarantors, recovery = split.to_recovery, reserve = split.to_reserve,
             borrower = split.to_borrower, arrears_after,
             "default settlement received"
         );
     } else {
-        tracing::info!(%user_id, loan_id = %p.loan_id, received, interest_total, principal_total, "repayment received");
+        tracing::info!(%user_id, loan_id = %loan_id, received, interest_total, principal_total, "repayment received");
     }
 
-    Ok(Json(RepayResponse {
+    Ok(RepayResponse {
         amount_received: applies,
         fee_paid,
         interest_paid: interest_total,
@@ -695,5 +720,5 @@ pub async fn repay(
         } else {
             "Payment received and applied"
         },
-    }))
+    })
 }

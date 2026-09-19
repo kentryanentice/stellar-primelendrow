@@ -455,9 +455,12 @@ const CAPTURE_SWEEP_SECS: u64 = 5 * 60;
 /// that money is in the platform's balance and in nobody's books.
 ///
 /// So, for each stuck payment, ask the provider what actually happened:
-/// - **Money was taken** — refund it in full and record that (`refund`), the
-///   same thing the engine does for any payment it can't apply. Nothing is
-///   left unbooked and the member pays again cleanly.
+/// - **Money was taken** — finish the payment: apply the repayment to the loan,
+///   or credit the deposit, exactly as the interrupted request would have. The
+///   member paid what was due and they get what they paid for; being charged
+///   and then refunded, only to pay again, is not a resolution. The apply path
+///   is the same code the request uses, so it is just as exact — and if what
+///   arrived no longer matches what the loan owes, *that* path refunds it.
 /// - **Nothing was taken** — mark it expired, which releases the loan.
 /// - **The provider can't be reached** — leave it for the next sweep. A
 ///   payment is never concluded on a guess.
@@ -471,13 +474,13 @@ pub fn spawn_capture_recovery(pool: PgPool) {
     });
 }
 
-/// id, user_id, rail, provider_ref, loan_id, amount, applies
-type StuckRow = (Uuid, Uuid, String, String, Option<Uuid>, i64, Option<i64>);
+/// id, user_id, purpose, rail, provider_ref, loan_id, amount, applies
+type StuckRow = (Uuid, Uuid, String, String, String, Option<Uuid>, i64, Option<i64>);
 
 async fn recover_stuck_captures(pool: &PgPool) {
     let cutoff = now() - STUCK_CAPTURE_SECS;
     let stuck: Vec<StuckRow> = match sqlx::query_as(
-        "SELECT id, user_id, rail, provider_ref, loan_id, amount, applies
+        "SELECT id, user_id, purpose, rail, provider_ref, loan_id, amount, applies
            FROM public.payment_intents
           WHERE status = 'capturing' AND provider_ref IS NOT NULL AND updated_at <= $1
           ORDER BY updated_at",
@@ -493,7 +496,7 @@ async fn recover_stuck_captures(pool: &PgPool) {
         }
     };
 
-    for (id, user_id, rail, provider_ref, loan_id, amount, applies) in stuck {
+    for (id, user_id, purpose, rail, provider_ref, loan_id, amount, applies) in stuck {
         let owner = user_id.to_string();
         let found = match rail.as_str() {
             "paypal" => paypal::captured_order(&provider_ref, &owner).await,
@@ -512,15 +515,44 @@ async fn recover_stuck_captures(pool: &PgPool) {
 
         match found {
             Ok(Some(captured)) => {
-                let claimed = Claimed {
-                    id,
-                    rail: if rail == "paypal" { "paypal" } else { "stripe" },
-                    loan_id,
-                    amount,
-                    applies,
+                let rail: &'static str = if rail == "paypal" { "paypal" } else { "stripe" };
+                let claimed = Claimed { id, rail, loan_id, amount, applies };
+                tracing::warn!(intent = %id, %provider_ref, %purpose, "interrupted payment was charged — finishing it");
+                // The intent is still `capturing`, which is exactly the state
+                // both paths expect to consume, so this is the interrupted
+                // request resuming rather than a second one.
+                let finished = match (purpose.as_str(), loan_id) {
+                    ("repay", Some(loan)) => {
+                        let rules = match policy::active(pool).await {
+                            Ok(rules) => rules,
+                            Err(_) => continue,
+                        };
+                        super::repay::apply_captured(pool, &rules, user_id, loan, &claimed, rail, &captured)
+                            .await
+                            .map(|applied| format!(
+                                "applied {} to loan {loan} ({} interest, {} principal)",
+                                applied.amount_received, applied.interest_paid, applied.principal_paid
+                            ))
+                    }
+                    ("deposit", _) => {
+                        super::deposit::credit(pool, user_id, &claimed, rails::Captured { rail, payment: captured })
+                            .await
+                            .map(|credited| format!("credited {} to the member's balance", credited.amount))
+                    }
+                    (other, _) => {
+                        tracing::error!(intent = %id, purpose = other, "stuck capture with no way to finish it");
+                        continue;
+                    }
                 };
-                tracing::warn!(intent = %id, %provider_ref, "interrupted payment was charged — refunding");
-                refund(pool, &claimed, &captured.capture_id, "the engine was interrupted mid-payment").await;
+                match finished {
+                    Ok(what) => tracing::warn!(intent = %id, %provider_ref, "interrupted payment finished — {what}"),
+                    // `apply_captured` and `credit` refund anything they can't
+                    // apply, so the money is settled either way; this is the
+                    // outcome, not an unresolved error.
+                    Err((status, message)) => {
+                        tracing::warn!(intent = %id, %provider_ref, %status, "interrupted payment not applied — {message}")
+                    }
+                }
             }
             Ok(None) => {
                 let released = sqlx::query(
