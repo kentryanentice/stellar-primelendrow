@@ -384,6 +384,50 @@ pub async fn capture_order(
     Err("Payment could not be verified")
 }
 
+/// Read-only: has this order already been captured?
+///
+/// `capture_order` is not usable for asking, because on an order the member
+/// merely approved it would *take the money*. The recovery sweep needs the
+/// opposite — to find out what happened to a payment the engine was
+/// interrupted in the middle of, without moving a centavo. `Ok(None)` means
+/// nothing was captured (approved and abandoned, or voided); `Err` means
+/// PayPal couldn't be asked, so the caller should try again later rather than
+/// conclude anything.
+pub async fn captured_order(
+    order_id: &str,
+    expect_user: &str,
+) -> Result<Option<CapturedPayment>, &'static str> {
+    if order_id.is_empty()
+        || order_id.len() > 64
+        || !order_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("Invalid order reference");
+    }
+    let token = access_token().await?;
+
+    let res = http()
+        .get(format!("{}/v2/checkout/orders/{order_id}", api_base()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("paypal order fetch: {e}");
+            "Payment provider unreachable"
+        })?;
+    if !res.status().is_success() {
+        tracing::error!("paypal order fetch status {}", res.status());
+        return Err("Payment could not be verified");
+    }
+    let order = res.json::<OrderResponse>().await.map_err(|e| {
+        tracing::error!("paypal order body: {e}");
+        "Payment provider unreachable"
+    })?;
+    if order.status != "COMPLETED" {
+        return Ok(None);
+    }
+    completed_php_capture(order, expect_user).map(Some)
+}
+
 /// Refunds a whole capture — money that arrived but no longer matched what the
 /// engine was expecting (a payment superseded mid-flight, or a loan whose due
 /// amount changed between approval and capture).

@@ -187,6 +187,10 @@ async fn main() {
     // Retries payouts PayPal never received and reconciles the ones it did —
     // the only place a payout moves the books (028).
     infra::payouts::spawn(db_pool.clone());
+    // Settles payments the engine was interrupted in the middle of capturing —
+    // a restart mid-payment, or the database going away between the provider's
+    // "yes" and the ledger write. First pass runs now, on the way up.
+    api::lending::spawn_capture_recovery(db_pool.clone());
 
     let tunnel_cipher = payload_cipher.clone();
     let api = api_routes::routes(mail_rate_limiter)
