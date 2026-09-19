@@ -37,6 +37,7 @@ export function LedgerRowsSkeleton({ rows = 6 }: { rows?: number }) {
             {Array.from({ length: rows }).map((_, i) => (
                 <tr key={i}>
                     <td className='lending-ledger-amount'><SkeletonBone width={72} height={14} /></td>
+                    <td><SkeletonBone width={84} height={12} /></td>
                     <td><SkeletonBone width={LEDGER_BADGE_WIDTHS[i % LEDGER_BADGE_WIDTHS.length]} height={18} radius={999} /></td>
                     <td><SkeletonBone width={68} height={12} /></td>
                 </tr>

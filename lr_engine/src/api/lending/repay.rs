@@ -344,7 +344,7 @@ pub(crate) async fn apply_captured(
         // `book_interest` guarantees every slice sums back to its part.
         let balances = lots::deposit_balances(&mut tx).await?;
         let guarantors: Vec<(Uuid, i64, i16)> = sqlx::query_as(
-            "SELECT g.guarantor_id, g.pledge_amount, COALESCE(c.score, 50)
+            "SELECT g.guarantor_id, g.pledge_amount, COALESCE(c.score, 50::SMALLINT)
                FROM public.loan_guarantors g
                LEFT JOIN public.credit_scores c ON c.user_id = g.guarantor_id
               WHERE g.loan_id = $1 AND g.status = 'accepted'
@@ -485,7 +485,7 @@ pub(crate) async fn apply_captured(
         .map_err(|e| db_err(e, "record member interest"))?;
     }
     for (member, amount) in lots_to_credit {
-        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')")
+        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'interest')")
             .bind(member)
             .bind(amount)
             .execute(&mut *tx)
@@ -523,7 +523,7 @@ pub(crate) async fn apply_captured(
     // of its distribution, so making a second one here would hand the borrower
     // their overpayment twice.
     if excess > 0 && !settling {
-        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')")
+        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'overpayment')")
             .bind(user_id)
             .bind(excess)
             .execute(&mut *tx)

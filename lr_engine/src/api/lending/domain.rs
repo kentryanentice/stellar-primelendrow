@@ -1158,6 +1158,29 @@ mod tests {
     }
 
     #[test]
+    fn a_seventy_score_guarantor_stays_at_ten_percent_beside_a_higher_tier() {
+        // ₱300 of interest (a ₱800 installment): ₱90 risk band. A guarantor at
+        // 70 is inside 50–79, so earns 10%, beside one at 90 earning 15%. Equal
+        // pledges: 12.5% between them = ₱37.50, split 10:15.
+        let s = sow_split();
+        let booked = book_interest(30_000, &s, &[100_000], &[stake(25_000, 70), stake(25_000, 90)]);
+        assert_eq!(booked.guarantor_tiers, vec![10, 15]);
+        assert_eq!(booked.parts.guarantor, 3_750);
+        assert_eq!(booked.to_guarantors, vec![1_500, 2_250]);
+        assert_eq!(
+            booked.parts,
+            InterestParts { platform: 3_000, reserve: 6_000, depositors: 12_000, guarantor: 3_750, recovery_fund: 5_250 }
+        );
+        // Still 10% at the top of the tier; 80 is where it moves up to 15%.
+        for (score, tier, paid) in [(70, 10, 1_500), (79, 10, 1_500), (80, 15, 2_250)] {
+            let booked = book_interest(30_000, &s, &[100_000], &[stake(25_000, score), stake(25_000, 90)]);
+            assert_eq!(booked.guarantor_tiers, vec![tier, 15], "score {score}");
+            assert_eq!(booked.to_guarantors, vec![paid, 2_250], "score {score}");
+            assert_eq!(booked.parts.guarantor + booked.parts.recovery_fund, 9_000, "score {score}");
+        }
+    }
+
+    #[test]
     fn a_guarantor_below_every_tier_earns_nothing_and_the_fund_keeps_it() {
         let booked = book_interest(2_000, &sow_split(), &[100_000], &[stake(50_000, 30)]);
         assert_eq!(booked.parts.guarantor, 0);
@@ -1624,6 +1647,48 @@ mod tests {
         );
         println!("   Every one: components summed back to the interest exactly, none negative,");
         println!("   guarantor paid only from the risk band, recovery fund took the remainder.");
+
+        // ---- 5. ten repayments, two guarantors at different tiers -----------
+        // A ₱5,000 loan over 10 months: interest ₱300 down to ₱30. Guarantor A
+        // scores 70 (10% tier, 50–79), B scores 90 (15% tier, 80–104), equal
+        // pledges — so 12.5% between them, 5% to A and 7.5% to B.
+        println!("\n5. Ten repayments, two guarantors — A @ score 70 (10%), B @ score 90 (15%), equal pledges");
+        println!("{HEADER}");
+        let pair = [stake(250_000, 70), stake(250_000, 90)];
+        let (mut total_interest, mut total_a, mut total_b, mut total_recovery) = (0i64, 0i64, 0i64, 0i64);
+        for n in 1..=10i64 {
+            let interest = 3_000 * (11 - n);
+            let booked = book_interest(interest, &split, &pool, &pair);
+            let p = booked.parts;
+            let (a, b) = (booked.to_guarantors[0], booked.to_guarantors[1]);
+            println!("{}", row(interest, &format!("#{n:<2} A ₱{} · B ₱{}", peso(a), peso(b)), &p));
+            assert_eq!(booked.guarantor_tiers, vec![10, 15], "repayment {n}: tiers");
+            assert_eq!(
+                p,
+                InterestParts {
+                    platform: interest / 10,
+                    reserve: interest / 5,
+                    depositors: interest * 2 / 5,
+                    guarantor: interest / 8,
+                    recovery_fund: interest * 7 / 40,
+                },
+                "repayment {n}"
+            );
+            assert_eq!((a, b), (interest / 20, interest * 3 / 40), "repayment {n}: guarantor slices");
+            total_interest += interest;
+            total_a += a;
+            total_b += b;
+            total_recovery += p.recovery_fund;
+            checked += 1;
+        }
+        assert_eq!((total_interest, total_a, total_b, total_recovery), (165_000, 8_250, 12_375, 28_875));
+        println!(
+            "   Over the loan: interest ₱{} — A earned ₱{} (5%), B earned ₱{} (7.5%), recovery fund kept ₱{} (17.5%).",
+            peso(total_interest),
+            peso(total_a),
+            peso(total_b),
+            peso(total_recovery)
+        );
         println!("\nChecked {checked} splits in total — no centavo created or lost.");
         println!("===========================================================\n");
     }

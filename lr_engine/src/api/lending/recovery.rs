@@ -184,7 +184,7 @@ pub async fn record_seizure(
 
     if surplus > 0 {
         let lot_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
+            "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'seizure_surplus')
              RETURNING id",
         )
         .bind(borrower_id)

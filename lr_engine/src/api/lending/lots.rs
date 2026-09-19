@@ -157,9 +157,10 @@ async fn rebadge_fifo(
                 .execute(&mut **tx)
                 .await
                 .map_err(|e| db_err(e, "shrink lot"))?;
+            // Same money, so the child keeps the parent's origin (046).
             let child: Uuid = sqlx::query_scalar(
-                "INSERT INTO public.deposits (user_id, amount, badge, backing_loan, parent_lot)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO public.deposits (user_id, amount, badge, backing_loan, parent_lot, origin)
+                 SELECT $1, $2, $3, $4, $5, origin FROM public.deposits WHERE id = $5
                  RETURNING id",
             )
             .bind(lot.user_id)
@@ -374,8 +375,8 @@ async fn release_fifo(tx: &mut Transaction<'_, Postgres>, lots: &[Lot], mut amou
                 .await
                 .map_err(|e| db_err(e, "shrink lent lot"))?;
             sqlx::query(
-                "INSERT INTO public.deposits (user_id, amount, badge, parent_lot)
-                 VALUES ($1, $2, 'available', $3)",
+                "INSERT INTO public.deposits (user_id, amount, badge, parent_lot, origin)
+                 SELECT $1, $2, 'available', $3, origin FROM public.deposits WHERE id = $3",
             )
             .bind(lot.user_id)
             .bind(amount)
