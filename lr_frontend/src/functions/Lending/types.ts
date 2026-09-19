@@ -125,11 +125,15 @@ export type FxQuote = {
 
 export type LotBadge = 'available' | 'lent' | 'collateral' | 'pledged'
 
+/** How a lot came to exist (046) — the badge is only what it's doing now. */
+export type LotOrigin = 'deposit' | 'interest' | 'overpayment' | 'withdrawal_refund' | 'settlement' | 'seizure_surplus'
+
 export type Lot = {
     id: string
     amount: number
     badge: LotBadge
     backing_loan: string | null
+    origin: LotOrigin
     created_at: number
 }
 

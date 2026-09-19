@@ -110,7 +110,7 @@ pub(crate) async fn credit(
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin deposit"))?;
 
     let lot_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
+        "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'deposit')
          RETURNING id",
     )
     .bind(user_id)

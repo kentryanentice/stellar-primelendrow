@@ -1,7 +1,7 @@
 import { History, ChevronLeft, ChevronRight } from 'lucide-react'
 import type useDeposits from '../../functions/Lending/useDeposits'
 import { formatDate, pesos } from '../../functions/Lending/money'
-import type { LotBadge } from '../../functions/Lending/types'
+import type { LotBadge, LotOrigin } from '../../functions/Lending/types'
 import { LedgerRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 const BADGE_META: Record<LotBadge, { label: string; cls: string }> = {
@@ -9,6 +9,17 @@ const BADGE_META: Record<LotBadge, { label: string; cls: string }> = {
     lent: { label: 'Funding a loan', cls: 'is-lent' },
     collateral: { label: 'Backing your loan', cls: 'is-collateral' },
     pledged: { label: 'Pledged for a friend', cls: 'is-pledged' },
+}
+
+// Where the lot came from. Interest arrives as its own small lot on every
+// repayment in the pool, so without this it reads as a deposit nobody made.
+const ORIGIN_LABEL: Record<LotOrigin, string> = {
+    deposit: 'Deposit',
+    interest: 'Interest earned',
+    overpayment: 'Overpayment',
+    withdrawal_refund: 'Returned withdrawal',
+    settlement: 'Default settlement',
+    seizure_surplus: 'Collateral surplus',
 }
 
 /**
@@ -35,8 +46,9 @@ function YourDepositsCard({ deposits }: { deposits: ReturnType<typeof useDeposit
                             <thead>
                                 <tr>
                                     <th>Amount</th>
+                                    <th>Source</th>
                                     <th>Status</th>
-                                    <th>Deposited</th>
+                                    <th>Date</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -57,8 +69,9 @@ function YourDepositsCard({ deposits }: { deposits: ReturnType<typeof useDeposit
                             <thead>
                                 <tr>
                                     <th>Amount</th>
+                                    <th>Source</th>
                                     <th>Status</th>
-                                    <th>Deposited</th>
+                                    <th>Date</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -67,6 +80,7 @@ function YourDepositsCard({ deposits }: { deposits: ReturnType<typeof useDeposit
                                     return (
                                         <tr key={lot.id}>
                                             <td className='lending-ledger-amount'>{pesos(lot.amount)}</td>
+                                            <td>{ORIGIN_LABEL[lot.origin] ?? 'Deposit'}</td>
                                             <td><span className={`lending-lot-badge ${meta.cls}`}>{meta.label}</span></td>
                                             <td>{formatDate(lot.created_at)}</td>
                                         </tr>

@@ -343,7 +343,7 @@ pub(in crate::api::lending) async fn settle(
         // as a number with no lot behind it would see nothing on their balance
         // and have nothing to withdraw.
         sqlx::query(
-            "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')",
+            "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'settlement')",
         )
         .bind(user_id)
         .bind(pay)
@@ -422,7 +422,7 @@ pub(in crate::api::lending) async fn settle(
     // would be the pool profiting from a rescued default.
     if remaining > 0 {
         sqlx::query(
-            "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')",
+            "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'settlement')",
         )
         .bind(borrower_id)
         .bind(remaining)

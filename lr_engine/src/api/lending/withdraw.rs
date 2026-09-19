@@ -315,7 +315,7 @@ pub(crate) async fn refund_if_failed(pool: &PgPool, payout_id: Uuid) -> Result<(
     // deposit history that never happened. One lot for the refunded sum is the
     // honest shape, and it is `available` because that is what it was.
     let lot_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.deposits (user_id, amount, badge) VALUES ($1, $2, 'available')
+        "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'withdrawal_refund')
          RETURNING id",
     )
     .bind(user_id)

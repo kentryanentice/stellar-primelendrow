@@ -175,6 +175,13 @@ pub async fn reserve_deposit(pool: &PgPool, user_id: Uuid, rail: &str, amount: i
 /// for. Supersedes any older payment for this loan that hasn't been claimed.
 pub async fn reserve_repay(pool: &PgPool, user_id: Uuid, rail: &str, loan_id: Uuid) -> Result<Reserved, E> {
     let rules = policy::active(pool).await?;
+    // First: settle anything this loan was left holding. An engine that
+    // stopped mid-payment leaves the money real and the loan none the wiser —
+    // finishing that here means the member's next press of Pay either shows
+    // them the payment they already made, or starts a clean one. Done before
+    // the transaction opens: it talks to the payment provider.
+    recover_for_loan(pool, loan_id).await;
+
     let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin reserve repay"))?;
     let (due, installment) = amount_due(&mut tx, loan_id, user_id).await?;
 
@@ -436,14 +443,15 @@ pub async fn close_superseded(superseded: &[(String, Option<String>)]) {
     }
 }
 
-/// How long a payment may sit mid-capture before the sweep below treats it as
-/// interrupted. Comfortably longer than a capture takes (a second or two) and
-/// than the provider call's own timeout, so a payment in flight is never
-/// touched.
-const STUCK_CAPTURE_SECS: i64 = 10 * 60;
+/// How long a payment may sit mid-capture before it is treated as
+/// interrupted. Longer than a capture takes (a second or two) and than the
+/// provider client's own 20-second timeout, so a payment actually in flight is
+/// never touched — and short enough that a member pressing Pay again a minute
+/// later doesn't wait on it.
+const STUCK_CAPTURE_SECS: i64 = 90;
 /// How often the sweep looks. The first pass runs at startup, which is when
 /// an engine that died mid-payment comes back.
-const CAPTURE_SWEEP_SECS: u64 = 5 * 60;
+const CAPTURE_SWEEP_SECS: u64 = 60;
 
 /// Recovers payments the engine was interrupted in the middle of capturing.
 ///
@@ -478,24 +486,43 @@ pub fn spawn_capture_recovery(pool: PgPool) {
 type StuckRow = (Uuid, Uuid, String, String, String, Option<Uuid>, i64, Option<i64>);
 
 async fn recover_stuck_captures(pool: &PgPool) {
-    let cutoff = now() - STUCK_CAPTURE_SECS;
-    let stuck: Vec<StuckRow> = match sqlx::query_as(
+    let stuck = stuck_rows(pool, None).await;
+    settle_stuck(pool, stuck).await;
+}
+
+/// The same recovery, for one loan, run while the member waits.
+///
+/// A member who comes back to the Pay page after an interrupted payment
+/// shouldn't have to wait out a sweep to find out where their money went —
+/// pressing Pay settles it first, and then either their loan has the payment
+/// on it or they can start a new one. Called before a repayment is reserved.
+async fn recover_for_loan(pool: &PgPool, loan_id: Uuid) {
+    let stuck = stuck_rows(pool, Some(loan_id)).await;
+    settle_stuck(pool, stuck).await;
+}
+
+async fn stuck_rows(pool: &PgPool, loan_id: Option<Uuid>) -> Vec<StuckRow> {
+    let rows = sqlx::query_as(
         "SELECT id, user_id, purpose, rail, provider_ref, loan_id, amount, applies
            FROM public.payment_intents
           WHERE status = 'capturing' AND provider_ref IS NOT NULL AND updated_at <= $1
+            AND ($2::UUID IS NULL OR loan_id = $2)
           ORDER BY updated_at",
     )
-    .bind(cutoff)
+    .bind(now() - STUCK_CAPTURE_SECS)
+    .bind(loan_id)
     .fetch_all(pool)
-    .await
-    {
+    .await;
+    match rows {
         Ok(rows) => rows,
         Err(e) => {
             tracing::error!("stuck capture sweep: {e}");
-            return;
+            Vec::new()
         }
-    };
+    }
+}
 
+async fn settle_stuck(pool: &PgPool, stuck: Vec<StuckRow>) {
     for (id, user_id, purpose, rail, provider_ref, loan_id, amount, applies) in stuck {
         let owner = user_id.to_string();
         let found = match rail.as_str() {

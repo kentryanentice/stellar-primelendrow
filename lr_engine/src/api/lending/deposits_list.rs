@@ -33,6 +33,9 @@ pub struct LotView {
     pub amount: i64,
     pub badge: String,
     pub backing_loan: Option<Uuid>,
+    /// How the lot came to exist — deposit, interest, … (046). The badge is
+    /// what it's doing now; this is why a ₱4.50 row is in the list at all.
+    pub origin: String,
     pub created_at: i64,
 }
 
@@ -63,8 +66,8 @@ pub async fn list(
         .await
         .map_err(|e| db_err(e, "deposits count"))?;
 
-    let rows: Vec<(Uuid, i64, String, Option<Uuid>, i64)> = sqlx::query_as(
-        "SELECT id, amount, badge, backing_loan, created_at
+    let rows: Vec<(Uuid, i64, String, Option<Uuid>, String, i64)> = sqlx::query_as(
+        "SELECT id, amount, badge, backing_loan, origin, created_at
            FROM public.deposits
           WHERE user_id = $1
           ORDER BY created_at DESC, id
@@ -79,7 +82,9 @@ pub async fn list(
 
     let items = rows
         .into_iter()
-        .map(|(id, amount, badge, backing_loan, created_at)| LotView { id, amount, badge, backing_loan, created_at })
+        .map(|(id, amount, badge, backing_loan, origin, created_at)| LotView {
+            id, amount, badge, backing_loan, origin, created_at,
+        })
         .collect();
 
     let total_pages = if total == 0 { 1 } else { (total + PAGE_SIZE - 1) / PAGE_SIZE };
