@@ -464,7 +464,33 @@ pub async fn refund_capture(capture_id: &str, request_id: &str) -> Result<(), &'
         return Ok(());
     }
     tracing::error!("paypal refund {status}: {text}");
+
+    // Don't take the error at its word: a refusal has been seen on a refund
+    // PayPal went on to complete, and recording "refund failed" against money
+    // that did go back sends someone looking for it. The capture itself is
+    // the fact — if it reads REFUNDED, the refund happened.
+    if capture_is_refunded(capture_id, &token).await {
+        tracing::warn!(capture_id, "refund reported an error but the capture reads REFUNDED");
+        return Ok(());
+    }
     Err("PayPal refused the refund")
+}
+
+/// Read-only: does PayPal consider this capture refunded?
+async fn capture_is_refunded(capture_id: &str, token: &str) -> bool {
+    let res = http()
+        .get(format!("{}/v2/payments/captures/{capture_id}", api_base()))
+        .bearer_auth(token)
+        .send()
+        .await;
+    let Ok(res) = res else { return false };
+    if !res.status().is_success() {
+        return false;
+    }
+    let Ok(body) = res.json::<serde_json::Value>().await else { return false };
+    // PARTIALLY_REFUNDED is deliberately not enough: these refunds are always
+    // for the whole capture, so a partial one means something is still out.
+    body.get("status").and_then(|s| s.as_str()) == Some("REFUNDED")
 }
 
 // ===========================================================================
