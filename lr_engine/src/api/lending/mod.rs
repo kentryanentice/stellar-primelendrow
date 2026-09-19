@@ -74,6 +74,9 @@ pub use payout::{list as payouts_list, request as payout_request};
 // disagree about which provider, or which idempotency key, a payout uses.
 pub(crate) use payout::submit_to as submit_payout;
 pub use pool::summary as pool_summary;
+// Settles payments interrupted mid-capture; started at boot beside the other
+// sweeps (see `intents::spawn_capture_recovery`).
+pub use intents::spawn_capture_recovery;
 // The anonymised loan book — the only lending reads that take no session.
 pub use public::{detail as public_loan, list as public_loans};
 pub use quote::quote as loan_quote;

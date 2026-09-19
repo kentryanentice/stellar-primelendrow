@@ -436,6 +436,114 @@ pub async fn close_superseded(superseded: &[(String, Option<String>)]) {
     }
 }
 
+/// How long a payment may sit mid-capture before the sweep below treats it as
+/// interrupted. Comfortably longer than a capture takes (a second or two) and
+/// than the provider call's own timeout, so a payment in flight is never
+/// touched.
+const STUCK_CAPTURE_SECS: i64 = 10 * 60;
+/// How often the sweep looks. The first pass runs at startup, which is when
+/// an engine that died mid-payment comes back.
+const CAPTURE_SWEEP_SECS: u64 = 5 * 60;
+
+/// Recovers payments the engine was interrupted in the middle of capturing.
+///
+/// Claiming an intent marks it `capturing`, and every path that claims one
+/// also releases it — unless the engine itself stops answering: a restart
+/// mid-payment, or the database going away between the provider's "yes" and
+/// the ledger write. The row is then stuck: it blocks the loan's next payment
+/// (one live repayment per loan), and if the provider *did* take the money,
+/// that money is in the platform's balance and in nobody's books.
+///
+/// So, for each stuck payment, ask the provider what actually happened:
+/// - **Money was taken** — refund it in full and record that (`refund`), the
+///   same thing the engine does for any payment it can't apply. Nothing is
+///   left unbooked and the member pays again cleanly.
+/// - **Nothing was taken** — mark it expired, which releases the loan.
+/// - **The provider can't be reached** — leave it for the next sweep. A
+///   payment is never concluded on a guess.
+pub fn spawn_capture_recovery(pool: PgPool) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(CAPTURE_SWEEP_SECS));
+        loop {
+            ticker.tick().await;
+            recover_stuck_captures(&pool).await;
+        }
+    });
+}
+
+/// id, user_id, rail, provider_ref, loan_id, amount, applies
+type StuckRow = (Uuid, Uuid, String, String, Option<Uuid>, i64, Option<i64>);
+
+async fn recover_stuck_captures(pool: &PgPool) {
+    let cutoff = now() - STUCK_CAPTURE_SECS;
+    let stuck: Vec<StuckRow> = match sqlx::query_as(
+        "SELECT id, user_id, rail, provider_ref, loan_id, amount, applies
+           FROM public.payment_intents
+          WHERE status = 'capturing' AND provider_ref IS NOT NULL AND updated_at <= $1
+          ORDER BY updated_at",
+    )
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("stuck capture sweep: {e}");
+            return;
+        }
+    };
+
+    for (id, user_id, rail, provider_ref, loan_id, amount, applies) in stuck {
+        let owner = user_id.to_string();
+        let found = match rail.as_str() {
+            "paypal" => paypal::captured_order(&provider_ref, &owner).await,
+            // A Stripe session is read, never captured, so asking is safe: a
+            // paid one comes back, an unpaid one is "not completed".
+            "stripe" => match stripe::capture_session(&provider_ref, &owner).await {
+                Ok(captured) => Ok(Some(captured)),
+                Err("Payment was not completed") => Ok(None),
+                Err(e) => Err(e),
+            },
+            other => {
+                tracing::error!(intent = %id, rail = other, "stuck capture on an unknown rail");
+                continue;
+            }
+        };
+
+        match found {
+            Ok(Some(captured)) => {
+                let claimed = Claimed {
+                    id,
+                    rail: if rail == "paypal" { "paypal" } else { "stripe" },
+                    loan_id,
+                    amount,
+                    applies,
+                };
+                tracing::warn!(intent = %id, %provider_ref, "interrupted payment was charged — refunding");
+                refund(pool, &claimed, &captured.capture_id, "the engine was interrupted mid-payment").await;
+            }
+            Ok(None) => {
+                let released = sqlx::query(
+                    "UPDATE public.payment_intents
+                        SET status = 'expired', last_error = $2, updated_at = $3
+                      WHERE id = $1 AND status = 'capturing'",
+                )
+                .bind(id)
+                .bind("the engine was interrupted mid-payment; nothing was charged")
+                .bind(now())
+                .execute(pool)
+                .await;
+                match released {
+                    Ok(_) => tracing::warn!(intent = %id, %provider_ref, "interrupted payment was never charged — released"),
+                    Err(e) => tracing::error!(intent = %id, "could not release interrupted payment: {e}"),
+                }
+            }
+            // Say nothing about the money we couldn't ask about; try again.
+            Err(e) => tracing::error!(intent = %id, %provider_ref, "stuck capture not resolved: {e}"),
+        }
+    }
+}
+
 /// An intent claimed for capture.
 pub struct Claimed {
     pub id: Uuid,

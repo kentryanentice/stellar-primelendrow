@@ -30,6 +30,8 @@ function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved 
     const toast = useToast()
     const containerRef = useRef<HTMLDivElement>(null)
 
+    /** Set when this component has already told the member what went wrong. */
+    const reportedRef = useRef(false)
     const amountRef = useRef(amountCentavos)
     const onApprovedRef = useRef(onApproved)
     const createOrderRef = useRef((centavos: number) => createOrder(centavos, purpose, loanId))
@@ -56,18 +58,35 @@ function PayPalButton({ amountCentavos, purpose = 'deposit', loanId, onApproved 
             // capture then checks — without it an order id is a bearer
             // reference and whoever presents it gets the money. It also means
             // the amount charged is the engine's, not this component's.
-            createOrder: () => {
+            createOrder: async () => {
                 const centavos = amountRef.current
                 if (!centavos || centavos <= 0) {
+                    reportedRef.current = true
                     toast.error('Enter a valid amount first')
-                    return Promise.reject(new Error('no amount'))
+                    throw new Error('no amount')
                 }
-                return createOrderRef.current(centavos)
+                try {
+                    return await createOrderRef.current(centavos)
+                } catch (err) {
+                    // The engine's own words — "a payment for this loan is
+                    // already being processed", "that's more than your deposit
+                    // limit allows right now". `onError` fires next and would
+                    // paper over the reason with PayPal's generic one.
+                    reportedRef.current = true
+                    toast.error(err instanceof Error && err.message ? err.message : 'Couldn’t start the payment')
+                    throw err
+                }
             },
             onApprove: async data => {
                 await onApprovedRef.current(data.orderID)
             },
             onError: () => {
+                // Only when nothing better was said: a failed order creation
+                // has already shown why, and this would talk over it.
+                if (reportedRef.current) {
+                    reportedRef.current = false
+                    return
+                }
                 toast.error('PayPal ran into a problem — nothing was charged, try again')
             },
             // Closed the PayPal window without paying. Nothing was charged,
