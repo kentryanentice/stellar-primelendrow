@@ -29,11 +29,6 @@ use super::admin::reconcile;
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_verified_user};
 
-/// Score movement on a fully repaid loan. Kept here (not policy JSON) until
-/// scoring gets its own policy slice — it's one number, and the log records
-/// every application of it.
-const SCORE_BUMP_ON_CLOSE: i16 = 5;
-
 #[derive(Deserialize)]
 pub struct RepayInput {
     loan_id: Uuid,
@@ -624,38 +619,47 @@ pub(crate) async fn apply_captured(
             }
         }
 
-        // Track record moves on real behavior (D5): repaid in full = +score,
-        // logged like every other score change.
-        let old_score: Option<i16> = sqlx::query_scalar(
-            "SELECT score FROM public.credit_scores WHERE user_id = $1 FOR UPDATE",
+        // Track record moves on real behavior (D5) — but on the term, not on
+        // the last payment. Nothing is added to the score here: repaying early
+        // closes the loan and frees the collateral immediately (above), while
+        // the rise is merely *scheduled*. `score::spawn_term_end_scores` pays
+        // it when the date arrives.
+        //
+        // Scheduling it, rather than re-deriving it in the sweep, is what makes
+        // the stacking rule hold: it is computed against the borrower's history
+        // at the moment this loan closes, and then it is a fact.
+        //
+        //   score_rise_at = MAX(own term end, previous rise + own term length)
+        //
+        // See migration 047 for the reasoning, including why the MAX is the
+        // later of the two rather than a plain sum.
+        //
+        // GREATEST over one row: `term_end` comes from the schedule this
+        // repayment just settled, and `prev` from every rise this borrower has
+        // ever been scheduled — awarded or still pending, which is why 047
+        // never clears the column. With no history, `prev.max_rise` is NULL,
+        // COALESCE makes the second arm a bare term length (seconds, not an
+        // epoch), and GREATEST takes the term end as it should.
+        //
+        // `fully_paid` is false for a settling loan, so `schedule` is never
+        // empty here and `term_end` is never NULL.
+        sqlx::query(
+            "UPDATE public.loans l
+                SET score_rise_at = GREATEST(
+                        te.term_end,
+                        COALESCE(prev.max_rise, 0) + (te.term_end - l.created_at)
+                    )
+               FROM (SELECT MAX(due_at) AS term_end
+                       FROM public.loan_schedule WHERE loan_id = $1) te,
+                    (SELECT MAX(score_rise_at) AS max_rise
+                       FROM public.loans WHERE borrower_id = $2) prev
+              WHERE l.id = $1 AND te.term_end IS NOT NULL",
         )
+        .bind(loan_id)
         .bind(user_id)
-        .fetch_optional(&mut *tx)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| db_err(e, "score read"))?;
-        if let Some(old_score) = old_score {
-            let new_score = (old_score + SCORE_BUMP_ON_CLOSE).min(150);
-            if new_score != old_score {
-                sqlx::query("UPDATE public.credit_scores SET score = $1, updated_at = $2 WHERE user_id = $3")
-                    .bind(new_score)
-                    .bind(now)
-                    .bind(user_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| db_err(e, "bump score"))?;
-                sqlx::query(
-                    "INSERT INTO public.credit_score_log (user_id, old_score, new_score, actor_id, reason)
-                     VALUES ($1, $2, $3, NULL, $4)",
-                )
-                .bind(user_id)
-                .bind(old_score)
-                .bind(new_score)
-                .bind(format!("loan {} repaid in full", loan_id))
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| db_err(e, "score log"))?;
-            }
-        }
+        .map_err(|e| db_err(e, "schedule score rise"))?;
 
         commit_event(
             &mut tx,

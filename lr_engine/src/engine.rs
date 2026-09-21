@@ -191,6 +191,11 @@ async fn main() {
     // a restart mid-payment, or the database going away between the provider's
     // "yes" and the ledger write. First pass runs now, on the way up.
     api::lending::spawn_capture_recovery(db_pool.clone());
+    // Pays the credit-score rise on loans whose term has now elapsed (047).
+    // Repaying early closes the loan at once but does not bring the rise
+    // forward, so the award has to come from a clock rather than from a
+    // request.
+    api::lending::spawn_term_end_scores(db_pool.clone());
 
     let tunnel_cipher = payload_cipher.clone();
     let api = api_routes::routes(mail_rate_limiter)
