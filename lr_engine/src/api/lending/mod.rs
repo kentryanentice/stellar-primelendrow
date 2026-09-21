@@ -34,6 +34,7 @@ mod quote;
 mod rails;
 mod recovery;
 mod repay;
+mod score;
 pub(crate) mod shared;
 mod transactions;
 mod withdraw;
@@ -81,6 +82,9 @@ pub use intents::spawn_capture_recovery;
 pub use public::{detail as public_loan, list as public_loans};
 pub use quote::quote as loan_quote;
 pub use repay::repay;
+// Pays the credit-score rise once a loan's term has elapsed; started at boot
+// beside the other sweeps (see `score`).
+pub use score::spawn_term_end_scores;
 pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
 // The sweep calls this whenever a payout reaches a terminal state it never

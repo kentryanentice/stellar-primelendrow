@@ -1,0 +1,153 @@
+name: CI
+
+# The SOW requires a visible CI run on each pull request. Three jobs, one per
+# component, so a reviewer can see at a glance which part of the system a
+# change touched and whether it stands up.
+on:
+  push:
+    branches: [master, primelendrow]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The Soroban contracts. Self-contained crates with their own lockfiles and
+  # no database, so this job builds from a clean clone with nothing else set
+  # up — it is the one that is green today.
+  contracts:
+    name: contracts (${{ matrix.contract }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract:
+          - collateral_vault
+          - deposit_registry
+          - loan_registry
+          - payment_registry
+    defaults:
+      run:
+        working-directory: lr_contracts/${{ matrix.contract }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lr_contracts/${{ matrix.contract }}
+
+      # No `cargo fmt --check` anywhere in this workflow. This codebase is
+      # hand-formatted on purpose — the multi-line SQL is aligned to be read —
+      # and rustfmt currently disagrees with 56 engine files and 12 in the
+      # vault. Enforcing it would mean a reformatting commit touching every
+      # file of every deliverable, which is the opposite of the reviewable
+      # per-deliverable pull requests the SOW asks for. Clippy carries the
+      # correctness load instead.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Native, so `soroban-sdk`'s testutils run the contract's own tests.
+      - name: Test
+        run: cargo test --locked
+
+      # What `stellar contract build` wraps, without paying to install the CLI.
+      # The release profile in each manifest keeps overflow checks ON: these
+      # contracts hold user funds and a silent wrap is not acceptable.
+      - name: Build wasm
+        run: cargo build --locked --release --target wasm32v1-none
+
+  engine:
+    name: engine
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lr_engine
+    steps:
+      - uses: actions/checkout@v4
+
+      # `lr_engine` uses sqlx with compile-time query verification, so it
+      # cannot compile without either a live database or a committed offline
+      # cache. The database schema is deliberately not published, which leaves
+      # the cache as the only route. Fail here with a usable message rather
+      # than 200 lines of macro errors.
+      - name: Check for the sqlx offline cache
+        run: |
+          if [ ! -d .sqlx ] || [ -z "$(ls -A .sqlx 2>/dev/null)" ]; then
+            echo "::error::lr_engine/.sqlx is missing from the repository."
+            echo "The engine's sqlx macros verify every query at compile time."
+            echo "With the schema unpublished, the offline cache is the only way"
+            echo "this can build. To fix:"
+            echo "  1. remove the 'lr_engine/.sqlx' line from .gitignore"
+            echo "  2. run 'cargo sqlx prepare' against the live database"
+            echo "  3. commit lr_engine/.sqlx"
+            echo "The cache holds query text and column types only - no data,"
+            echo "and no SQL that isn't already visible in the Rust source."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lr_engine
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        env:
+          SQLX_OFFLINE: true
+
+      - name: Test
+        run: cargo test --locked
+        env:
+          SQLX_OFFLINE: true
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lr_frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Several directories the tracked sources import from are currently
+      # excluded by .gitignore, so `tsc -b` on a clean clone fails on missing
+      # modules rather than on anything a reviewer changed. Name them up front.
+      - name: Check for sources excluded by .gitignore
+        run: |
+          missing=""
+          for path in src/functions/KYC public/vendor; do
+            if [ ! -d "$path" ]; then
+              missing="$missing $path"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Tracked sources import from paths that are not in the repository:$missing"
+            echo "For example src/pages/KYC.tsx imports '../functions/KYC/KYCFunctions'."
+            echo "Either track these paths, or move the KYC flow behind an"
+            echo "interface whose implementation can be absent from a clean clone."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: lr_frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # 'tsc -b && vite build' - typechecks and bundles in one step.
+      - name: Build
+        run: npm run build

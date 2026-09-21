@@ -34,7 +34,7 @@ use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
 /// A default is the worst thing a borrower's record can carry, so it costs
-/// more than a clean repayment earns (+5, `repay::SCORE_BUMP_ON_CLOSE`).
+/// more than a clean repayment earns (+5, `score::SCORE_BUMP_ON_CLOSE`).
 const SCORE_PENALTY_ON_DEFAULT: i16 = 25;
 
 #[derive(Deserialize)]

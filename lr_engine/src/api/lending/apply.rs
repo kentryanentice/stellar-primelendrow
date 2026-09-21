@@ -332,21 +332,34 @@ pub async fn apply(
         .await
         .map_err(|e| db_err(e, "lock borrower"))?;
 
-    // `reconciling` counts as open (033): a defaulted loan reopened for
-    // settlement is an obligation the borrower is still working down, and
-    // lending to them again mid-settlement is exactly what the one-open-loan
-    // rule exists to prevent. A `reconciled` loan does NOT count — settling is
-    // the whole point, and the borrower gets to borrow again.
+    // An unsettled obligation of any shape blocks a new loan. Two of these are
+    // not "open" in the everyday sense but are obligations all the same:
+    //
+    //   `reconciling` — a defaulted loan an admin reopened for settlement (033).
+    //     The borrower is still working it down, and lending to them again
+    //     mid-settlement is exactly what this rule exists to prevent.
+    //   `defaulted`   — walked away from and never made good. This one used to
+    //     fall through: a borrower who defaulted and was never reopened could
+    //     apply again the same day, which made default the cheapest way to
+    //     stop paying. A default is settled by reconciling it, not by waiting.
+    //
+    // `closed` and `reconciled` both mean the obligation is discharged — repaid
+    // as agreed, or settled after default — and neither blocks. That is the
+    // whole point of settling.
     let has_open: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM public.loans
-          WHERE borrower_id = $1 AND status IN ('pending','active','reconciling'))",
+          WHERE borrower_id = $1
+            AND status IN ('pending','active','reconciling','defaulted'))",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| db_err(e, "open loan check"))?;
     if has_open {
-        return Err((StatusCode::CONFLICT, "You already have an open loan — repay it first"));
+        return Err((
+            StatusCode::CONFLICT,
+            "You have an outstanding loan — settle it before borrowing again",
+        ));
     }
 
     // L2: everything below is a pure function of data we just locked/loaded.
@@ -416,7 +429,13 @@ pub async fn apply(
     .map_err(|e| {
         if e.as_database_error().is_some_and(|d| d.is_unique_violation()) {
             // idx_loans_one_open_per_borrower beat a race the row lock missed.
-            return (StatusCode::CONFLICT, "You already have an open loan — repay it first");
+            // That index covers pending/active only; the wider check above is
+            // what catches an unsettled default, and it runs under the
+            // borrower row lock, so it needs no index behind it.
+            return (
+                StatusCode::CONFLICT,
+                "You have an outstanding loan — settle it before borrowing again",
+            );
         }
         db_err(e, "insert loan")
     })?;
