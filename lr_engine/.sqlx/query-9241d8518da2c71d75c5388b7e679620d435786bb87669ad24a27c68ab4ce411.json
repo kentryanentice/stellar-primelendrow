@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE public.access_tokens SET reserved_email = $1, reserved_at = $2 WHERE token = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9241d8518da2c71d75c5388b7e679620d435786bb87669ad24a27c68ab4ce411"
+}

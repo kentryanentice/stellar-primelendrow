@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT token FROM public.access_tokens\n              WHERE token = $1\n                AND revoked_at IS NULL\n                AND redeemed_at IS NULL\n                AND (expires_at IS NULL OR expires_at > $2)\n              FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a4107f4c7c187989c6a6aa60cdac15811fe2ca4ebf07fd40fd5b1da1abac982c"
+}

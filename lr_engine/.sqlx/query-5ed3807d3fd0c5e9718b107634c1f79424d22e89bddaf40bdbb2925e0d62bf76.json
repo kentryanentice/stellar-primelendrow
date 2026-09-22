@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE public.password_reset_codes SET failed_attempts = failed_attempts + 1 WHERE email = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ed3807d3fd0c5e9718b107634c1f79424d22e89bddaf40bdbb2925e0d62bf76"
+}

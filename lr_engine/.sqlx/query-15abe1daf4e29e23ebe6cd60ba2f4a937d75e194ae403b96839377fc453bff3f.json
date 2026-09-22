@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM public.access_tokens\n         WHERE expires_at IS NOT NULL AND expires_at <= $1 AND redeemed_by IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "15abe1daf4e29e23ebe6cd60ba2f4a937d75e194ae403b96839377fc453bff3f"
+}
