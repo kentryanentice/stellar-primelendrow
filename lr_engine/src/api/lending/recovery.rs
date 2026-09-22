@@ -31,6 +31,7 @@ use uuid::Uuid;
 use super::domain;
 use super::ledger::{EventDraft, Posting, commit_event};
 use super::lots;
+use super::score;
 use super::shared::{db_err, ledger_err};
 use crate::api::users::shared::E;
 
@@ -319,13 +320,27 @@ async fn claim_pro_rata(
             .cloned()
             .collect();
         let taken = lots::seize_lots(tx, &theirs, charged[i]).await?;
+        let mut taken_from_them = 0i64;
         for (seized_user, amount) in taken {
             apply(
                 tx, loan_id, 3, "guarantor_deposit", "member_deposits",
                 Some(seized_user), amount, None, actor_id,
             )
             .await?;
+            taken_from_them += amount;
             taken_total += amount;
+        }
+
+        // The pledge was actually claimed, so the guarantor carries it on their
+        // record (SOW §4.1: "a guarantor whose pledge is claimed loses score
+        // and drops a tier"). Keyed off what was taken, not off what was
+        // apportioned: a guarantor who was assigned a share but had nothing
+        // left to seize has not had a pledge claimed and is not charged for
+        // one. Inside this transaction, so the seizure and the penalty are one
+        // event or neither.
+        if taken_from_them > 0 {
+            score::penalise_guarantor_claim(tx, loan_id, *user_id, actor_id, Utc::now().timestamp())
+                .await?;
         }
     }
 

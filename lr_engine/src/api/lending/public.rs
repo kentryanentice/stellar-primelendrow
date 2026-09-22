@@ -220,6 +220,42 @@ pub struct PublicRecovery {
     pub at: i64,
 }
 
+/// One credit-score movement this loan caused (SOW §4.1: the proof page shows
+/// score changes).
+///
+/// **The movement, never the score.** `delta` is what this loan did to
+/// somebody's record; the absolute score before and after stays private, as
+/// does whose record it is. A delta is a fact about how this loan ended, which
+/// is what the page is for. A running score is a profile of a person, which is
+/// what this module refuses to carry — see the rule at the top of the file, and
+/// `score` in the `PERSONAL` list that enforces it.
+///
+/// The subject is positional for the same reason every other name here is:
+/// "borrower", or "guarantor 2".
+#[derive(Serialize)]
+pub struct PublicScoreEvent {
+    /// `borrower` or `guarantor`.
+    pub subject: &'static str,
+    /// Which guarantor, when the subject is one.
+    pub position: Option<i64>,
+    /// Signed: +5 for a term completed, -25 for a default or a claim.
+    pub delta: i16,
+    /// The stable code from `lending::score::reason` (048) — what a UI switches
+    /// on. Null on rows written before 048, which kept only prose.
+    pub reason: Option<String>,
+    /// When it landed, or when it falls due if `status` is `pending`.
+    pub at: i64,
+    /// `awarded` or `pending`.
+    ///
+    /// A loan repaid in full ahead of its term closes at once but does not earn
+    /// its rise until the term actually elapses (047), so between those two
+    /// moments the page shows the rise as pending with the date it is due. That
+    /// is the honest reading — the borrower has done everything required and is
+    /// waiting on the calendar — and without it an early repayment looks on the
+    /// page like a loan that earned nothing.
+    pub status: &'static str,
+}
+
 #[derive(Serialize)]
 pub struct PublicLoanDetail {
     pub loan: PublicLoan,
@@ -234,6 +270,7 @@ pub struct PublicLoanDetail {
     pub schedule: Vec<PublicInstallment>,
     pub payments: Vec<PublicPayment>,
     pub recoveries: Vec<PublicRecovery>,
+    pub score_events: Vec<PublicScoreEvent>,
 }
 
 /// The loan columns plus the per-loan aggregates, aliased to `PublicLoan`'s
@@ -370,6 +407,11 @@ type PaymentRow = (
 type SliceRow = (i64, Uuid, String, Option<i16>, i64);
 /// step, source, user_id, amount, refunded, stroops, created_at
 type RecoveryRow = (i16, String, Option<Uuid>, i64, i64, Option<i64>, i64);
+/// user_id, old_score, new_score, reason_code, created_at
+type ScoreEventRow = (Uuid, Option<i16>, i16, Option<String>, i64);
+/// policy_version, borrower_cover, pool_funded, borrower_id, score_rise_at,
+/// score_awarded_at
+type LoanTermsRow = (i64, i64, Option<i64>, Uuid, Option<i64>, Option<i64>);
 
 pub async fn detail(
     Extension(pool): Extension<PgPool>,
@@ -382,11 +424,15 @@ pub async fn detail(
         .map_err(|e| db_err(e, "public loan"))?
         .ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
 
-    let (policy_version, borrower_cover, pool_funded): (i64, i64, Option<i64>) = sqlx::query_as(
+    // `borrower_id` is read here and never serialized — it is used only to tell
+    // a borrower's score movement from a guarantor's, the same way user ids are
+    // read to number the guarantors.
+    let (policy_version, borrower_cover, pool_funded, borrower_id, score_rise_at, score_awarded_at): LoanTermsRow = sqlx::query_as(
         "SELECT l.policy_version, l.borrower_cover_centavos,
                 (SELECT (e.payload->>'pool_funded')::BIGINT FROM public.ledger_events e
                   WHERE e.loan_id = l.id AND e.kind = 'loan_disbursed'
-                  ORDER BY e.id LIMIT 1)
+                  ORDER BY e.id LIMIT 1),
+                l.borrower_id, l.score_rise_at, l.score_awarded_at
            FROM public.loans l WHERE l.id = $1",
     )
     .bind(loan_id)
@@ -540,6 +586,50 @@ pub async fn detail(
     .await
     .map_err(|e| db_err(e, "public loan recoveries"))?;
 
+    // Score movements this loan caused. Rows written before 048 carry no
+    // `loan_id`, so an older loan simply shows none rather than showing a
+    // half-parsed sentence.
+    let score_rows: Vec<ScoreEventRow> = sqlx::query_as(
+        "SELECT user_id, old_score, new_score, reason_code, created_at
+           FROM public.credit_score_log
+          WHERE loan_id = $1
+          ORDER BY created_at, id",
+    )
+    .bind(loan_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| db_err(e, "public loan score events"))?;
+
+    let mut score_events: Vec<PublicScoreEvent> = score_rows
+        .into_iter()
+        .map(|(user_id, old_score, new_score, reason, at)| PublicScoreEvent {
+            subject: if user_id == borrower_id { "borrower" } else { "guarantor" },
+            position: positions.get(&user_id).copied(),
+            // The movement, not either endpoint. A first-ever row has no
+            // `old_score`, and no delta to state.
+            delta: old_score.map_or(0, |old| new_score - old),
+            reason,
+            at,
+            status: "awarded",
+        })
+        .collect();
+
+    // The rise a fully-repaid loan has earned but not yet been paid, because
+    // its term has not elapsed (047). Shown so an early repayment does not read
+    // as a loan that earned nothing.
+    if let Some(due_at) = score_rise_at
+        && score_awarded_at.is_none()
+    {
+        score_events.push(PublicScoreEvent {
+            subject: "borrower",
+            position: None,
+            delta: super::score::SCORE_BUMP_ON_CLOSE,
+            reason: Some(super::score::reason::REPAID_TERM_COMPLETE.to_string()),
+            at: due_at,
+            status: "pending",
+        });
+    }
+
     Ok(Json(PublicLoanDetail {
         loan,
         policy_version,
@@ -567,6 +657,7 @@ pub async fn detail(
                 step, source, amount, refunded, stroops, at,
             })
             .collect(),
+        score_events,
     }))
 }
 
@@ -640,6 +731,19 @@ mod tests {
                 step: 3, source: "guarantor_deposit".into(), guarantor: Some(1), amount: 1, refunded: 0,
                 stroops: None, at: 0,
             }],
+            // Both shapes: an awarded movement and a rise still waiting on its
+            // term. Neither may carry a field this test forbids — in particular
+            // the delta is published and the score itself is not.
+            score_events: vec![
+                PublicScoreEvent {
+                    subject: "guarantor", position: Some(1), delta: -25,
+                    reason: Some("guarantor_claimed".into()), at: 0, status: "awarded",
+                },
+                PublicScoreEvent {
+                    subject: "borrower", position: None, delta: 5,
+                    reason: Some("loan_repaid_term_complete".into()), at: 0, status: "pending",
+                },
+            ],
         };
         let list = PublicLoansResponse {
             items: vec![sample_loan()],
