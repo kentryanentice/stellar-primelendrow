@@ -5,7 +5,7 @@ import usePayouts from '../../functions/Lending/usePayouts'
 import useStripeCheckout, { stripeCheckoutResult } from '../../functions/Lending/useStripeCheckout'
 import { useToast } from '../../providers/useToast'
 import { formatDate, parsePesoInput, pesos, pesosCompact } from '../../functions/Lending/money'
-import { payoutFee, receiveFee } from '../../functions/Lending/fees'
+import { grossUp, payoutFee } from '../../functions/Lending/fees'
 import { PAYOUT_LABEL, payoutNeedsAttention, type PoolResponse } from '../../functions/Lending/types'
 import PayPalButton from './PayPalButton'
 
@@ -74,12 +74,14 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const depositTooBig = limits !== null && depositCentavos !== null && depositCentavos > limits.allowance
     const depositBlocked = depositTooSmall || depositTooBig
     const withdrawTooBig = withdrawCentavos !== null && withdrawCentavos > me.available
-    // Fee estimates (engine 043), from policy. A deposit is credited net of
-    // the fee the provider actually reports; a withdrawal has its fee taken
-    // out of what's sent. `?.` so an older engine just shows no fee line.
+    // Fee estimates (engine 043, 049), from policy. A deposit adds the fee to
+    // what's charged so the member is credited exactly what they typed — the
+    // same way a repayment does. A withdrawal is the other way round: its fee
+    // comes out of the claim, so the pool pays exactly what was asked for.
+    // `?.` so an older engine just shows no fee line.
     const fees = params.policy.payment_fees ?? null
     const depositFees = fees && depositCentavos && !depositBlocked
-        ? { paypal: receiveFee(depositCentavos, fees.paypal), card: receiveFee(depositCentavos, fees.stripe) }
+        ? { paypal: grossUp(depositCentavos, fees.paypal), card: grossUp(depositCentavos, fees.stripe) }
         : null
     const withdrawFee = fees && withdrawCentavos && !withdrawTooBig ? payoutFee(withdrawCentavos, fees.paypal) : null
 
@@ -168,8 +170,8 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     />
                     {depositFees && depositCentavos && (
                         <p className='lending-muted lending-fee-note'>
-                            PayPal keeps about {pesos(depositFees.paypal)}, so you’re credited about{' '}
-                            <b>{pesos(depositCentavos - depositFees.paypal)}</b>.
+                            You’ll be charged about {pesos(depositFees.paypal.total)} ({pesos(depositFees.paypal.fee)}{' '}
+                            PayPal fee), and <b>{pesos(depositCentavos)}</b> goes into the pool.
                         </p>
                     )}
                     {confirming && <p className='lending-muted'>Confirming your deposit…</p>}

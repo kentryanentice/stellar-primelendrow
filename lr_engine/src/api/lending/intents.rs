@@ -88,11 +88,19 @@ pub async fn deposit_status(
     let t = now();
 
     let (credited_24h, credited_30d): (i64, i64) = sqlx::query_as(
-        // Gross, from the event: what the member paid in, before any provider
-        // fee (043 credits the net, but a limit on money coming in counts all
-        // of it). Every deposit event has carried `amount` since the ledger began.
-        "SELECT COALESCE(SUM((e.payload->>'amount')::BIGINT) FILTER (WHERE e.created_at >= $2), 0)::BIGINT,
-                COALESCE(SUM((e.payload->>'amount')::BIGINT), 0)::BIGINT
+        // What the member actually deposited — the sum that reached their
+        // balance, not the provider's cut on top of it.
+        //
+        // `credited` since deposits started grossing up (049): the member names
+        // a round number, the fee is added to the charge, and that round number
+        // is what lands. Counting `amount` there would charge a member's own
+        // limit for PayPal's fee, quietly shrinking their headroom every time
+        // they deposit. Older events carry no `credited` and fall back to
+        // `amount`, which for them was the gross they paid and the net-of-fee
+        // they received — the closest thing those rows have to this number.
+        "SELECT COALESCE(SUM(COALESCE((e.payload->>'credited')::BIGINT, (e.payload->>'amount')::BIGINT))
+                    FILTER (WHERE e.created_at >= $2), 0)::BIGINT,
+                COALESCE(SUM(COALESCE((e.payload->>'credited')::BIGINT, (e.payload->>'amount')::BIGINT)), 0)::BIGINT
            FROM public.ledger_events e
           WHERE e.user_id = $1 AND e.kind = 'deposit_confirmed' AND e.created_at >= $3",
     )
@@ -103,9 +111,11 @@ pub async fn deposit_status(
     .await
     .map_err(|e| db_err(e, "deposit usage"))?;
 
-    // Live = reserved, capturing, or open and not yet expired.
+    // Live = reserved, capturing, or open and not yet expired. `applies` for
+    // the same reason as above — it is the deposit; `amount` is the deposit
+    // plus the provider's fee. NULL on intents reserved before 049.
     let pending: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.payment_intents
+        "SELECT COALESCE(SUM(COALESCE(applies, amount)), 0)::BIGINT FROM public.payment_intents
           WHERE user_id = $1 AND purpose = 'deposit'
             AND (status IN ('reserved', 'capturing') OR (status = 'open' AND expires_at > $2))",
     )
@@ -160,14 +170,20 @@ pub async fn reserve_deposit(pool: &PgPool, user_id: Uuid, rail: &str, amount: i
         ));
     }
 
-    // The fee the provider is expected to keep. The member is credited the
-    // net of the fee the provider actually reports (043); this is recorded so
-    // the two can be compared.
-    let fee = domain::receive_fee_estimate(amount, rules.params.payment_fees.for_rail(rail));
+    // The fee goes ON TOP of what the member asked to deposit, exactly as it
+    // already does for a repayment (049). Someone who types 5,000 is charged
+    // 5,000 plus the provider's cut and is credited 5,000 — the number they
+    // chose is the number that lands, and the fee never eats into it.
+    //
+    // Before this, `amount` was charged and the NET was credited, so a ₱5,000
+    // deposit arrived as about ₱4,815 and no round number ever survived the
+    // trip. `amount` is what the provider is asked for and what the 041
+    // trigger matches; `applies` is what the member gets.
+    let (total, fee) = domain::gross_up(amount, rules.params.payment_fees.for_rail(rail));
     let expires_at = now() + INTENT_TTL_SECS;
-    let id = insert(&mut tx, user_id, "deposit", None, None, amount, fee, None, rail, expires_at).await?;
+    let id = insert(&mut tx, user_id, "deposit", None, None, total, fee, Some(amount), rail, expires_at).await?;
     tx.commit().await.map_err(|e| db_err(e, "commit reserve deposit"))?;
-    Ok(Reserved { id, amount, expires_at, superseded: Vec::new() })
+    Ok(Reserved { id, amount: total, expires_at, superseded: Vec::new() })
 }
 
 /// Step 1 for a repayment: the amount is exactly what's due — the earliest

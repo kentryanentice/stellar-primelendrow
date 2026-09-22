@@ -1,9 +1,12 @@
-import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react'
+import { Fragment, useState } from 'react'
+import { ArrowLeftRight, ChevronDown, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react'
 import type useTransactions from '../../functions/Lending/useTransactions'
 import { formatDate, pesos, xlm } from '../../functions/Lending/money'
 import { shortId, txLink } from '../../functions/Lending/explorer'
 import { TRANSACTION_KIND_LABEL, TRANSACTION_STATUS_META, type Transaction } from '../../functions/Lending/types'
 import { transactionFeeNote } from '../../functions/Lending/fees'
+import { transactionReceipt } from '../../functions/Lending/receipt'
+import Receipt from './Receipt'
 import { TransactionRowsSkeleton, PagerSkeleton } from './Skeleton'
 
 /** On-chain references are checkable on a block explorer; a PayPal capture or
@@ -50,6 +53,9 @@ function FeeNote({ tx }: { tx: Transaction }) {
  */
 function TransactionsCard({ transactions }: { transactions: ReturnType<typeof useTransactions> }) {
     const { items, page, total, totalPages, loading, error, goToPage } = transactions
+    /** The one row whose receipt is open. One at a time, so opening a second
+     *  doesn't leave a column of breakdowns to scroll back through. */
+    const [openId, setOpenId] = useState<string | null>(null)
 
     const head = (
         <thead>
@@ -99,21 +105,44 @@ function TransactionsCard({ transactions }: { transactions: ReturnType<typeof us
                             <tbody>
                                 {items.map(tx => {
                                     const status = TRANSACTION_STATUS_META[tx.status]
+                                    const receipt = transactionReceipt(tx)
+                                    const open = openId === tx.id
+                                    const kind = <span className='lending-tx-kind'>{TRANSACTION_KIND_LABEL[tx.kind]}</span>
                                     return (
-                                        <tr key={tx.id}>
-                                            <td>
-                                                <span className='lending-tx-kind'>{TRANSACTION_KIND_LABEL[tx.kind]}</span>
-                                                <Reference tx={tx} />
-                                            </td>
-                                            <td className='lending-ledger-amount'>
-                                                {tx.asset === 'php' ? pesos(tx.amount) : xlm(tx.amount)}
-                                                <FeeNote tx={tx} />
-                                            </td>
-                                            <td>
-                                                <span className={`lending-tx-status ${status.cls}`}>{status.label}</span>
-                                            </td>
-                                            <td>{formatDate(tx.at)}</td>
-                                        </tr>
+                                        <Fragment key={tx.id}>
+                                            <tr className={open ? 'is-open' : undefined}>
+                                                <td>
+                                                    {receipt ? (
+                                                        <button
+                                                            type='button'
+                                                            className='lending-tx-toggle'
+                                                            aria-expanded={open}
+                                                            aria-label={`${open ? 'Hide' : 'Show'} receipt for this ${TRANSACTION_KIND_LABEL[tx.kind].toLowerCase()}`}
+                                                            onClick={() => setOpenId(open ? null : tx.id)}
+                                                        >
+                                                            {kind}
+                                                            <ChevronDown aria-hidden='true' />
+                                                        </button>
+                                                    ) : kind}
+                                                    <Reference tx={tx} />
+                                                </td>
+                                                <td className='lending-ledger-amount'>
+                                                    {tx.asset === 'php' ? pesos(tx.amount) : xlm(tx.amount)}
+                                                    <FeeNote tx={tx} />
+                                                </td>
+                                                <td>
+                                                    <span className={`lending-tx-status ${status.cls}`}>{status.label}</span>
+                                                </td>
+                                                <td>{formatDate(tx.at)}</td>
+                                            </tr>
+                                            {open && receipt && (
+                                                <tr className='lending-receipt-row'>
+                                                    <td colSpan={4}>
+                                                        <Receipt lines={receipt} reference={tx.reference} />
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </Fragment>
                                     )
                                 })}
                             </tbody>
