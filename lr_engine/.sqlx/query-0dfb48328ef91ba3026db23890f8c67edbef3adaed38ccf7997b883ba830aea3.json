@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM public.sessions\n          WHERE user_id = (SELECT id FROM public.users WHERE email = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0dfb48328ef91ba3026db23890f8c67edbef3adaed38ccf7997b883ba830aea3"
+}

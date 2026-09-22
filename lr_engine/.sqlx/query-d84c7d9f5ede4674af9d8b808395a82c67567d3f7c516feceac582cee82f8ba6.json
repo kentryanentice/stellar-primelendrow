@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM public.verification_codes WHERE email = $1 OR expires_at <= $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d84c7d9f5ede4674af9d8b808395a82c67567d3f7c516feceac582cee82f8ba6"
+}

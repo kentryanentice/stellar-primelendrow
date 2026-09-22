@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE public.users\n            SET password_hash         = $1,\n                updated_at            = $2,\n                failed_login_attempts = 0,\n                lockout_until         = 0\n          WHERE email = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95844ed1685841f8e3f55e78212648b5d812ade0b1a5025f71f54eebcdfe13ef"
+}

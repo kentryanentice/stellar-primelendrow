@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE public.users\n                   SET failed_login_attempts = 0, lockout_until = $2\n                 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9ca7633f071c88a95823a6a1d911869887981edac5e3f8194b8864c9c24f148"
+}
