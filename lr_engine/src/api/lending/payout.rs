@@ -93,9 +93,8 @@ pub(super) struct Destination {
 ///
 /// Defaults to PayPal, which is the rail every existing member is already on —
 /// so installing the Stripe code changes nobody's destination until an
-/// operator says so. Set `PAYOUT_RAIL=stripe` to flip the preference; either
-/// way the other rail remains a fallback, because a member who has only
-/// connected one should be payable over that one.
+/// operator says so. Set `PAYOUT_RAIL=stripe` to flip the preference; PayPal
+/// then remains the fallback. Stripe is never a fallback — see `destination`.
 fn preferred_rail() -> &'static str {
     match std::env::var("PAYOUT_RAIL").as_deref() {
         Ok("stripe") => "stripe",
@@ -142,19 +141,43 @@ pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<Destinat
         None
     };
 
-    let (first, second) = match preferred_rail() {
-        "stripe" => (
-            stripe_account.map(|a| Destination { provider: "stripe", account: a }),
-            paypal_account.map(|a| Destination { provider: "paypal", account: a }),
-        ),
-        _ => (
-            paypal_account.map(|a| Destination { provider: "paypal", account: a }),
-            stripe_account.map(|a| Destination { provider: "stripe", account: a }),
-        ),
+    // **Stripe is never a fallback.** It is reached only when an operator
+    // deliberately sets `PAYOUT_RAIL=stripe`.
+    //
+    // The platform's Stripe account settles in USD, and Connect transfers are
+    // created in PHP (`infra::stripe`, `currency: "php"`). A transfer draws on
+    // the platform balance in its own currency, so a PHP transfer against a
+    // USD balance has nothing to draw on — a member who connected only Stripe
+    // would be told their withdrawal was sent and then watch it fail. Worse,
+    // the ledger books every rail in PHP centavos, so even a transfer Stripe
+    // did convert would leave `cash` disagreeing with the provider balance.
+    //
+    // PayPal settles in PHP and books to the centavo, so it stays the default
+    // and stays the fallback when Stripe is preferred. Lifting this means
+    // either a PHP-settling Stripe account or a USD-denominated ledger account
+    // for the Stripe balance; until then the fallback would promise money it
+    // cannot send.
+    let paypal_destination = paypal_account.map(|a| Destination { provider: "paypal", account: a });
+    let stripe_only = paypal_destination.is_none() && stripe_account.is_some();
+    let destination = match preferred_rail() {
+        "stripe" => stripe_account
+            .map(|a| Destination { provider: "stripe", account: a })
+            .or(paypal_destination),
+        _ => paypal_destination,
     };
 
-    if let Some(destination) = first.or(second) {
+    if let Some(destination) = destination {
         return Ok(destination);
+    }
+
+    // Connected, but to the rail that is not being paid out on. Said plainly,
+    // because "connect a payout account" would read as a bug to someone who
+    // already has.
+    if stripe_only && preferred_rail() != "stripe" {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Withdrawals are sent to PayPal — connect PayPal in Settings to withdraw",
+        ));
     }
 
     // Nothing to pay to. Which of the two failures it is decides what the
@@ -167,7 +190,7 @@ pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<Destinat
     }
     Err((
         StatusCode::UNPROCESSABLE_ENTITY,
-        "Connect a payout account first — Settings → PayPal or Stripe",
+        "Connect a payout account first — Settings → PayPal",
     ))
 }
 

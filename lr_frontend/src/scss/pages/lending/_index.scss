@@ -1091,6 +1091,158 @@ select.lending-input option {
     }
 }
 
+/* ---- receipts (TransactionsCard, PaymentHistoryCard) ----
+   A movement's order laid out line by line: what was charged, what the
+   provider kept, what landed. Opened from the row it belongs to. */
+
+/* The movement label doubles as the toggle when a row has a receipt, so it
+   has to read as the same text it replaced — a button that looked like a
+   button would shout louder than the amounts beside it. */
+.lending-tx-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    svg {
+        width: 13px;
+        height: 13px;
+        color: #8492ac;
+        transition: transform 150ms ease;
+    }
+
+    &[aria-expanded='true'] svg { transform: rotate(180deg); }
+
+    &:hover .lending-tx-kind,
+    &:focus-visible .lending-tx-kind { color: var(--lending-link-hover); }
+
+    &:focus-visible {
+        outline: 2px solid var(--auth-primary);
+        outline-offset: 2px;
+        border-radius: 3px;
+    }
+}
+
+/* The row whose receipt is open, and the receipt row under it, read as one
+   block rather than as two unrelated table rows. */
+.lending-ledger-table tr.is-open > td { border-bottom-color: transparent; }
+
+.lending-receipt-row > td { padding-top: 0; }
+
+.lending-receipt {
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, .08);
+    background: rgba(255, 255, 255, .03);
+}
+
+.lending-receipt-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+}
+
+.lending-receipt-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+
+    dt { color: #b9c3d6; }
+
+    dd {
+        margin: 0;
+        color: #eef1f6;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    &.is-muted {
+        font-size: 12.5px;
+
+        dt,
+        dd { color: #8492ac; }
+    }
+
+    /* What the movement came down to — ruled off above, so the eye lands on
+       it after reading down through what made it up. */
+    &.is-total {
+        margin-top: 2px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, .1);
+        font-weight: 700;
+
+        dt,
+        dd { color: #eef1f6; }
+    }
+}
+
+.lending-receipt-ref {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    margin: 10px 0 0;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(255, 255, 255, .1);
+    font-size: 11.5px;
+    color: #8492ac;
+
+    /* The whole reference, not the shortened one in the row: it's what a
+       member types into PayPal's search to find the same payment there. */
+    code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #b9c3d6;
+        word-break: break-all;
+    }
+}
+
+/* PaymentHistoryCard rows are flex rows, and the skeleton renders the same
+   class — so the row itself is left alone, and an open one simply wraps its
+   receipt onto a line of its own inside the same bordered box. */
+.lending-payment-row.is-open { flex-wrap: wrap; }
+
+.lending-payment-row .lending-receipt {
+    flex-basis: 100%;
+    margin-top: 4px;
+}
+
+.lending-payment-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #8492ac;
+    cursor: pointer;
+
+    svg {
+        width: 15px;
+        height: 15px;
+        transition: transform 150ms ease;
+    }
+
+    &[aria-expanded='true'] svg { transform: rotate(180deg); }
+
+    &:hover { background: rgba(255, 255, 255, .06); color: #eef1f6; }
+
+    &:focus-visible {
+        outline: 2px solid var(--auth-primary);
+        outline-offset: 2px;
+    }
+}
+
 /* Same pill shape as .lending-lot-badge, keyed to how settled a movement is
    rather than to what kind of money it was. */
 .lending-tx-status {
