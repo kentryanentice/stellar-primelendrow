@@ -17,8 +17,10 @@
 //!      ordinary PayPal/Stripe rail, verified by the provider like every other
 //!      peso the pool takes in. `settle` below decides where that money goes.
 //!   3. **the admin marks it paid** (`mark_paid`) — once the arrears are
-//!      actually clear. The loan becomes `reconciled`, the credit penalty is
-//!      returned, and the on-chain outcome is queued for the vault admin.
+//!      actually clear. The loan becomes `reconciled`, most of the credit
+//!      penalty is returned (20 of the 25 it cost — see
+//!      `SCORE_RESTORE_ON_RECONCILE`), and the on-chain outcome is queued for
+//!      the vault admin.
 //!
 //! Splitting it this way keeps the administrator's power where it belongs. They
 //! decide *whether* a borrower may settle and *whether* the loan is square.
@@ -59,12 +61,20 @@ use crate::api::lending::ledger::{EventDraft, commit_event};
 use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
-/// Returned when a defaulted loan is made good. The mirror of
-/// `default_loan::SCORE_PENALTY_ON_DEFAULT`, and the same number on purpose: a
-/// settled default should leave the borrower where they stood, not ahead of it.
-/// It is not paired with `repay`'s +5 for a clean close — settling late is not
-/// the same as paying on time, and only the penalty is undone.
-const SCORE_RESTORE_ON_RECONCILE: i16 = 25;
+/// Returned when a defaulted loan is made good.
+///
+/// Deliberately less than `default_loan::SCORE_PENALTY_ON_DEFAULT` (25), so a
+/// default that is later settled still leaves a mark: the borrower ends up 5
+/// short of where they stood before it. Settling is worth almost all of the
+/// penalty back — that is what makes it worth doing — but not quite all of it,
+/// because a default that had to be settled is not the same history as a loan
+/// that never went bad.
+///
+/// It is not paired with `repay`'s +5 for a clean close either. Settling late
+/// is not paying on time, so nothing is earned on top of the restoration; a
+/// reconciled loan never passes through the term-end path in `lending::score`
+/// and so never schedules a rise.
+const SCORE_RESTORE_ON_RECONCILE: i16 = 20;
 
 // ===========================================================================
 // What is still owed
@@ -521,9 +531,16 @@ pub async fn mark_paid(
     // point can reach here with them outstanding.
     crate::api::lending::lots::release_loan_lots(&mut tx, p.loan_id, &["collateral", "pledged", "lent"]).await?;
 
-    // The credit consequence, returned. Exactly the penalty a default cost, no
-    // more: settling late is not the same as paying on time, so this restores
-    // standing rather than rewarding it.
+    // The guarantors' records follow their money. `settle` above has already
+    // refunded every claimed pledge in full, so a guarantor left permanently
+    // down for a loan that ended up square would be the books and the record
+    // disagreeing. Most of the 10 a claim cost comes back; 5 stays, because
+    // the claim did happen. Same net 5 the borrower carries, below.
+    crate::api::lending::score::restore_guarantor_claims(&mut tx, p.loan_id, admin_id, now).await?;
+
+    // The credit consequence, mostly returned: +20 against the 25 a default
+    // cost, so settling recovers nearly all of it and still leaves the borrower
+    // 5 short of where they started. Restoring standing, not rewarding it.
     let old_score: Option<i16> = sqlx::query_scalar(
         "SELECT score FROM public.credit_scores WHERE user_id = $1 FOR UPDATE",
     )
