@@ -1,18 +1,19 @@
 name: CI
 
-# The SOW requires a visible CI run on each pull request. Two jobs, one per
-# component that can be built from a clean clone, so a reviewer can see at a
-# glance which part of the system a change touched and whether it stands up.
+# The SOW requires a visible CI run on each pull request. Three jobs, one per
+# component, so a reviewer can see at a glance which part of the system a
+# change touched and whether it stands up.
 #
-# There is deliberately no frontend job. `lr_frontend/src/functions/KYC/` holds
-# the liveness, ID-parsing and face-match logic and is kept out of the public
+# The frontend job lints but does not build, and that is a deliberate limit
+# rather than an oversight. `lr_frontend/src/functions/KYC/` holds the
+# liveness, ID-parsing and face-match logic and is kept out of the public
 # repository, but tracked components import it directly — `src/pages/KYC.tsx`
 # and three files under `src/elements/KYC/` — so `tsc -b` on a clean clone
 # fails on seven missing modules that have nothing to do with any change under
-# review. A job that can only ever be red tells a reviewer nothing. Covering
-# the frontend means either publishing that directory or putting the KYC flow
-# behind an interface whose implementation may be absent; until one of those
-# happens, the frontend is verified locally rather than in CI.
+# review. ESLint is configured with `tseslint.configs.recommended`, which is
+# syntax-driven and resolves no modules, so it runs clean over all 183 tracked
+# frontend files without them. See the job for what that does and does not
+# catch.
 on:
   push:
     branches: [master, primelendrow]
@@ -136,3 +137,38 @@ jobs:
         run: cargo test --locked
         env:
           SQLX_OFFLINE: true
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lr_frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: lr_frontend/package-lock.json
+
+      # Also a check in its own right: `npm ci` fails if package.json and the
+      # lockfile have drifted apart.
+      - name: Install
+        run: npm ci
+
+      # What this catches: unused locals and parameters, React hook rule
+      # violations, react-refresh boundary mistakes, and TypeScript syntax
+      # errors, across every tracked .ts/.tsx file.
+      #
+      # What it does NOT catch, and what a reviewer should not read it as
+      # covering: type errors. There is no `tsc -b` and no `vite build` here,
+      # because both resolve imports and both fail on a clean clone over the
+      # unpublished KYC directory (see the note at the top of this file). A
+      # green frontend job means the code is well-formed and lint-clean, not
+      # that it type-checks or bundles. Those are verified locally until the
+      # KYC flow either ships in the repository or moves behind an interface
+      # whose implementation is allowed to be absent.
+      - name: Lint
+        run: npm run lint
