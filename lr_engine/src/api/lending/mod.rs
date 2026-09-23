@@ -15,6 +15,7 @@ pub mod admin;
 mod apply;
 mod cancel;
 mod collateral;
+mod credit_history;
 mod custody;
 mod deposit;
 mod deposits_list;
@@ -53,6 +54,10 @@ pub use admin::reconcile::{mark_paid as loan_mark_paid, reopen as loan_reopen};
 pub use apply::apply;
 pub use cancel::cancel as loan_cancel;
 pub use collateral::confirm as collateral_confirm;
+// A member's own score explained — what moved it, what is due, what is at
+// stake. Lives here rather than in `api::credit` because every number it shows
+// is a lending rule.
+pub use credit_history::history as credit_history;
 pub use custody::record as collateral_record;
 pub use deposit::deposit;
 // The Stripe webhook credits through the same routine the redirect does, so a

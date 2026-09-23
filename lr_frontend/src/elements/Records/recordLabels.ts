@@ -1,4 +1,4 @@
-import type { PublicLoanStatus, PublicRecovery } from '../../functions/Lending/publicLoans'
+import type { PublicLoanStatus, PublicRecovery, PublicScoreEvent } from '../../functions/Lending/publicLoans'
 
 /** Pill colors, the same as the admin loan book's — a status reads the same
  *  on every screen that shows it. */
@@ -61,3 +61,31 @@ export const INSTALLMENT_STATUS_LABEL: Record<string, string> = {
     late: 'Late',
     defaulted: 'Defaulted',
 }
+
+/** Why a score moved, keyed by the engine's reason code. */
+export const SCORE_REASON_LABEL: Record<string, string> = {
+    loan_repaid_term_complete: 'Repaid in full, term completed',
+    loan_defaulted: 'Loan defaulted',
+    default_settled: 'Default settled',
+    guarantor_claimed: 'Pledge claimed on default',
+    guarantor_claim_settled: 'Claimed pledge settled',
+}
+
+/** Why a score moved. A rise still waiting on its term says so, rather than
+ *  reading as a term already complete. */
+export function scoreReason(event: PublicScoreEvent) {
+    if (event.status === 'pending') return 'Repaid in full, term still running'
+    return event.reason ? SCORE_REASON_LABEL[event.reason] ?? event.reason : '—'
+}
+
+/** The score a change moved (or, while pending, is expected to move) from and
+ *  to: "60 → 65". Null when there is none to show. */
+export const scoreRange = (event: PublicScoreEvent) =>
+    event.score_from !== null && event.score_to !== null ? `${event.score_from} → ${event.score_to}` : null
+
+/** Whose record moved. Guarantors by position only. */
+export const scoreSubject = (event: PublicScoreEvent) =>
+    event.subject === 'borrower' ? 'Borrower' : event.position ? `Guarantor ${event.position}` : 'Guarantor'
+
+/** A score movement with its sign: "+5", "−25". */
+export const points = (delta: number) => (delta > 0 ? `+${delta}` : delta < 0 ? `−${-delta}` : '0')

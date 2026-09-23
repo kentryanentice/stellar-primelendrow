@@ -8,14 +8,16 @@
 //! without an account and without taking anyone's word for them.
 //!
 //! What it must never carry is a person. No user id, username, email, wallet
-//! address, PayPal reference or score leaves this module: a loan is known by
-//! its reference, a guarantor by their position on that loan ("Guarantor 2"),
-//! and the depositors a payment paid by how many there were and what they got
-//! in total. That is enforced by construction rather than by care — every
-//! response is a struct declared here, built field by field from queries that
-//! only select what the struct carries, and `views_carry_no_personal_fields`
-//! fails the build if a personal field name ever appears in one. User ids are
-//! read in exactly one place (to number the guarantors), and never serialized.
+//! address, PayPal reference or current score leaves this module: a loan is
+//! known by its reference, a guarantor by their position on that loan
+//! ("Guarantor 2"), the depositors a payment paid by how many there were and
+//! what they got in total, and a score only as the before and after of a
+//! change this loan caused. That is enforced by construction rather than by
+//! care — every response is a struct declared here, built field by field from
+//! queries that only select what the struct carries, and
+//! `views_carry_no_personal_fields` fails the build if a personal field name
+//! ever appears in one. User ids are read in exactly one place (to number the
+//! guarantors), and never serialized.
 //!
 //! The Stellar transaction hashes are published on purpose: the chain is
 //! already public, and a hash is the proof that the collateral moved.
@@ -220,15 +222,16 @@ pub struct PublicRecovery {
     pub at: i64,
 }
 
-/// One credit-score movement this loan caused (SOW §4.1: the proof page shows
-/// score changes).
+/// One credit-score movement this loan caused (SOW §4.1: before-and-after
+/// score records against the loan's timestamps).
 ///
-/// **The movement, never the score.** `delta` is what this loan did to
-/// somebody's record; the absolute score before and after stays private, as
-/// does whose record it is. A delta is a fact about how this loan ended, which
-/// is what the page is for. A running score is a profile of a person, which is
-/// what this module refuses to carry — see the rule at the top of the file, and
-/// `score` in the `PERSONAL` list that enforces it.
+/// **The change and its before and after — never a running score.** Each row
+/// is a fact about how this loan ended: what the score was when the change
+/// landed and what it became, which is what lets a reviewer see a borrower
+/// rise at term end or a guarantor drop a tier. Whose record it is stays
+/// private, and so does anyone's current score: that is a profile of a person
+/// rather than a fact about this loan — see the rule at the top of the file,
+/// and `score` in the `PERSONAL` list that enforces it.
 ///
 /// The subject is positional for the same reason every other name here is:
 /// "borrower", or "guarantor 2".
@@ -238,8 +241,14 @@ pub struct PublicScoreEvent {
     pub subject: &'static str,
     /// Which guarantor, when the subject is one.
     pub position: Option<i64>,
-    /// Signed: +5 for a term completed, -25 for a default or a claim.
+    /// Signed, e.g. +5 for a term completed or -25 for a default.
     pub delta: i16,
+    /// The score before and after the change. While a rise is still `pending`,
+    /// where it is expected to take the score — fixed at the moment the loan
+    /// was paid off, never the borrower's live score (see `detail`). None if
+    /// that cannot be worked out.
+    pub score_from: Option<i16>,
+    pub score_to: Option<i16>,
     /// The stable code from `lending::score::reason` (048) — what a UI switches
     /// on. Null on rows written before 048, which kept only prose.
     pub reason: Option<String>,
@@ -324,6 +333,16 @@ fn product_clause(product: &str) -> &'static str {
         "guarantor" => "l.product = 'guarantor'",
         _ => "TRUE",
     }
+}
+
+/// Where a pending rise is expected to take the score: the score when its loan
+/// was paid off, plus the `earlier` rises due to land before it, then its own —
+/// each stopping at the top of the band, as the term-end sweep stops them.
+fn expected_rise(at_payoff: i16, earlier: i64) -> (i16, i16) {
+    let bump = i64::from(super::score::SCORE_BUMP_ON_CLOSE);
+    let max = i64::from(super::score::SCORE_MAX);
+    let from = (i64::from(at_payoff) + bump * earlier).min(max);
+    (from as i16, (from + bump).min(max) as i16)
 }
 
 /// Numbers a loan's guarantors 1, 2, 3 in the order they were asked, keyed by
@@ -605,9 +624,10 @@ pub async fn detail(
         .map(|(user_id, old_score, new_score, reason, at)| PublicScoreEvent {
             subject: if user_id == borrower_id { "borrower" } else { "guarantor" },
             position: positions.get(&user_id).copied(),
-            // The movement, not either endpoint. A first-ever row has no
-            // `old_score`, and no delta to state.
+            // A first-ever row has no `old_score`, and no delta to state.
             delta: old_score.map_or(0, |old| new_score - old),
+            score_from: old_score,
+            score_to: Some(new_score),
             reason,
             at,
             status: "awarded",
@@ -617,13 +637,42 @@ pub async fn detail(
     // The rise a fully-repaid loan has earned but not yet been paid, because
     // its term has not elapsed (047). Shown so an early repayment does not read
     // as a loan that earned nothing.
+    //
+    // With where it is expected to take the score, worked out from the moment
+    // the loan was paid off: the score then, plus every rise already due to
+    // land before this one. Stacking (047) spaces any rise scheduled later
+    // after this one, so nothing added after payoff can land first — the
+    // figure is fixed at payoff and never follows the borrower's live score.
+    // Only a default or claim on another loan in between could make it differ,
+    // and then the awarded row shows what really happened.
     if let Some(due_at) = score_rise_at
         && score_awarded_at.is_none()
     {
+        let expected = match loan.closed_at {
+            Some(paid_off) => {
+                let (at_payoff, earlier): (Option<i16>, i64) = sqlx::query_as(
+                    "SELECT (SELECT new_score FROM public.credit_score_log
+                              WHERE user_id = $1 AND created_at <= $2
+                              ORDER BY created_at DESC, id DESC LIMIT 1),
+                            (SELECT COUNT(*) FROM public.loans
+                              WHERE borrower_id = $1 AND score_rise_at > $2 AND score_rise_at < $3)",
+                )
+                .bind(borrower_id)
+                .bind(paid_off)
+                .bind(due_at)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| db_err(e, "public expected score rise"))?;
+                at_payoff.map(|score| expected_rise(score, earlier))
+            }
+            None => None,
+        };
         score_events.push(PublicScoreEvent {
             subject: "borrower",
             position: None,
-            delta: super::score::SCORE_BUMP_ON_CLOSE,
+            delta: expected.map_or(super::score::SCORE_BUMP_ON_CLOSE, |(from, to)| to - from),
+            score_from: expected.map(|(from, _)| from),
+            score_to: expected.map(|(_, to)| to),
             reason: Some(super::score::reason::REPAID_TERM_COMPLETE.to_string()),
             at: due_at,
             status: "pending",
@@ -732,15 +781,15 @@ mod tests {
                 stroops: None, at: 0,
             }],
             // Both shapes: an awarded movement and a rise still waiting on its
-            // term. Neither may carry a field this test forbids — in particular
-            // the delta is published and the score itself is not.
+            // term. Neither may carry a field this test forbids — the change
+            // and its before and after are published, a live `score` is not.
             score_events: vec![
                 PublicScoreEvent {
-                    subject: "guarantor", position: Some(1), delta: -25,
-                    reason: Some("guarantor_claimed".into()), at: 0, status: "awarded",
+                    subject: "guarantor", position: Some(1), delta: -10, score_from: Some(85),
+                    score_to: Some(75), reason: Some("guarantor_claimed".into()), at: 0, status: "awarded",
                 },
                 PublicScoreEvent {
-                    subject: "borrower", position: None, delta: 5,
+                    subject: "borrower", position: None, delta: 5, score_from: Some(60), score_to: Some(65),
                     reason: Some("loan_repaid_term_complete".into()), at: 0, status: "pending",
                 },
             ],
@@ -760,6 +809,15 @@ mod tests {
         for key in &found {
             assert!(!PERSONAL.contains(&key.as_str()), "public view exposes `{key}`");
         }
+    }
+
+    #[test]
+    fn a_pending_rise_is_expected_after_the_ones_due_before_it() {
+        assert_eq!(expected_rise(60, 0), (60, 65));
+        // A back-to-back loan's rise lands first (047's stacking rule).
+        assert_eq!(expected_rise(60, 1), (65, 70));
+        assert_eq!(expected_rise(148, 0), (148, 150));
+        assert_eq!(expected_rise(145, 2), (150, 150));
     }
 
     #[test]
