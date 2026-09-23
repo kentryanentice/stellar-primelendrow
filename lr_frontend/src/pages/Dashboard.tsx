@@ -12,6 +12,7 @@ import BalanceCard from '../elements/Dashboard/BalanceCard'
 import TierLimitsCard from '../elements/Dashboard/TierLimitsCard'
 import NextPaymentCard from '../elements/Dashboard/NextPaymentCard'
 import RecentActivityCard from '../elements/Dashboard/RecentActivityCard'
+import CreditHistoryCard from '../elements/Dashboard/CreditHistoryCard'
 import PoolStrip from '../elements/Dashboard/PoolStrip'
 import DashboardSkeleton from '../elements/Dashboard/DashboardSkeleton'
 import VerifyPrompt from '../elements/Dashboard/VerifyPrompt'
@@ -22,9 +23,9 @@ import GuarantorCard from '../elements/Lending/GuarantorCard'
  * The member's whole position on one screen: what they hold, what's locked,
  * what they owe and when, their credit standing, and the latest movements.
  * Reads the same engine endpoints the Lend, Borrow and Pay pages do (GET
- * /pool, GET /loans, POST /pool/transactions, POST /loans/payments) and does
- * no money math of its own — each card links through to the page where the
- * action actually happens.
+ * /pool, GET /loans, POST /pool/transactions, POST /loans/payments), plus GET
+ * /credit/history for the score card, and does no money math of its own —
+ * each card links through to the page where the action actually happens.
  */
 function Overview() {
     const { data, loading, error, refresh } = useLendingPool()
@@ -111,6 +112,7 @@ function Overview() {
                         paymentCount={payments.total}
                     />
                     <RecentActivityCard rows={activity} loading={activityLoading} error={activityError} />
+                    <CreditHistoryCard />
                     <PoolStrip data={data} />
                     <GuarantorCard onChanged={handleChanged} />
                 </div>

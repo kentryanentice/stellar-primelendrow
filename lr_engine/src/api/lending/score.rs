@@ -68,13 +68,15 @@ pub const SCORE_PENALTY_ON_CLAIM: i16 = 10;
 pub const SCORE_RESTORE_ON_GUARANTOR_SETTLE: i16 = 5;
 
 /// The SOW's 50–150 band.
-const SCORE_MAX: i16 = 150;
-const SCORE_MIN: i16 = 50;
+pub const SCORE_MAX: i16 = 150;
+pub const SCORE_MIN: i16 = 50;
 
 /// Stable identifiers for why a score moved (048). The UI and the public proof
 /// page switch on these; `reason` carries the sentence a human reads.
 pub mod reason {
     pub const REPAID_TERM_COMPLETE: &str = "loan_repaid_term_complete";
+    pub const LOAN_DEFAULTED: &str = "loan_defaulted";
+    pub const DEFAULT_SETTLED: &str = "default_settled";
     pub const GUARANTOR_CLAIMED: &str = "guarantor_claimed";
     pub const GUARANTOR_CLAIM_SETTLED: &str = "guarantor_claim_settled";
 }

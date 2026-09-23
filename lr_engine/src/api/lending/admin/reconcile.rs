@@ -74,7 +74,7 @@ use crate::api::users::shared::{E, require_admin};
 /// is not paying on time, so nothing is earned on top of the restoration; a
 /// reconciled loan never passes through the term-end path in `lending::score`
 /// and so never schedules a rise.
-const SCORE_RESTORE_ON_RECONCILE: i16 = 20;
+pub(crate) const SCORE_RESTORE_ON_RECONCILE: i16 = 20;
 
 // ===========================================================================
 // What is still owed
@@ -562,14 +562,17 @@ pub async fn mark_paid(
                 .await
                 .map_err(|e| db_err(e, "restore score"))?;
             sqlx::query(
-                "INSERT INTO public.credit_score_log (user_id, old_score, new_score, actor_id, reason)
-                 VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO public.credit_score_log
+                     (user_id, old_score, new_score, actor_id, reason, reason_code, loan_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(borrower_id)
             .bind(old)
             .bind(new_score)
             .bind(admin_id)
             .bind(format!("loan {} settled after default", p.loan_id))
+            .bind(crate::api::lending::score::reason::DEFAULT_SETTLED)
+            .bind(p.loan_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "score log"))?;

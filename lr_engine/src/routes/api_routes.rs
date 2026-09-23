@@ -63,6 +63,7 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         )
         .route("/kyc/status", get(kyc::status))
         .route("/credit/score", get(credit::status))
+        .route("/credit/history", get(lending::credit_history))
         .route("/pool", get(lending::pool_summary))
         // The public loan book: no session, GET only, anonymised by
         // construction (see `lending::public`). The global rate limiter is

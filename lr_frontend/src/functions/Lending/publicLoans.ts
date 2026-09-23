@@ -121,6 +121,25 @@ export type PublicInstallment = {
     status: 'scheduled' | 'paid' | 'late' | 'defaulted'
 }
 
+/** One credit-score movement the loan caused: the change and the score before
+ *  and after it, never anyone's current score, and whose record only as the
+ *  borrower or a guarantor's position. */
+export type PublicScoreEvent = {
+    subject: 'borrower' | 'guarantor'
+    position: number | null
+    delta: number
+    /** While `pending`, where the rise is expected to take the score — fixed
+     *  when the loan was paid off. Null only if that can't be worked out. */
+    score_from: number | null
+    score_to: number | null
+    /** The engine's reason code (`lending::score::reason`). */
+    reason: string | null
+    /** When it landed — or, while `pending`, when it falls due. */
+    at: number
+    /** A rise earned by repaying early waits for the loan's term to run. */
+    status: 'awarded' | 'pending'
+}
+
 export type PublicLoanDetail = {
     loan: PublicLoan
     policy_version: number
@@ -132,6 +151,7 @@ export type PublicLoanDetail = {
     schedule: PublicInstallment[]
     payments: PublicPayment[]
     recoveries: PublicRecovery[]
+    score_events: PublicScoreEvent[]
 }
 
 /** The list filters, exactly as the engine whitelists them. `''` is "all". */

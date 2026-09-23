@@ -30,12 +30,13 @@ use uuid::Uuid;
 
 use crate::api::lending::ledger::{EventDraft, commit_event};
 use crate::api::lending::recovery;
+use crate::api::lending::score;
 use crate::api::lending::shared::{db_err, ledger_err};
 use crate::api::users::shared::{E, require_admin};
 
 /// A default is the worst thing a borrower's record can carry, so it costs
 /// more than a clean repayment earns (+5, `score::SCORE_BUMP_ON_CLOSE`).
-const SCORE_PENALTY_ON_DEFAULT: i16 = 25;
+pub(crate) const SCORE_PENALTY_ON_DEFAULT: i16 = 25;
 
 #[derive(Deserialize)]
 pub struct DefaultInput {
@@ -135,7 +136,8 @@ pub async fn declare(
 
     // Track record moves on real behaviour (D5), the mirror of the bump a
     // full repayment earns — and logged the same way, so a score can always
-    // be explained from its own history.
+    // be explained from its own history. The reason code and the loan (048)
+    // are what put this drop on the loan's public record.
     let old_score: Option<i16> = sqlx::query_scalar(
         "SELECT score FROM public.credit_scores WHERE user_id = $1 FOR UPDATE",
     )
@@ -154,14 +156,17 @@ pub async fn declare(
                 .await
                 .map_err(|e| db_err(e, "penalize score"))?;
             sqlx::query(
-                "INSERT INTO public.credit_score_log (user_id, old_score, new_score, actor_id, reason)
-                 VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO public.credit_score_log
+                     (user_id, old_score, new_score, actor_id, reason, reason_code, loan_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(borrower_id)
             .bind(old_score)
             .bind(new_score)
             .bind(admin_id)
             .bind(format!("loan {} defaulted", p.loan_id))
+            .bind(score::reason::LOAN_DEFAULTED)
+            .bind(p.loan_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "score log"))?;

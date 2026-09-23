@@ -1,4 +1,4 @@
-import { AlertTriangle, ExternalLink, Landmark, Receipt, ShieldCheck, Split } from 'lucide-react'
+import { AlertTriangle, ExternalLink, Gauge, Landmark, Receipt, ShieldCheck, Split } from 'lucide-react'
 import { formatDate, pesos, rate, xlm } from '../../functions/Lending/money'
 import { shortId, txLink } from '../../functions/Lending/explorer'
 import { RECIPIENTS, widthPct } from '../../functions/Lending/split'
@@ -11,7 +11,11 @@ import {
     STATUS_CLS,
     VAULT_ACTION_LABEL,
     loanRef,
+    points,
     recoverySource,
+    scoreRange,
+    scoreReason,
+    scoreSubject,
     shareOf,
 } from './recordLabels'
 
@@ -124,12 +128,14 @@ function SplitTable({ payment }: { payment: PublicPayment }) {
 /**
  * One loan's whole public record: terms and dates, what backed it (and what
  * is still locked), the schedule, every repayment with where its interest
- * went, and — if it went bad — the recovery waterfall. Every on-chain step
- * links to the transaction that proves it.
+ * went, the recovery waterfall if it went bad, and every credit-score change
+ * it caused. Every on-chain step links to the transaction that proves it.
  */
 function RecordDetail({ record }: { record: PublicLoanDetail }) {
     const { loan, collateral } = record
     const lockedNow = record.locked_now.collateral + record.locked_now.lent + record.locked_now.pledged
+    // The term ends with the last installment's due date, whenever it was paid.
+    const termEnd = record.schedule.at(-1)?.due_at ?? null
 
     return (
         <>
@@ -354,6 +360,67 @@ function RecordDetail({ record }: { record: PublicLoanDetail }) {
                     </div>
                 </section>
             )}
+
+            <section className='lending-card'>
+                <div className='lending-card-head'>
+                    <span className='lending-card-icon is-accent'><Gauge /></span>
+                    <h2>Credit score changes</h2>
+                </div>
+                <p className='lending-muted'>
+                    A score moves only on how a loan ends, never on a single payment. Each change shows the score
+                    before and after it. A repaid loan’s rise lands when its term ends, however early it was paid off —
+                    until then it shows the score it is expected to reach.
+                </p>
+                {record.score_events.length === 0 ? (
+                    <p className='lending-muted'>No score changes recorded against this loan.</p>
+                ) : (
+                    <div className='lending-rates-scroll'>
+                        <table className='lending-rates-table'>
+                            <thead>
+                                <tr><th>Whose record</th><th>Score</th><th>Change</th><th>Why</th><th>Date</th></tr>
+                            </thead>
+                            <tbody>
+                                {record.score_events.map((event, i) => (
+                                    <tr key={i}>
+                                        <td>{scoreSubject(event)}</td>
+                                        <td>
+                                            {scoreRange(event) ?? (
+                                                <span className='lending-muted'>
+                                                    {event.status === 'pending' ? 'Set when it lands' : '—'}
+                                                </span>
+                                            )}
+                                            {event.status === 'pending' && scoreRange(event) && (
+                                                <><br /><span className='lending-muted'>Expected</span></>
+                                            )}
+                                        </td>
+                                        <td>
+                                            <span
+                                                className={`lending-tx-status ${
+                                                    event.status === 'pending' ? 'is-progress' : event.delta > 0 ? 'is-good' : 'is-warn'
+                                                }`}
+                                            >
+                                                {points(event.delta)}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {scoreReason(event)}
+                                            {event.reason === 'loan_repaid_term_complete' && loan.closed_at !== null && termEnd !== null && (
+                                                <>
+                                                    <br />
+                                                    <span className='lending-muted'>
+                                                        Paid off {formatDate(loan.closed_at)} · term end {formatDate(termEnd)}
+                                                    </span>
+                                                </>
+                                            )}
+                                        </td>
+                                        <td>{event.status === 'pending' ? `Due ${formatDate(event.at)}` : formatDate(event.at)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </section>
         </>
     )
 }
