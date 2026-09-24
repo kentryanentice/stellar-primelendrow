@@ -20,6 +20,7 @@ const ORIGIN_LABEL: Record<LotOrigin, string> = {
     withdrawal_refund: 'Returned withdrawal',
     settlement: 'Default settlement',
     seizure_surplus: 'Collateral surplus',
+    loan_proceeds: 'Loan proceeds',
 }
 
 /**

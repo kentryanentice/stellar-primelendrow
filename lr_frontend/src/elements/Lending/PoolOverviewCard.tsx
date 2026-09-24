@@ -1,4 +1,4 @@
-import { pesosCompact } from '../../functions/Lending/money'
+import { pesosCompact, sharePct } from '../../functions/Lending/money'
 import type { PoolResponse } from '../../functions/Lending/types'
 
 /**
@@ -16,6 +16,9 @@ function PoolOverviewCard({ data }: { data: PoolResponse }) {
             <div className='lending-funds-tile'>
                 <span className='lending-stat-label'>Pool size</span>
                 <span className='lending-stat-value'>{pesosCompact(pool.total_deposits)}</span>
+                {pool.proceeds_waiting > 0 && (
+                    <span className='lending-muted'>+ {pesosCompact(pool.proceeds_waiting)} loan proceeds held for borrowers</span>
+                )}
             </div>
             <div className='lending-funds-tile'>
                 <span className='lending-stat-label'>Out on loans</span>
@@ -24,13 +27,16 @@ function PoolOverviewCard({ data }: { data: PoolResponse }) {
             <div className='lending-funds-tile'>
                 <span className='lending-stat-label'>Cash available</span>
                 <span className='lending-stat-value'>{pesosCompact(pool.cash_available)}</span>
+                {pool.pool_funds > 0 && (
+                    <span className='lending-muted'>+ {pesosCompact(pool.pool_funds)} platform, reserve and recovery funds held, not lent</span>
+                )}
             </div>
             <div className='lending-funds-tile'>
                 <span className='lending-stat-label'>Pool working</span>
                 <div className='lending-pool-working'>
-                    <span className='lending-stat-value is-good'>{pool.utilization_pct}%</span>
+                    <span className='lending-stat-value is-good'>{sharePct(pool.utilization_bps)}</span>
                     <div className='lending-pool-working-track'>
-                        <div className='lending-pool-working-fill' style={{ width: `${Math.min(100, pool.utilization_pct)}%` }} />
+                        <div className='lending-pool-working-fill' style={{ width: `${Math.min(100, pool.utilization_bps / 100)}%` }} />
                     </div>
                 </div>
             </div>

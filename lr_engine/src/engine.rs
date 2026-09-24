@@ -28,6 +28,12 @@ async fn main() {
     tracing_subscriber::fmt::init();
     dotenv().ok();
 
+    // `lr_engine reconcile` prints the collateral reconciliation report and
+    // exits. Read-only, and nothing below starts — no server, no sweeps.
+    if env::args().nth(1).as_deref() == Some("reconcile") {
+        std::process::exit(api::lending::drift_report(&init_db_pool().await).await);
+    }
+
     let limiter = ConcurrencyLimiter::new(20);
 
     let device_secret = env::var("DEVICE_SECRET").unwrap_or_default();
@@ -196,6 +202,9 @@ async fn main() {
     // forward, so the award has to come from a clock rather than from a
     // request.
     api::lending::spawn_term_end_scores(db_pool.clone());
+    // Credits proceeds that loans disbursed before 050 never paid out to the
+    // borrowers' pool balances. First pass now; hourly after as a backstop.
+    api::lending::spawn_legacy_proceeds(db_pool.clone());
 
     let tunnel_cipher = payload_cipher.clone();
     let api = api_routes::routes(mail_rate_limiter)

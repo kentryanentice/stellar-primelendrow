@@ -59,7 +59,7 @@ function LoanHistoryCard({ data, history, onChanged }: {
      *  was still asking the wrong question. */
     const openLoan = loans.find(l => l.id === openId)
     const custody = useCollateralRecord(openLoan?.collateral ? openLoan.id : null)
-    const { forLoan, requestPayout, requestingId } = usePayouts()
+    const { forLoan } = usePayouts()
 
     const resumeLock = async (loan: Loan) => {
         if (!loan.collateral || !data.params.collateral_contract) return
@@ -151,22 +151,21 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                 </p>
                                             )}
 
-                                            {/* The proceeds. Disbursement makes the pool owe them;
-                                                this is where the member actually takes the money. */}
+                                            {/* The proceeds. Disbursement credits them to the
+                                                member's pool balance; they take the money out
+                                                with an ordinary withdrawal. A loan paid out the
+                                                old way still shows how that payout went. */}
                                             {loan.status === 'active' && (() => {
                                                 const payout = forLoan(loan.id)
                                                 if (!payout) {
                                                     return (
-                                                        <button
-                                                            type='button'
-                                                            className='lending-btn-primary'
-                                                            disabled={requestingId === loan.id}
-                                                            onClick={() => void requestPayout(loan.id)}
-                                                        >
-                                                            {requestingId === loan.id
-                                                                ? 'Sending to PayPal…'
-                                                                : `Send ${pesos(loan.principal)} to my PayPal`}
-                                                        </button>
+                                                        <p className='lending-muted'>
+                                                            The {pesos(loan.principal)} was added to your pool balance —{' '}
+                                                            <button type='button' className='lending-inline-link' onClick={() => navigate('/lending')}>
+                                                                withdraw it from the Lend page
+                                                            </button>
+                                                            .
+                                                        </p>
                                                     )
                                                 }
                                                 return (

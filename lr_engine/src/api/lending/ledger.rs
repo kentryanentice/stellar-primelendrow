@@ -105,6 +105,39 @@ pub async fn commit_event(
 /// Summed in ONE query rather than two reads added together: the two accounts
 /// move in the same transaction as each other, and a pair of round trips could
 /// see them mid-flight.
+/// Loan proceeds sitting in borrowers' balances, not yet withdrawn (050).
+///
+/// Proceeds are credited to the borrower as a withdrawable lot, which makes
+/// them a member deposit like any other — but not one the pool may lend on.
+/// The borrower can withdraw them at any moment, so lending them to someone
+/// else would leave the pool unable to pay out money it has just handed over.
+/// New lending nets this off `free_cash`; a withdrawal does not, because the
+/// cash it reserves is exactly what the withdrawal is for.
+pub async fn unwithdrawn_proceeds<'e, X: PgExecutor<'e>>(executor: X) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits
+          WHERE badge = 'available' AND origin = 'loan_proceeds'",
+    )
+    .fetch_one(executor)
+    .await
+}
+
+/// The platform fee, lending reserve, recovery fund and payment-fee variance
+/// the interest split and the rails have built up — cash the platform holds,
+/// but no member's deposit and not the pool's to lend or pay out. The recovery
+/// fund in particular is what absorbs a default (045); lending it out would
+/// leave nothing behind the promise. Every lending and withdrawal check nets
+/// it off `free_cash`, so it stays untouched until one of those pots is drawn
+/// on for what it is for.
+pub async fn retained_funds<'e, X: PgExecutor<'e>>(executor: X) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COALESCE(-SUM(amount), 0)::BIGINT FROM public.ledger_postings
+          WHERE account IN ('platform_earnings', 'reserve_fund', 'recovery_fund', 'payment_fee_variance')",
+    )
+    .fetch_one(executor)
+    .await
+}
+
 pub async fn free_cash<'e, X: PgExecutor<'e>>(executor: X) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.ledger_postings

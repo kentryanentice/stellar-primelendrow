@@ -1,12 +1,12 @@
-//! POST /loans/payout — send a disbursed loan's proceeds to the borrower's
-//! own PayPal.
+//! POST /loans/payout — retired (050): proceeds now land in the borrower's
+//! pool balance and leave through an ordinary withdrawal.
 //! GET  /payouts      — the caller's transfers and where each one got to.
 //!
-//! Disbursement makes the pool *owe* the borrower (`payout_payable`, 028);
-//! this is where that promise is actually settled. `withdraw.rs` settles the
-//! depositor's equivalent promise through the same three steps below (029) —
-//! `submit` and `read_one` are shared with it rather than reimplemented, so
-//! there is one description of "hand money to PayPal" in the engine.
+//! Disbursement used to make the pool *owe* the borrower (`payout_payable`,
+//! 028) until they pressed "send"; it now credits a withdrawable lot instead,
+//! so the one way money leaves is `withdraw.rs`, through the three steps below
+//! (029) — `submit` and `read_one` live here and are shared with it, so there
+//! is one description of "hand money to PayPal" in the engine.
 //!
 //! The order of operations is the entire safety argument, and it is the same
 //! shape as the collateral outbox:
@@ -25,21 +25,14 @@
 
 use axum::{Extension, Json, http::{HeaderMap, StatusCode}};
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::domain;
-use super::policy;
 use super::shared::db_err;
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::rails::SubmitError;
 use crate::infra::{paypal, stripe};
-
-#[derive(Deserialize)]
-pub struct PayoutInput {
-    loan_id: Uuid,
-}
 
 #[derive(Serialize)]
 pub struct PayoutView {
@@ -67,12 +60,6 @@ pub struct PayoutView {
     pub settled_at: Option<i64>,
     /// Why a payout is stuck or came back, in the member's language.
     pub note: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct PayoutResponse {
-    pub payout: PayoutView,
-    pub message: &'static str,
 }
 
 /// Where a member's money goes, and over which rail.
@@ -194,85 +181,19 @@ pub(super) async fn destination(pool: &PgPool, user_id: Uuid) -> Result<Destinat
     ))
 }
 
+/// Retired (050). Proceeds are credited to the borrower's pool balance at
+/// disbursement, so sending them here as well would pay them twice. Kept as a
+/// route so an older frontend is told where the money went rather than
+/// getting a bare 404.
 pub async fn request(
     Extension(pool): Extension<PgPool>,
     headers: HeaderMap,
-    Json(p): Json<PayoutInput>,
-) -> Result<Json<PayoutResponse>, E> {
-    let user_id = require_verified_user(&pool, &headers).await?;
-    let destination = destination(&pool, user_id).await?;
-    let rules = policy::active(&pool).await?;
-
-    let mut tx = pool.begin().await.map_err(|e| db_err(e, "begin payout"))?;
-
-    // The loan row is the serialization point against a second click.
-    let loan: Option<(Uuid, i64, String)> = sqlx::query_as(
-        "SELECT borrower_id, principal, status FROM public.loans
-          WHERE id = $1 FOR UPDATE",
-    )
-    .bind(p.loan_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| db_err(e, "lock loan"))?;
-    let (borrower_id, principal, status) =
-        loan.ok_or((StatusCode::NOT_FOUND, "No such loan"))?;
-    if borrower_id != user_id {
-        return Err((StatusCode::NOT_FOUND, "No such loan"));
-    }
-    // Only a disbursed loan has proceeds to send. A pending one hasn't been
-    // funded; a closed one was settled long ago.
-    if status != "active" {
-        return Err((
-            StatusCode::CONFLICT,
-            "This loan has no proceeds waiting — only a disbursed loan can be withdrawn",
-        ));
-    }
-
-    // The provider's payout fee comes out of what is sent (043), so the pool
-    // pays out exactly the proceeds it owes and not a centavo more.
-    let fee = domain::payout_fee(principal, rules.params.payment_fees.for_rail(destination.provider));
-
-    let payout_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.payouts (user_id, loan_id, kind, amount, payer_id, provider, fee)
-         VALUES ($1, $2, 'loan_proceeds', $3, $4, $5, $6)
-         RETURNING id",
-    )
-    .bind(user_id)
-    .bind(p.loan_id)
-    .bind(principal)
-    .bind(&destination.account)
-    .bind(destination.provider)
-    .bind(fee)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| {
-        if e.as_database_error().is_some_and(|d| d.is_unique_violation()) {
-            // idx_payouts_one_per_loan: these proceeds are already on the way.
-            return (
-                StatusCode::CONFLICT,
-                "These proceeds have already been sent to your PayPal",
-            );
-        }
-        db_err(e, "insert payout")
-    })?;
-
-    // Committed BEFORE the network call: the idempotency key has to survive a
-    // crash that happens mid-request, or a retry would mint a new one and
-    // PayPal would have no way to recognise the duplicate.
-    tx.commit().await.map_err(|e| db_err(e, "commit payout"))?;
-
-    let (status, message) = submit(
-        &pool,
-        payout_id,
-        &destination,
-        principal - fee,
-        &format!("PrimeLendRow loan {}", p.loan_id),
-    )
-    .await;
-    let payout = read_one(&pool, payout_id, user_id).await?;
-    tracing::info!(%user_id, %payout_id, principal, status, "loan payout requested");
-
-    Ok(Json(PayoutResponse { payout, message }))
+) -> Result<Json<()>, E> {
+    require_verified_user(&pool, &headers).await?;
+    Err((
+        StatusCode::CONFLICT,
+        "Loan proceeds now go straight to your pool balance — withdraw them from the Lend page",
+    ))
 }
 
 /// Hands the payout to its provider, whichever that is.

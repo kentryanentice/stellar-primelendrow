@@ -21,8 +21,9 @@ function InterestSplitCard({ data }: { data: PoolResponse }) {
     const collected = data.pool.interest
     const mine = data.me.interest_earned
     /** The caller's own deposits against the whole pool — what their slice of
-     *  the depositors' share is proportional to. Display only. */
-    const myBalance = data.me.available + data.me.lent + data.me.collateral + data.me.pledged
+     *  the depositors' share is proportional to. Their own loan proceeds are
+     *  left out, as the engine leaves them out of that share. Display only. */
+    const myBalance = data.me.available - data.me.proceeds + data.me.lent + data.me.collateral + data.me.pledged
     const poolShare = data.pool.total_deposits > 0
         ? `${((myBalance / data.pool.total_deposits) * 100).toFixed(2).replace(/\.?0+$/, '')}%`
         : null

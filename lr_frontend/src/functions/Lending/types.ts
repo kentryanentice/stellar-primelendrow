@@ -126,7 +126,8 @@ export type FxQuote = {
 export type LotBadge = 'available' | 'lent' | 'collateral' | 'pledged'
 
 /** How a lot came to exist (046) — the badge is only what it's doing now. */
-export type LotOrigin = 'deposit' | 'interest' | 'overpayment' | 'withdrawal_refund' | 'settlement' | 'seizure_surplus'
+export type LotOrigin =
+    | 'deposit' | 'interest' | 'overpayment' | 'withdrawal_refund' | 'settlement' | 'seizure_surplus' | 'loan_proceeds'
 
 export type Lot = {
     id: string
@@ -254,9 +255,17 @@ export type PoolResponse = {
     pool: {
         total_deposits: number
         cash_available: number
+        /** The platform fee, reserve and recovery fund: cash the platform
+         *  holds, but held rather than lent, so not in `cash_available`. */
+        pool_funds: number
+        /** Borrowers' loan proceeds still in their balances: held for them,
+         *  so in neither the pool size nor cash available. */
+        proceeds_waiting: number
         out_on_loans: number
         active_loans: number
         utilization_pct: number
+        /** The same share in basis points, for one-decimal display. */
+        utilization_bps: number
         /** Every recorded repayment split, summed. `parts` sums to `total`. */
         interest: { total: number; payments: number; parts: InterestParts }
     }
@@ -265,6 +274,9 @@ export type PoolResponse = {
         lent: number
         collateral: number
         pledged: number
+        /** The part of `available` that is the member's own loan proceeds:
+         *  withdrawable, but not part of their stake in the pool. */
+        proceeds: number
         score: number
         /** What the caller has been paid from repayments' interest, by why. */
         interest_earned: { total: number; as_depositor: number; as_guarantor: number; payments: number }

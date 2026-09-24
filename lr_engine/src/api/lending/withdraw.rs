@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash};
+use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash, retained_funds};
 use super::lots;
 use super::domain;
 use super::payout::{self, PayoutView};
@@ -100,12 +100,18 @@ pub async fn withdraw(
 
     // The books are the wall: even a correct lot sum can't overdraw actual
     // cash (loans out are cash gone until repaid).
-    // Free cash: loan proceeds and earlier withdrawals already promised but
-    // not yet paid out are not available to cover this one, even though they
-    // haven't left the platform's PayPal balance yet (028, 029).
+    // Free cash: earlier withdrawals already promised but not yet paid out are
+    // not available to cover this one, even though they haven't left the
+    // platform's PayPal balance yet (029). Nor are the platform, reserve and
+    // recovery funds — held, not the members' to draw on. A borrower's own
+    // waiting proceeds are NOT netted off here: they are exactly the kind of
+    // money a withdrawal is for (050).
     let cash = free_cash(&mut *tx)
         .await
-        .map_err(|e| db_err(e, "cash balance"))?;
+        .map_err(|e| db_err(e, "cash balance"))?
+        - retained_funds(&mut *tx)
+            .await
+            .map_err(|e| db_err(e, "retained funds"))?;
     if cash < amount {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,

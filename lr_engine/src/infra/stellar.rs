@@ -346,9 +346,201 @@ pub async fn verify_contract_call(
     Ok(())
 }
 
+fn rpc_base() -> String {
+    std::env::var("SOROBAN_RPC_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://soroban-testnet.stellar.org".to_string())
+}
+
+/// One event the vault published, reduced to what reconciliation compares.
+pub struct VaultEvent {
+    /// `locked`, `recorded`, `released`, `seized` or `configured`.
+    pub name: String,
+    /// The loan it concerns, as the 32 hex digits of its reference. Empty on an
+    /// event about the vault itself.
+    pub loan_hex: String,
+    pub tx_hash: String,
+    /// Stroops, on the events that carry an amount.
+    pub amount: Option<i64>,
+    pub closed_at: String,
+}
+
+/// Every event the vault published inside the RPC's retention window, and the
+/// window itself. A public node keeps about a week, so the window is exactly
+/// how far back "nothing moved on chain that the database missed" can be said.
+pub struct VaultEvents {
+    pub events: Vec<VaultEvent>,
+    pub from_ledger: i64,
+    pub to_ledger: i64,
+    pub from_time: i64,
+    pub to_time: i64,
+}
+
+#[derive(Deserialize)]
+struct RpcReply<T> {
+    result: Option<T>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcHealth {
+    oldest_ledger: i64,
+    oldest_ledger_close_time: String,
+    latest_ledger_close_time: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventsPage {
+    #[serde(default, deserialize_with = "null_default")]
+    events: Vec<RawEvent>,
+    #[serde(default, deserialize_with = "null_default")]
+    cursor: String,
+    latest_ledger: i64,
+}
+
+/// An event as the RPC returns it with `xdrFormat: "json"` — decoded values
+/// rather than base64 XDR, which is what lets this stay dependency-free.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEvent {
+    tx_hash: String,
+    #[serde(default, deserialize_with = "null_default")]
+    ledger_closed_at: String,
+    #[serde(default, deserialize_with = "null_default")]
+    topic_json: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "null_default")]
+    value_json: serde_json::Value,
+}
+
+async fn rpc<T: for<'de> Deserialize<'de>>(
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<T, &'static str> {
+    let mut body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method });
+    if let Some(params) = params {
+        body["params"] = params;
+    }
+    let reply = http()
+        .post(rpc_base())
+        // The public node's filter turned away a client that identified as a
+        // stock HTTP library, so this one names itself.
+        .header(reqwest::header::USER_AGENT, "primelendrow-engine")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("rpc {method}: {e}");
+            "Blockchain network unreachable"
+        })?;
+    if !reply.status().is_success() {
+        tracing::error!("rpc {method} status {}", reply.status());
+        return Err("Blockchain network unreachable");
+    }
+    let reply: RpcReply<T> = reply.json().await.map_err(|e| {
+        tracing::error!("rpc {method} body: {e}");
+        "Blockchain network unreachable"
+    })?;
+    reply.result.ok_or("Blockchain network unreachable")
+}
+
+/// The ledger an RPC events cursor stands at. The cursor is a TOID — the ledger
+/// sequence in its high 32 bits — then a dash and an event index.
+fn cursor_ledger(cursor: &str) -> Option<i64> {
+    let toid: i64 = cursor.split('-').next()?.parse().ok()?;
+    Some(toid >> 32)
+}
+
+fn vault_event(raw: RawEvent) -> VaultEvent {
+    let symbol_at = |i: usize, kind: &str| {
+        raw.topic_json.get(i).and_then(|t| t[kind].as_str()).unwrap_or_default().to_string()
+    };
+    let amount = raw.value_json["map"]
+        .as_array()
+        .and_then(|fields| fields.iter().find(|f| f["key"]["symbol"] == "amount"))
+        .and_then(|f| f["val"]["i128"].as_str())
+        .and_then(|a| a.parse().ok());
+    VaultEvent {
+        name: symbol_at(0, "symbol"),
+        loan_hex: symbol_at(1, "bytes"),
+        tx_hash: raw.tx_hash,
+        amount,
+        closed_at: raw.ledger_closed_at,
+    }
+}
+
+/// Every event `contract` published that the RPC still holds.
+///
+/// One request scans a bounded run of ledgers — about 10,000, well under a day
+/// of a week-long window — and hands back a cursor where it stopped, so this
+/// follows the cursor until it reaches the node's latest ledger.
+pub async fn vault_events(contract: &str) -> Result<VaultEvents, &'static str> {
+    let health: RpcHealth = rpc("getHealth", None).await?;
+    // A little inside the window: the oldest ledger moves on while we ask, and
+    // a start that has just fallen out of retention is refused outright.
+    let from_ledger = health.oldest_ledger + 20;
+    let filters = serde_json::json!([{ "type": "contract", "contractIds": [contract] }]);
+    let mut params = serde_json::json!({
+        "startLedger": from_ledger,
+        "filters": filters,
+        "pagination": { "limit": 200 },
+        "xdrFormat": "json",
+    });
+
+    let mut events = Vec::new();
+    // A week of ledgers is a dozen or so pages; a hundred means the node is
+    // not advancing the cursor, and following it would never end.
+    for _ in 0..100 {
+        let page: EventsPage = rpc("getEvents", Some(params)).await?;
+        events.extend(page.events.into_iter().map(vault_event));
+        if cursor_ledger(&page.cursor).is_none_or(|scanned| scanned >= page.latest_ledger) {
+            return Ok(VaultEvents {
+                events,
+                from_ledger,
+                to_ledger: page.latest_ledger,
+                from_time: health.oldest_ledger_close_time.parse().unwrap_or(0),
+                to_time: health.latest_ledger_close_time.parse().unwrap_or(0),
+            });
+        }
+        params = serde_json::json!({
+            "filters": filters,
+            "pagination": { "cursor": page.cursor, "limit": 200 },
+            "xdrFormat": "json",
+        });
+    }
+    Err("The vault's event history kept paging without reaching the latest ledger")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_stroops, symbol_value};
+    use super::{cursor_ledger, parse_stroops, symbol_value, vault_event};
+
+    #[test]
+    fn reads_a_vault_event_as_the_rpc_returns_it() {
+        // Trimmed from a lock the testnet RPC returned, xdrFormat json.
+        let raw = serde_json::from_value(serde_json::json!({
+            "txHash": "18e42a957fc52686127b160eb5ca72026b54e57339daa4987ff4c044e7395ab1",
+            "ledgerClosedAt": "2026-09-16T15:25:47Z",
+            "topicJson": [{ "symbol": "locked" }, { "bytes": "958177f02f7e4b20a3c5892097349930" }],
+            "valueJson": { "map": [
+                { "key": { "symbol": "amount" }, "val": { "i128": "5489478500" } },
+                { "key": { "symbol": "principal_centavos" }, "val": { "i128": "500000" } }
+            ] }
+        }))
+        .unwrap();
+        let event = vault_event(raw);
+        assert_eq!(event.name, "locked");
+        assert_eq!(event.loan_hex, "958177f02f7e4b20a3c5892097349930");
+        assert_eq!(event.amount, Some(5_489_478_500));
+    }
+
+    #[test]
+    fn reads_the_ledger_an_events_cursor_stands_at() {
+        // A cursor the testnet RPC returned, 10,000 ledgers past its start.
+        assert_eq!(cursor_ledger("0020240364094881791-4294967295"), Some(4_712_576));
+        assert_eq!(cursor_ledger(""), None);
+    }
 
     #[test]
     fn reads_the_invoked_function_name() {

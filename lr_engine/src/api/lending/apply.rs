@@ -26,7 +26,7 @@ use super::ledger::{EventDraft, commit_event};
 use super::lots;
 use super::policy;
 use super::pricing;
-use super::shared::{db_err, disburse, ledger_err, validate_centavos, validate_product};
+use super::shared::{db_err, disburse, has_unsettled_default, ledger_err, validate_centavos, validate_product};
 use crate::api::users::shared::{E, require_verified_user};
 use crate::infra::stellar;
 
@@ -584,6 +584,14 @@ pub async fn apply(
                 ))?;
                 if gid == user_id {
                     return Err((StatusCode::UNPROCESSABLE_ENTITY, "You can't guarantee your own loan"));
+                }
+                // Says only that they can't, not why: whether someone else
+                // has defaulted is theirs to tell, not this form's.
+                if has_unsettled_default(&mut tx, gid).await? {
+                    return Err((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "A guarantor you named can't guarantee a loan right now",
+                    ));
                 }
                 if seen.contains(&gid) {
                     return Err((StatusCode::UNPROCESSABLE_ENTITY, "Each guarantor can only be invited once"));
