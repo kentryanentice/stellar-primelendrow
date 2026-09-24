@@ -27,6 +27,9 @@ export function since(secs: number) {
     return `${Math.floor(age / 86400)}d ago`
 }
 
+/** Basis points as a one-decimal share: 155 -> "1.6%", 10000 -> "100%". */
+export const sharePct = (bps: number) => `${(bps / 100).toFixed(1).replace(/\.0$/, '')}%`
+
 /** Monthly basis points -> "1.75%/mo". */
 export const rate = (bps: number) => `${(bps / 100).toFixed(2).replace(/\.?0+$/, '')}%/mo`
 

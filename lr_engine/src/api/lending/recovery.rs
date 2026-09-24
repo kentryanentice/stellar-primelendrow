@@ -252,7 +252,7 @@ async fn claim_pro_rata(
     // to — the weight the claim is shared by — and is deliberately read from
     // the agreement rather than from whatever their lots currently hold.
     let pledges: Vec<(Uuid, i64)> = sqlx::query_as(
-        "SELECT user_id, pledge_amount FROM public.loan_guarantors
+        "SELECT guarantor_id, pledge_amount FROM public.loan_guarantors
           WHERE loan_id = $1 AND status = 'accepted'
           ORDER BY id",
     )
@@ -459,13 +459,28 @@ pub async fn advance(
     }
 
     // Settled. The savers who funded it are made whole by the postings above,
-    // so their lots go back to withdrawable — the loan is over either way.
-    lots::release_loan_lots(tx, loan_id, &["lent"]).await?;
+    // so their lots go back to withdrawable — the loan is over either way. So
+    // does whatever the waterfall did not need: `seize_lots` takes only what
+    // was owed, so a guarantor's pledge beyond their share of the claim, or
+    // the borrower's own backing beyond the debt, would otherwise stay frozen
+    // against a loan with nothing left to secure until a settlement that may
+    // never come.
+    lots::release_loan_lots(tx, loan_id, &["lent", "collateral", "pledged"]).await?;
 
+    // A pledge was claimed only if something was actually taken from it, and
+    // step 3 names each guarantor it charged. One whose share the borrower's
+    // own money and coins covered is released like any pledge at close, not
+    // recorded as seized for a claim that never touched it.
     let now = Utc::now().timestamp();
     sqlx::query(
-        "UPDATE public.loan_guarantors SET status = 'seized', updated_at = $1
-          WHERE loan_id = $2 AND status = 'accepted'",
+        "UPDATE public.loan_guarantors g
+            SET status = CASE WHEN EXISTS (
+                             SELECT 1 FROM public.loan_recoveries r
+                              WHERE r.loan_id = g.loan_id AND r.source = 'guarantor_deposit'
+                                AND r.user_id = g.guarantor_id)
+                         THEN 'seized' ELSE 'released' END,
+                updated_at = $1
+          WHERE g.loan_id = $2 AND g.status = 'accepted'",
     )
     .bind(now)
     .bind(loan_id)

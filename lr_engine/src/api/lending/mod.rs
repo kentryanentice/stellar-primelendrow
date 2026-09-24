@@ -17,6 +17,7 @@ mod cancel;
 mod collateral;
 mod credit_history;
 mod custody;
+mod drift;
 mod deposit;
 mod deposits_list;
 mod domain;
@@ -30,6 +31,7 @@ mod payout;
 mod policy;
 mod pool;
 mod pricing;
+mod proceeds;
 mod public;
 mod quote;
 mod rails;
@@ -59,6 +61,8 @@ pub use collateral::confirm as collateral_confirm;
 // is a lending rule.
 pub use credit_history::history as credit_history;
 pub use custody::record as collateral_record;
+// The database-against-chain report behind `lr_engine reconcile` (see `drift`).
+pub use drift::report as drift_report;
 pub use deposit::deposit;
 // The Stripe webhook credits through the same routine the redirect does, so a
 // member who never comes back to the app is still credited.
@@ -90,6 +94,9 @@ pub use repay::repay;
 // Pays the credit-score rise once a loan's term has elapsed; started at boot
 // beside the other sweeps (see `score`).
 pub use score::spawn_term_end_scores;
+// Moves proceeds that pre-050 loans never paid out into the borrowers' pool
+// balances; started at boot beside the other sweeps (see `proceeds`).
+pub use proceeds::spawn_legacy_proceeds;
 pub use transactions::list as transactions_list;
 pub use withdraw::withdraw;
 // The sweep calls this whenever a payout reaches a terminal state it never

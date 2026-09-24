@@ -34,7 +34,6 @@ export default function usePayouts() {
 
     const [payouts, setPayouts] = useState<Payout[]>([])
     const [loading, setLoading] = useState(true)
-    const [requestingId, setRequestingId] = useState<string | null>(null)
     const [withdrawing, setWithdrawing] = useState(false)
     /** The withdrawal attempt still waiting for an answer, and its key. */
     const pendingWithdrawal = useRef<{ amount: number; key: string } | null>(null)
@@ -71,31 +70,10 @@ export default function usePayouts() {
         ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
     }), [csrfToken])
 
-    const requestPayout = useCallback(async (loanId: string) => {
-        setRequestingId(loanId)
-        try {
-            const res = await apiFetch(`${API}/loans/payout`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: authHeaders(),
-                body: JSON.stringify({ loan_id: loanId }),
-            })
-            if (!res.ok) throw new Error(await res.text() || 'Unable to send your loan to PayPal')
-            const data = await res.json() as { message: string }
-            toast.success(data.message)
-            await refresh()
-            return true
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Unable to send your loan to PayPal')
-            return false
-        } finally {
-            setRequestingId(null)
-        }
-    }, [authHeaders, refresh, toast])
-
     /**
      * Takes `centavos` out of the caller's withdrawable deposit and sends it
-     * to their PayPal. Identical guarantees to requestPayout: once the engine
+     * to their PayPal — loan proceeds included, which land in that balance at
+     * disbursement. Once the engine
      * answers at all, the withdrawal exists — a rejection here is the engine
      * refusing to start one (locked funds, no connected account), never a
      * transfer left in limbo.
@@ -145,7 +123,7 @@ export default function usePayouts() {
 
     return {
         payouts, loading, refresh,
-        requestPayout, requestingId, forLoan,
+        forLoan,
         requestWithdrawal, withdrawing, withdrawals,
     }
 }

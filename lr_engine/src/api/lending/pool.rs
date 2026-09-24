@@ -9,7 +9,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use super::domain;
-use super::ledger::free_cash;
+use super::ledger::{free_cash, retained_funds, unwithdrawn_proceeds};
 use super::policy::{self, PolicyParams};
 use super::pricing;
 use super::shared::db_err;
@@ -18,12 +18,29 @@ use crate::infra::{paypal, stellar, stripe};
 
 #[derive(Serialize)]
 pub struct PoolStats {
+    /// Members' deposits — every lot except borrowers' loan proceeds, which
+    /// are `proceeds_waiting` instead.
     pub total_deposits: i64,
+    /// Members' cash the pool can lend or pay out right now. Excludes the
+    /// retained funds and borrowers' waiting proceeds, so that
+    /// `out_on_loans + cash_available == total_deposits` to the centavo, less
+    /// only seized collateral still held as treasury assets and any proceeds
+    /// already moved out of `available` (pledged, say).
     pub cash_available: i64,
+    /// The platform fee, lending reserve and recovery fund the interest split
+    /// has built up, and any payment-fee variance: cash the platform holds,
+    /// but held rather than lent, and not in `cash_available`.
+    pub pool_funds: i64,
+    /// Loan proceeds in borrowers' balances, not yet withdrawn (050): held for
+    /// the borrower, so in neither the pool size nor `cash_available`.
+    pub proceeds_waiting: i64,
     pub out_on_loans: i64,
     pub active_loans: i64,
-    /// 0..100, integer — how much of the pool is working.
+    /// 0..100, rounded — how much of the pool's money is out on loans.
     pub utilization_pct: i64,
+    /// The same in basis points, for display to one decimal: a pool 1.55%
+    /// working should not read as 1%, nor 0.9% as idle.
+    pub utilization_bps: i64,
     pub interest: InterestCollected,
 }
 
@@ -43,6 +60,9 @@ pub struct MyFunds {
     pub lent: i64,
     pub collateral: i64,
     pub pledged: i64,
+    /// The part of `available` that is this member's own loan proceeds (050):
+    /// theirs to withdraw, but not part of their stake in the pool.
+    pub proceeds: i64,
     pub score: i16,
     /// What this member has been paid out of repayments' interest (039),
     /// split by why: their deposit balance in the pool, and loans they
@@ -134,29 +154,56 @@ pub async fn summary(
 
     // ::BIGINT everywhere SUM appears: Postgres widens SUM(BIGINT) to NUMERIC,
     // which sqlx refuses to decode as i64.
-    let total_deposits: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits")
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| db_err(e, "pool totals"))?;
+    // The pool is what members have put in to lend. Borrowers' proceeds
+    // waiting to be withdrawn (050) are borrowed money sitting in their
+    // balances — never lent on, earning nothing — so they are reported on
+    // their own, as `proceeds_waiting`, and not as pool.
+    let total_deposits: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits
+          WHERE origin <> 'loan_proceeds'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| db_err(e, "pool totals"))?;
 
-    // "Available" means available to lend, so it nets off proceeds already
-    // promised to borrowers and not yet paid out (028) — otherwise the pool
-    // would advertise capacity it has already committed.
-    let cash_available = free_cash(&pool)
-        .await
-        .map_err(|e| db_err(e, "cash balance"))?;
-
-    let (out_on_loans, active_loans): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(principal_outstanding), 0)::BIGINT, COUNT(*)
-           FROM public.loans WHERE status = 'active'",
+    // Out on loans is the ledger's receivable, not a sum over `active` loans:
+    // a default still in recovery, or one reopened for settlement, is money
+    // still owed to the pool, and counting only running loans would drop it
+    // from the page while the books still carry it.
+    let out_on_loans: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.ledger_postings
+          WHERE account = 'loans_receivable'",
     )
     .fetch_one(&pool)
     .await
     .map_err(|e| db_err(e, "loan totals"))?;
 
+    // "Available" means available to lend, netted exactly as `disburse` nets
+    // it before lending: withdrawals promised and not yet paid out (029),
+    // borrowers' proceeds waiting to be withdrawn (050), and the platform,
+    // reserve and recovery funds, which are held rather than lent.
+    let proceeds_waiting = unwithdrawn_proceeds(&pool)
+        .await
+        .map_err(|e| db_err(e, "proceeds waiting"))?;
+    let pool_funds = retained_funds(&pool)
+        .await
+        .map_err(|e| db_err(e, "retained funds"))?;
+    let cash_available = free_cash(&pool)
+        .await
+        .map_err(|e| db_err(e, "cash balance"))?
+        - proceeds_waiting
+        - pool_funds;
+
+    let active_loans: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM public.loans WHERE status = 'active'")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| db_err(e, "active loans"))?;
+
+    // Rounded to the nearest basis point rather than floored to the percent.
     let working = out_on_loans + cash_available;
-    let utilization_pct = if working > 0 { out_on_loans * 100 / working } else { 0 };
+    let utilization_bps = if working > 0 { (out_on_loans * 10_000 + working / 2) / working } else { 0 };
+    let utilization_pct = (utilization_bps + 50) / 100;
 
     let (total, payments, platform, reserve, depositors, guarantor, recovery_fund):
         (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
@@ -189,12 +236,21 @@ pub async fn summary(
     .fetch_all(&pool)
     .await
     .map_err(|e| db_err(e, "my badge totals"))?;
+    let proceeds: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0)::BIGINT FROM public.deposits
+          WHERE user_id = $1 AND badge = 'available' AND origin = 'loan_proceeds'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| db_err(e, "my proceeds"))?;
 
     let mut me = MyFunds {
         available: 0,
         lent: 0,
         collateral: 0,
         pledged: 0,
+        proceeds,
         score: 50,
         interest_earned: MyInterest::default(),
         deposit_limits: None,
@@ -236,9 +292,12 @@ pub async fn summary(
         pool: PoolStats {
             total_deposits,
             cash_available,
+            pool_funds,
+            proceeds_waiting,
             out_on_loans,
             active_loans,
             utilization_pct,
+            utilization_bps,
             interest,
         },
         me,

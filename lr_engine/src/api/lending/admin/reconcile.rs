@@ -371,7 +371,7 @@ pub(in crate::api::lending) async fn settle(
         // Their pledge is no longer seized — it was given back.
         sqlx::query(
             "UPDATE public.loan_guarantors SET status = 'released', updated_at = $1
-              WHERE loan_id = $2 AND user_id = $3 AND status = 'seized'",
+              WHERE loan_id = $2 AND guarantor_id = $3 AND status = 'seized'",
         )
         .bind(Utc::now().timestamp())
         .bind(loan_id)

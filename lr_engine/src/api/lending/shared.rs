@@ -7,7 +7,9 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::domain;
-use super::ledger::{EventDraft, LedgerError, Posting, commit_event, free_cash};
+use super::ledger::{
+    EventDraft, LedgerError, Posting, commit_event, free_cash, retained_funds, unwithdrawn_proceeds,
+};
 use super::lots;
 use crate::api::users::shared::E;
 
@@ -48,6 +50,24 @@ pub fn validate_centavos(amount: i64) -> Result<i64, E> {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid amount"));
     }
     Ok(amount)
+}
+
+/// Does this member have a default still open — declared and not yet settled?
+///
+/// The SOW's "verified and non-defaulted guarantors only" (§4.1), checked both
+/// when a borrower names a guarantor and when the guarantor accepts, since a
+/// default can land in between. A settled default (`reconciled`) does not
+/// count: settling is how a member gets back in, the same line the
+/// one-open-loan rule in `apply` draws for borrowing.
+pub async fn has_unsettled_default(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> Result<bool, E> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM public.loans
+          WHERE borrower_id = $1 AND status IN ('defaulted', 'reconciling'))",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "unsettled default check"))
 }
 
 /// Is every leg backing this loan actually in place?
@@ -145,12 +165,20 @@ pub async fn disburse(
         .await
         .map_err(|e| db_err(e, "pool lock"))?;
 
-    // Free cash, not raw cash: proceeds already promised to other borrowers
-    // and not yet paid out are gone as far as new lending is concerned, even
-    // though they are still sitting in the platform's PayPal balance.
+    // Free cash, not raw cash: withdrawals promised and not yet paid out are
+    // gone as far as new lending is concerned; so are other borrowers'
+    // proceeds still waiting in their balances — theirs to withdraw at any
+    // moment (050) — and the platform, reserve and recovery funds, which are
+    // held rather than lent.
     let cash = free_cash(&mut **tx)
         .await
-        .map_err(|e| db_err(e, "cash balance"))?;
+        .map_err(|e| db_err(e, "cash balance"))?
+        - unwithdrawn_proceeds(&mut **tx)
+            .await
+            .map_err(|e| db_err(e, "proceeds waiting"))?
+        - retained_funds(&mut **tx)
+            .await
+            .map_err(|e| db_err(e, "retained funds"))?;
     if cash < principal {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -178,6 +206,21 @@ pub async fn disburse(
     let pool_funded = domain::pool_funded_amount(principal, own_backing);
     lots::freeze_funding_pro_rata(tx, pool_funded, loan_id).await?;
 
+    // The proceeds land in the borrower's pool balance (050): a withdrawable
+    // lot, taken out through the same withdrawal every other peso uses. They
+    // used to wait as a payout owed until the borrower pressed "send", which
+    // only worked while the loan was active — so a loan repaid before anyone
+    // pressed it left its proceeds owed with no way to claim them.
+    let proceeds_lot: Uuid = sqlx::query_scalar(
+        "INSERT INTO public.deposits (user_id, amount, badge, origin)
+         VALUES ($1, $2, 'available', 'loan_proceeds') RETURNING id",
+    )
+    .bind(borrower_id)
+    .bind(principal)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "credit loan proceeds"))?;
+
     let now = Utc::now().timestamp();
     commit_event(
         tx,
@@ -185,7 +228,7 @@ pub async fn disburse(
             kind: "loan_disbursed",
             user_id: Some(borrower_id),
             loan_id: Some(loan_id),
-            deposit_id: None,
+            deposit_id: Some(proceeds_lot),
             rail_ref: None,
             payload: serde_json::json!({
                 "principal": principal, "rate_bps": rate_bps, "term_months": term_months,
@@ -193,13 +236,12 @@ pub async fn disburse(
             }),
             actor_id: Some(borrower_id),
         },
-        // The pool now OWES the borrower their proceeds; the pesos themselves
-        // don't move until a PayPal payout settles (028). Posting `cash` here
-        // would claim money had left the platform's balance while it was
-        // still sitting in it.
+        // The pool is owed the principal, and owes the borrower a deposit of
+        // the same amount. No `cash` moves: the pesos leave the platform's
+        // balance only when the borrower withdraws them.
         &[
             Posting { account: "loans_receivable", amount: principal },
-            Posting { account: "payout_payable", amount: -principal },
+            Posting { account: "member_deposits", amount: -principal },
         ],
     )
     .await

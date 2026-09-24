@@ -124,6 +124,15 @@ pub async fn respond(
     if loan_status != "pending" {
         return Err((StatusCode::CONFLICT, "This loan is no longer waiting on guarantors"));
     }
+    // Checked again here, not only when they were named: a default declared
+    // since the invitation went out disqualifies them just the same. Declining
+    // stays open, so an invitation can always be answered.
+    if p.accept && super::shared::has_unsettled_default(&mut tx, user_id).await? {
+        return Err((
+            StatusCode::CONFLICT,
+            "You can't guarantee a loan while one of your own is in default — settle it first",
+        ));
+    }
 
     // What the guarantors are actually on the hook for: the principal less the
     // half (or more) the borrower carries from their own deposit and coins.

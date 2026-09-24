@@ -223,10 +223,10 @@ fn by_member(lots: Vec<Lot>) -> Vec<(Uuid, Vec<Lot>)> {
 /// sum to `amount` exactly and never exceed a member's own balance. Within a
 /// member, their oldest lots go first, splitting the last one.
 ///
-/// Tolerant of the pool's available balances covering less than `amount`:
-/// the rest is funded by retained earnings (platform, reserve and recovery
-/// fund cash, which carries no lots), and the cash check in `disburse` is the
-/// real liquidity gate.
+/// Tolerant of the pool's available balances covering less than `amount`
+/// (cash from repayments carries no lots until it is paid back to them), but
+/// the cash check in `disburse` is the real liquidity gate — and it no longer
+/// counts the platform, reserve and recovery funds, which are held, not lent.
 pub async fn freeze_funding_pro_rata(
     tx: &mut Transaction<'_, Postgres>,
     amount: i64,
@@ -235,9 +235,12 @@ pub async fn freeze_funding_pro_rata(
     if amount <= 0 {
         return Ok(Vec::new());
     }
+    // A borrower's proceeds waiting to be withdrawn are never lent on: they
+    // can be withdrawn at any moment, and `disburse` nets them out of the cash
+    // it lends from for the same reason (050).
     let rows: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
         "SELECT id, user_id, amount FROM public.deposits
-          WHERE badge = 'available'
+          WHERE badge = 'available' AND origin <> 'loan_proceeds'
           ORDER BY created_at, id
           FOR UPDATE",
     )
@@ -284,6 +287,8 @@ pub async fn release_loan_lots(
 /// Every member's whole deposit balance (all badges: what they can withdraw,
 /// what is lent out, what backs their own loan, what they pledged), members in
 /// id order. This is what the depositors' share of interest is divided by.
+/// Loan proceeds are left out (050): they are borrowed money the pool never
+/// lends on, so they earn the borrower no share of anyone's interest.
 ///
 /// Read without locks on purpose. The balances are a snapshot of the pool at
 /// the moment a payment lands, and the interest is credited as brand-new lots
@@ -292,6 +297,7 @@ pub async fn release_loan_lots(
 pub async fn deposit_balances(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<(Uuid, i64)>, E> {
     sqlx::query_as(
         "SELECT user_id, SUM(amount)::BIGINT FROM public.deposits
+          WHERE origin <> 'loan_proceeds'
           GROUP BY user_id
          HAVING SUM(amount) > 0
           ORDER BY user_id",
