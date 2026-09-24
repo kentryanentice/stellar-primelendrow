@@ -119,13 +119,29 @@ pub async fn withdraw(
         ));
     }
 
+    // Which of these lots are loan proceeds (050). Counted as they are
+    // consumed and recorded on the withdrawal event, so that if the payout is
+    // refused the refund can hand the proceeds back AS proceeds — otherwise a
+    // failed withdrawal would quietly turn borrowed money into pool deposits.
+    let proceeds_lots: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM public.deposits WHERE id = ANY($1) AND origin = 'loan_proceeds'",
+    )
+    .bind(my_lots.iter().map(|l| l.id).collect::<Vec<_>>())
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| db_err(e, "proceeds lots"))?;
+
     // Consume FIFO: whole lots go, the partial tail shrinks in place. The
     // withdrawal event below is the auditable record of where they went.
     let now = Utc::now().timestamp();
     let mut remaining = amount;
+    let mut from_proceeds = 0i64;
     for lot in &my_lots {
         if remaining == 0 {
             break;
+        }
+        if proceeds_lots.contains(&lot.id) {
+            from_proceeds += lot.amount.min(remaining);
         }
         if lot.amount <= remaining {
             sqlx::query("DELETE FROM public.deposits WHERE id = $1")
@@ -193,6 +209,7 @@ pub async fn withdraw(
             rail_ref: None,
             payload: serde_json::json!({
                 "amount": amount, "payout_id": payout_id, "rail": destination.provider,
+                "from_proceeds": from_proceeds,
             }),
             actor_id: Some(user_id),
         },
@@ -315,19 +332,43 @@ pub(crate) async fn refund_if_failed(pool: &PgPool, payout_id: Uuid) -> Result<(
         return Ok(());
     }
 
-    // A whole new lot rather than an attempt to rebuild the ones consumed:
-    // withdrawal deletes lots FIFO and shrinks the partial tail, so the
-    // originals are not recoverable and pretending otherwise would invent a
-    // deposit history that never happened. One lot for the refunded sum is the
-    // honest shape, and it is `available` because that is what it was.
-    let lot_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'withdrawal_refund')
-         RETURNING id",
+    // How much of it was loan proceeds, as the withdrawal recorded when it
+    // consumed them (050). Withdrawals made before that carry no figure, and
+    // give back as they always did.
+    let from_proceeds: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((payload->>'from_proceeds')::BIGINT, 0) FROM public.ledger_events
+          WHERE kind = 'withdrawal_confirmed' AND payload->>'payout_id' = $1::text
+          ORDER BY id LIMIT 1",
     )
-    .bind(user_id)
-    .bind(amount)
-    .fetch_one(&mut *tx)
-    .await?;
+    .bind(payout_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(0)
+    .clamp(0, amount);
+
+    // New lots rather than an attempt to rebuild the ones consumed: withdrawal
+    // deletes lots FIFO and shrinks the partial tail, so the originals are not
+    // recoverable and pretending otherwise would invent a deposit history that
+    // never happened. Two lots at most — the proceeds part goes back AS
+    // proceeds, so a failed withdrawal cannot turn borrowed money into pool
+    // deposits — and `available`, because that is what it was.
+    let refund_lot = |origin: &'static str, lot_amount: i64| {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', $3)
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(lot_amount)
+        .bind(origin)
+    };
+    let mut lot_id = None;
+    if amount - from_proceeds > 0 {
+        lot_id = Some(refund_lot("withdrawal_refund", amount - from_proceeds).fetch_one(&mut *tx).await?);
+    }
+    if from_proceeds > 0 {
+        let proceeds_lot = refund_lot("loan_proceeds", from_proceeds).fetch_one(&mut *tx).await?;
+        lot_id = lot_id.or(Some(proceeds_lot));
+    }
 
     let posted = commit_event(
         &mut tx,
@@ -335,10 +376,11 @@ pub(crate) async fn refund_if_failed(pool: &PgPool, payout_id: Uuid) -> Result<(
             kind: "withdrawal_refunded",
             user_id: Some(user_id),
             loan_id: None,
-            deposit_id: Some(lot_id),
+            deposit_id: lot_id,
             rail_ref: Some(format!("withdrawal_refund:{payout_id}")),
             payload: serde_json::json!({
                 "amount": amount, "payout_id": payout_id, "reason": status,
+                "from_proceeds": from_proceeds,
             }),
             actor_id: None,
         },
