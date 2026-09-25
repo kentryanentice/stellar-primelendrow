@@ -1,4 +1,4 @@
-import { signTransaction, isConnected as freighterIsConnected } from '@stellar/freighter-api'
+import { signTransactionXdr } from '../Wallet/wallet'
 import type { PinnedQuote } from './types'
 import { apiFetch } from '../apiFetch'
 
@@ -96,11 +96,6 @@ export async function lockCollateralOnChain(opts: {
     principalCentavos: number
     quote: CollateralQuote
 }): Promise<LockResult> {
-    const { isConnected } = await freighterIsConnected()
-    if (!isConnected) {
-        return { error: 'Locking collateral needs the Freighter browser extension' }
-    }
-
     try {
         const sdk = await import('@stellar/stellar-sdk')
         const server = new sdk.rpc.Server(RPC_URL)
@@ -146,12 +141,11 @@ export async function lockCollateralOnChain(opts: {
         // usually lands here, before the borrower is asked to sign anything.
         const prepared = await server.prepareTransaction(built)
 
-        const signed = await signTransaction(prepared.toXDR(), {
-            networkPassphrase: NETWORK_PASSPHRASE,
-            address: opts.walletAddress,
-        })
-        if (signed.error || !signed.signedTxXdr) {
-            return { error: signed.error?.message ?? 'Signing was cancelled' }
+        // The extension on desktop, the Freighter app through WalletConnect on
+        // a phone — whichever the borrower connected with (wallet.ts).
+        const signed = await signTransactionXdr(prepared.toXDR(), opts.walletAddress, NETWORK_PASSPHRASE)
+        if ('error' in signed) {
+            return { error: signed.error }
         }
 
         const sendResponse = await server.sendTransaction(

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
-import { connectFreighter, signChallenge } from './wallet'
+import { CONNECT_CANCELLED, connectFreighter, signChallenge } from './wallet'
 import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
@@ -86,7 +86,8 @@ export default function useWallets() {
         try {
             const connectResult = await connectFreighter()
             if ('error' in connectResult) {
-                toast.error(connectResult.error)
+                // Closing the wallet window is a choice, not a failure.
+                if (connectResult.error !== CONNECT_CANCELLED) toast.error(connectResult.error)
                 return
             }
             const { address } = connectResult
