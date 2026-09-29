@@ -78,6 +78,11 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
 
     const pledgesTotal = (guarantorAsks ?? []).reduce((sum, g) => sum + g.pledge_amount, 0)
     const pledgesShort = product === 'guarantor' && guarantorGap !== null && pledgesTotal < guarantorGap
+    /** No one guarantor may be asked for more than the whole gap — the engine
+     *  refuses it. The total can still exceed the gap (a spare guarantor). */
+    const pledgeTooBig =
+        product === 'guarantor' && guarantorGap !== null
+        && (guarantorAsks ?? []).some(g => g.pledge_amount > guarantorGap)
 
     /** A guarantor loan with a coin leg needs a wallet, exactly as an XLM loan
      *  does. BorrowCard owns the wallet list, so it gates on this. */
@@ -94,6 +99,7 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
             guarantorAsks !== null
             && guarantorAsks.length > 0
             && !pledgesShort
+            && !pledgeTooBig
             && !coverShort
             && !coverLeavesNoGap
         ))
@@ -144,7 +150,7 @@ export default function useBorrowForm(params: PolicyParams, onChanged: () => voi
         xlmCoverInput, setXlmCoverInput,
         amountCentavos,
         productQuote, overCap,
-        guarantorAsks, pledgesTotal, pledgesShort,
+        guarantorAsks, pledgesTotal, pledgesShort, pledgeTooBig,
         depositCover, xlmCover, coverTotal, coverRequired,
         coverShort, coverLeavesNoGap, guarantorGap, needsWallet,
         canSubmit, submit,

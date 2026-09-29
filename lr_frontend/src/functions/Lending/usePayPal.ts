@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
+import { loadPublicConfig } from '../publicConfig'
 
 /**
  * Loads the PayPal JS SDK once (public client id only — the secret lives in
  * lr_engine, which is what actually captures and verifies every order).
- * Exposes window.paypal when ready.
+ * Exposes window.paypal when ready. The client id comes from the engine's
+ * GET /config, so it is always the one the engine itself uses with PayPal.
  */
-
-const CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID as string | undefined
 
 export type PayPalOrderActions = {
     order: {
@@ -41,15 +41,14 @@ declare global {
 
 let scriptPromise: Promise<PayPalNamespace | null> | null = null
 
-function loadSdk(): Promise<PayPalNamespace | null> {
-    if (!CLIENT_ID) return Promise.resolve(null)
+function loadSdk(clientId: string): Promise<PayPalNamespace | null> {
     if (window.paypal) return Promise.resolve(window.paypal)
     if (!scriptPromise) {
         scriptPromise = new Promise(resolve => {
             const script = document.createElement('script')
             // currency is pinned to PHP — the engine refuses any other
             // currency at capture time regardless of what a tampered page asks
-            script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(CLIENT_ID)}&currency=PHP&intent=capture&components=buttons`
+            script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}&currency=PHP&intent=capture&components=buttons`
             script.async = true
             script.onload = () => resolve(window.paypal ?? null)
             script.onerror = () => {
@@ -67,16 +66,26 @@ function loadSdk(): Promise<PayPalNamespace | null> {
 export default function usePayPal() {
     const [paypal, setPaypal] = useState<PayPalNamespace | null>(null)
     const [failed, setFailed] = useState(false)
+    // Assumed until the engine says otherwise, so loading looks exactly as it
+    // always did (an empty button area) rather than flashing "not configured".
+    const [configured, setConfigured] = useState(true)
 
     useEffect(() => {
         let aborted = false
-        void loadSdk().then(ns => {
+        void (async () => {
+            const { paypal_client_id: clientId } = await loadPublicConfig()
+            if (aborted) return
+            if (!clientId) {
+                setConfigured(false)
+                return
+            }
+            const ns = await loadSdk(clientId)
             if (aborted) return
             if (ns) setPaypal(ns)
             else setFailed(true)
-        })
+        })()
         return () => { aborted = true }
     }, [])
 
-    return { paypal, failed, configured: Boolean(CLIENT_ID) }
+    return { paypal, failed, configured }
 }

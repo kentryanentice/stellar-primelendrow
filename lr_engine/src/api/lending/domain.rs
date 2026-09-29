@@ -521,6 +521,15 @@ pub fn payout_fee(amount: i64, fees: &RailFees) -> i64 {
     amount - sent
 }
 
+/// Whether a withdrawal of `amount` clears the floor `min` — the policy's
+/// deposit minimum, so dust can't become real payouts any more than it can
+/// become real deposits. A withdrawal of the member's whole `withdrawable`
+/// balance is let through below it, or a leftover under the floor (the tail of
+/// a partial withdrawal, a little interest) could never be taken out.
+pub fn withdrawal_meets_minimum(amount: i64, withdrawable: i64, min: i64) -> bool {
+    amount >= min || amount == withdrawable
+}
+
 // ===========================================================================
 // AML deposit limits
 // ===========================================================================
@@ -1361,6 +1370,17 @@ mod tests {
             // ...and nothing more could have been sent.
             assert!(sent == amount || sent + 1 + payout_charge(sent + 1, &fees) > amount, "sent too little at {amount}");
         }
+    }
+
+    #[test]
+    fn a_withdrawal_under_the_minimum_only_passes_as_the_whole_balance() {
+        let min = 10_000; // ₱100, the policy's deposit minimum
+        assert!(!withdrawal_meets_minimum(9_999, 50_000, min));
+        assert!(withdrawal_meets_minimum(10_000, 50_000, min));
+        // A ₱37.50 leftover can still be taken out — all of it...
+        assert!(withdrawal_meets_minimum(3_750, 3_750, min));
+        // ...but not chipped off a bigger balance.
+        assert!(!withdrawal_meets_minimum(3_750, 50_000, min));
     }
 
     #[test]

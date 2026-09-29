@@ -66,6 +66,8 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             post(kyc::submit).layer(DefaultBodyLimit::max(KYC_BODY_LIMIT)),
         )
         .route("/kyc/status", get(kyc::status))
+        // Public identifiers the web app loads at runtime (see `api::config`).
+        .route("/config", get(crate::api::config::public_config))
         .route("/credit/score", get(credit::status))
         .route("/credit/history", get(lending::credit_history))
         .route("/pool", get(lending::pool_summary))

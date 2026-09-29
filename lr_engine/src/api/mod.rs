@@ -1,3 +1,4 @@
+pub mod config;
 pub mod credit;
 pub mod kyc;
 pub mod lending;

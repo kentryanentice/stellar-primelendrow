@@ -74,6 +74,12 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const depositTooBig = limits !== null && depositCentavos !== null && depositCentavos > limits.allowance
     const depositBlocked = depositTooSmall || depositTooBig
     const withdrawTooBig = withdrawCentavos !== null && withdrawCentavos > me.available
+    // The engine's floor is the deposit minimum, with the one exception it
+    // makes too: the whole available balance can always go, however small.
+    const minWithdrawal = params.policy.min_deposit
+    const withdrawTooSmall =
+        withdrawCentavos !== null && withdrawCentavos < minWithdrawal && withdrawCentavos !== me.available
+    const withdrawBlocked = withdrawTooBig || withdrawTooSmall
     // Fee estimates (engine 043, 049), from policy. A deposit adds the fee to
     // what's charged so the member is credited exactly what they typed — the
     // same way a repayment does. A withdrawal is the other way round: its fee
@@ -83,7 +89,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
     const depositFees = fees && depositCentavos && !depositBlocked
         ? { paypal: grossUp(depositCentavos, fees.paypal), card: grossUp(depositCentavos, fees.stripe) }
         : null
-    const withdrawFee = fees && withdrawCentavos && !withdrawTooBig ? payoutFee(withdrawCentavos, fees.paypal) : null
+    const withdrawFee = fees && withdrawCentavos && !withdrawBlocked ? payoutFee(withdrawCentavos, fees.paypal) : null
 
     const locked = me.lent + me.collateral + me.pledged
     const totalDeposited = me.available + locked
@@ -199,8 +205,16 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     </div>
                     {withdrawTooBig ? (
                         <p className='lending-field-error'>Only {pesos(me.available)} of your deposit is withdrawable right now.</p>
+                    ) : withdrawTooSmall ? (
+                        <p className='lending-field-error'>
+                            Minimum withdrawal is {pesos(minWithdrawal)}, or your whole balance if it’s less.
+                        </p>
                     ) : (
-                        <p className='lending-muted'>Up to {pesos(me.available)} available now · sent to your connected PayPal</p>
+                        <p className='lending-muted'>
+                            Up to {pesos(me.available)} available now
+                            {me.available >= minWithdrawal && <> · minimum {pesos(minWithdrawal)}</>}
+                            {' '}· sent to your connected PayPal
+                        </p>
                     )}
                     {withdrawFee !== null && withdrawCentavos && (
                         <p className='lending-muted lending-fee-note'>
@@ -210,7 +224,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     <button
                         type='button'
                         className='lending-btn-primary lending-btn-withdraw'
-                        disabled={!withdrawCentavos || withdrawTooBig || withdrawing}
+                        disabled={!withdrawCentavos || withdrawBlocked || withdrawing}
                         onClick={async () => {
                             if (!withdrawCentavos) return
                             if (!await requestWithdrawal(withdrawCentavos)) return
@@ -222,7 +236,7 @@ function ManageFundsCard({ data, onChanged }: { data: PoolResponse; onChanged: (
                     >
                         {withdrawing
                             ? 'Sending to PayPal…'
-                            : withdrawCentavos && !withdrawTooBig
+                            : withdrawCentavos && !withdrawBlocked
                                 ? `Send ${pesos(withdrawCentavos)} to my PayPal`
                                 : 'Send to my PayPal'}
                     </button>
