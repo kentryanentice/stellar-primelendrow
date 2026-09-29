@@ -98,6 +98,17 @@ pub async fn withdraw(
         ));
     }
 
+    // The floor is the policy's deposit minimum. Measured against the lots
+    // just locked, so "your whole balance" is the balance as it is now, not
+    // whatever the page last showed.
+    let rules = policy::active(&mut *tx).await?;
+    if !domain::withdrawal_meets_minimum(amount, withdrawable, rules.params.min_deposit) {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "That's below the minimum withdrawal — withdraw at least the minimum, or your whole balance",
+        ));
+    }
+
     // The books are the wall: even a correct lot sum can't overdraw actual
     // cash (loans out are cash gone until repaid).
     // Free cash: earlier withdrawals already promised but not yet paid out are
@@ -168,7 +179,6 @@ pub async fn withdraw(
     // The provider's payout fee comes out of what is sent (043): the member's
     // balance falls by `amount`, they receive `amount - fee`, and the pool's
     // cash falls by exactly `amount` once the provider's own charge is added.
-    let rules = policy::active(&mut *tx).await?;
     let fee = domain::payout_fee(amount, rules.params.payment_fees.for_rail(destination.provider));
 
     let payout_id: Result<Uuid, sqlx::Error> = sqlx::query_scalar(

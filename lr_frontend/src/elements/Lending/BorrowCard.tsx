@@ -35,7 +35,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
         xlmCoverInput, setXlmCoverInput,
         amountCentavos,
         productQuote, overCap,
-        pledgesTotal, pledgesShort,
+        pledgesTotal, pledgesShort, pledgeTooBig,
         coverTotal, coverRequired, coverShort, coverLeavesNoGap,
         guarantorGap, needsWallet,
         canSubmit, submit,
@@ -366,6 +366,11 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
                             {pledgesShort && !coverLeavesNoGap && (
                                 <p className='lending-field-error'>
                                     Pledges add up to {pesos(pledgesTotal)} — they must cover the {guarantorGap !== null ? pesos(guarantorGap) : 'amount'} you aren't covering yourself.
+                                </p>
+                            )}
+                            {pledgeTooBig && !coverLeavesNoGap && guarantorGap !== null && (
+                                <p className='lending-field-error'>
+                                    Each pledge can be at most {pesos(guarantorGap)} — the share you aren't covering yourself.
                                 </p>
                             )}
                         </div>

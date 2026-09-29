@@ -567,6 +567,17 @@ pub async fn apply(
             let mut seen: Vec<Uuid> = Vec::new();
             for ask in &p.guarantors {
                 let pledge = validate_centavos(ask.pledge_amount)?;
+                // No one guarantor is asked for more than the whole uncovered
+                // share: past that, a pledge only freezes more of their deposit
+                // than any default could ever claim. The total may still run
+                // above the gap — an extra guarantor is what lets the loan
+                // survive one of them declining.
+                if pledge > cover.guarantor_gap {
+                    return Err((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "A guarantor can't be asked to pledge more than the share you aren't covering yourself",
+                    ));
+                }
                 total_pledged += pledge;
                 // A guarantor must be a real, KYC-verified member — the same
                 // gate the borrower passed.

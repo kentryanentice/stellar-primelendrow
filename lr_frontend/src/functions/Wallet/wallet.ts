@@ -5,6 +5,7 @@ import {
     signTransaction as freighterSignTransaction,
 } from '@stellar/freighter-api'
 import { WalletConnectModule, WalletConnectTargetChain } from '@creit.tech/stellar-wallets-kit/modules/wallet-connect'
+import { loadPublicConfig } from '../publicConfig'
 
 // The network the app runs on, the same switch stellarLock and stellarAdmin
 // read. WalletConnect has to be told explicitly: left to itself the kit asks
@@ -23,10 +24,11 @@ const NETWORK_PASSPHRASE = IS_MAINNET
 // itself, so the same "Connect" button works either way.
 //
 // Get a free project id at https://cloud.reown.com (Reown Cloud, formerly
-// WalletConnect Cloud) and set VITE_WALLETCONNECT_PROJECT_ID in .env — until
-// then this stays undefined and connectFreighter() falls back to
-// extension-only, exactly like before.
-const PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined
+// WalletConnect Cloud) and set WALLETCONNECT_PROJECT_ID in lr_engine's .env;
+// the app reads it from the engine's GET /config (functions/publicConfig).
+// Until it's set, connectFreighter() falls back to extension-only, exactly
+// like before. Lock the project to your domains in Reown Cloud — the id is
+// public by nature, and the domain allowlist is what stops other sites using it.
 
 /** How many leading characters of a wallet address to show before the ellipsis. */
 export const ADDRESS_DISPLAY_LEN = 20
@@ -38,12 +40,14 @@ export const truncateAddress = (address: string) =>
 let wcModule: WalletConnectModule | null = null
 
 /** Created once (module init kicks off a real network call to the WalletConnect
- *  relay), reused for every connect attempt rather than re-pairing from scratch. */
-function getWalletConnectModule(): WalletConnectModule | null {
-    if (!PROJECT_ID) return null
+ *  relay), reused for every connect attempt rather than re-pairing from scratch.
+ *  Null when the engine has no project id configured. */
+async function getWalletConnectModule(): Promise<WalletConnectModule | null> {
+    const { walletconnect_project_id: projectId } = await loadPublicConfig()
+    if (!projectId) return null
     if (!wcModule) {
         wcModule = new WalletConnectModule({
-            projectId: PROJECT_ID,
+            projectId,
             allowedChains: [WC_CHAIN],
             metadata: {
                 name: 'PrimeLendRow',
@@ -120,7 +124,7 @@ export async function connectFreighter(): Promise<ConnectResult> {
         return { address }
     }
 
-    const wc = getWalletConnectModule()
+    const wc = await getWalletConnectModule()
     if (!wc) {
         return {
             error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.',
@@ -177,7 +181,7 @@ export async function signChallenge(message: string, address: string): Promise<S
         return { signature }
     }
 
-    const wc = getWalletConnectModule()
+    const wc = await getWalletConnectModule()
     if (!wc) {
         return { error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
     }
@@ -211,7 +215,7 @@ export async function signTransactionXdr(
         return { signedTxXdr: signed.signedTxXdr }
     }
 
-    const wc = getWalletConnectModule()
+    const wc = await getWalletConnectModule()
     if (!wc) {
         return { error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
     }
