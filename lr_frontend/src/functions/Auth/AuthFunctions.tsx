@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type UIEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type UIEvent } from 'react'
 import { useToast } from '../../providers/useToast'
 import { useSession } from '../../providers/useSession'
 import { useAccent } from '../../providers/AccentProvider'
@@ -10,6 +10,19 @@ export type Match = '' | 'ok' | 'bad'
 const RESEND_WAIT = 60
 const emptyOtp = () => ['', '', '', '', '', '']
 const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback)
+
+/** Why a Google sign-in came back to this page. The engine only ever sends one
+ *  of these codes (users::google), never free text, so nothing is echoed. */
+const GOOGLE_ERRORS: Record<string, string> = {
+    cancelled: 'Google sign-in was cancelled.',
+    expired: 'That Google sign-in took too long or was opened in another browser. Please try again.',
+    no_account: 'No PrimeLendRow account uses that Google email yet. Create one below.',
+    link_password: 'An account already uses this email. Log in with your password; Google can only be linked automatically for Gmail and Google Workspace addresses.',
+    email_unverified: "Your Google account's email isn't verified, so it can't be used here.",
+    unavailable: "Google sign-in isn't available right now.",
+    failed: 'Google sign-in failed. Please try again.',
+}
+const googleErrorInUrl = () => new URLSearchParams(window.location.search).get('oauth_error')
 
 const STRENGTH_LABELS = ['Weak', 'Fair', 'Good', 'Strong']
 /** [min length, has uppercase, has special, has digit] — backend requires the first three. */
@@ -25,7 +38,8 @@ export default function useAuthFunctions() {
     const { setUser, setCsrfToken } = useSession()
     const { accent } = useAccent()
 
-    const [screen, setScreen] = useState<Screen>('login')
+    // "No account yet" from Google lands straight on sign-up.
+    const [screen, setScreen] = useState<Screen>(() => (googleErrorInUrl() === 'no_account' ? 'register' : 'login'))
     const [showLoginPw, setShowLoginPw] = useState(false)
     const [showRegPw, setShowRegPw] = useState(false)
     const [showConfirmPw, setShowConfirmPw] = useState(false)
@@ -60,6 +74,18 @@ export default function useAuthFunctions() {
     const validResetEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reset.email)
     const canReset = code.length === 6 && resetChecks[0] && resetChecks[1] && resetChecks[2] && reset.password === reset.confirm
 
+    // ---- google sign-in result ----
+    // Shown once, then taken out of the address bar so a refresh or a shared
+    // link doesn't repeat it.
+    useEffect(() => {
+        const code = googleErrorInUrl()
+        if (!code) return
+        toast.error(GOOGLE_ERRORS[code] ?? GOOGLE_ERRORS.failed)
+        const url = new URL(window.location.href)
+        url.searchParams.delete('oauth_error')
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    }, [toast])
+
     // ---- resend countdown ----
     useEffect(() => {
         if (!resendIn) return
@@ -82,10 +108,15 @@ export default function useAuthFunctions() {
     const closeTerms = () => setTermsOpen(false)
     const toggleTerms = () => (terms ? setTerms(false) : openTerms())
     const acceptTerms = () => { setTerms(true); setTermsOpen(false) }
-    const onTermsScroll = (e: UIEvent<HTMLDivElement>) => {
-        const el = e.currentTarget
-        setTermsEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 12)
-    }
+    /** Marks the terms read once their end is on screen, and keeps them read:
+     *  scrolling back up to recheck a clause no longer locks the button again.
+     *  TermsModal also calls this on open and on resize, without any scrolling
+     *  — terms short enough to fit the box never fire a scroll event, which
+     *  left the button disabled for good on a tall screen. */
+    const checkTermsEnd = useCallback((el: HTMLElement) => {
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 12) setTermsEnd(true)
+    }, [])
+    const onTermsScroll = (e: UIEvent<HTMLDivElement>) => checkTermsEnd(e.currentTarget)
 
     // ---- otp inputs ----
     const onOtpChange = (i: number, value: string) => {
@@ -226,7 +257,7 @@ export default function useAuthFunctions() {
         login, setLogin, reg, setReg, reset, setReset,
         showLoginPw, showRegPw, showConfirmPw, toggleLoginPw, toggleRegPw, toggleConfirmPw,
         showResetPw, showResetConfirm, toggleResetPw, toggleResetConfirm,
-        terms, termsOpen, termsEnd, openTerms, closeTerms, toggleTerms, acceptTerms, onTermsScroll,
+        terms, termsOpen, termsEnd, openTerms, closeTerms, toggleTerms, acceptTerms, onTermsScroll, checkTermsEnd,
         otp, otpRefs, onOtpChange, onOtpKey, onOtpPaste,
         resendIn, busy,
         // derived
