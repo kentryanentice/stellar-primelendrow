@@ -1,5 +1,6 @@
 import type { AuthState } from './types'
 import { CheckIcon, CrossIcon, EyeIcon } from './icons'
+import GoogleButton from './GoogleButton'
 
 type RegisterScreenProps = Pick<AuthState,
     | 'reg' | 'setReg' | 'showRegPw' | 'toggleRegPw' | 'showConfirmPw' | 'toggleConfirmPw'
@@ -53,6 +54,9 @@ export default function RegisterScreen({
             </label>
 
             <button className='auth-btn' type='submit' disabled={busy || !canRegister}>{busy ? 'Please wait…' : 'Create Account'}</button>
+
+            {/* Needs only the Terms box: Google supplies the name and a verified email. */}
+            <GoogleButton intent='register' disabled={busy || !terms} />
 
             <p className='auth-switch'>Already have an account? <button className='auth-link' type='button' onClick={goLogin} disabled={busy}>Log In</button></p>
         </div>

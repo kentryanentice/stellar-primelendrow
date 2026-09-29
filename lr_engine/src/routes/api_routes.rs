@@ -44,6 +44,10 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
         )
         .route("/auth/session", get(users::session_handler))
         .route("/auth/logout", post(users::logout))
+        // Sign in with Google: browser redirects, not API calls (see
+        // `users::google`), so they sit on the payload exemption list.
+        .route("/auth/google/start", get(users::google_start))
+        .route("/auth/google/callback", get(users::google_callback))
        
         .route(
             "/auth/password-reset/request",

@@ -1,3 +1,4 @@
+mod google;
 mod login;
 mod logout;
 mod password_reset;
@@ -6,6 +7,7 @@ mod session;
 pub mod shared;
 mod verify;
 
+pub use google::{callback as google_callback, start as google_start};
 pub use login::login;
 pub use logout::logout;
 pub use password_reset::{confirm as password_reset_confirm, request as password_reset_request};

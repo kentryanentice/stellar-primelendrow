@@ -15,6 +15,7 @@ import { CreditScoreSkeleton, IdentityTimelineSkeleton, WalletsCardSkeleton } fr
 import PaypalCard from '../elements/Settings/PaypalCard'
 import StripeCard from '../elements/Settings/StripeCard'
 import { apiFetch } from '../functions/apiFetch'
+import { clearKycDraft } from '../functions/KYC/kycDraft'
 
 // The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
@@ -174,6 +175,9 @@ function Settings() {
                 minDisplay,
             ])
             if (!res.ok) throw new Error((await res.text()) || 'Unable to log out')
+            // An unfinished KYC draft holds an ID photo and a selfie; it does
+            // not outlive the session that made it.
+            await clearKycDraft()
             // AccessProvider redirects to /auth as soon as user is cleared
             setUser(null)
         } catch (err) {

@@ -195,6 +195,33 @@ pub fn csrf_cookie(token: &str) -> HeaderValue {
     .expect("valid cookie value")
 }
 
+/// Ties a Google sign-in attempt to the browser that started it: the callback
+/// is only honoured when this cookie matches the `state` Google hands back, so
+/// a callback URL planted in someone else's browser (login CSRF) finds no
+/// cookie and is refused. Ten minutes, the same life as the stored attempt.
+/// Lax is what lets it ride along on Google's top-level redirect back to us.
+pub fn oauth_state_cookie_name() -> &'static str {
+    if insecure_dev() { "oauth_state" } else { "__Host-oauth_state" }
+}
+
+pub fn oauth_state_cookie(state: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{}={state}; HttpOnly; {}; Path=/; Max-Age=600",
+        oauth_state_cookie_name(),
+        cookie_security_attrs(),
+    ))
+    .expect("valid cookie value")
+}
+
+pub fn clear_oauth_state_cookie() -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{}=; HttpOnly; {}; Path=/; Max-Age=0",
+        oauth_state_cookie_name(),
+        cookie_security_attrs(),
+    ))
+    .expect("valid cookie value")
+}
+
 pub fn clear_session_cookie() -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{}=; HttpOnly; {}; Path=/; Max-Age=0",

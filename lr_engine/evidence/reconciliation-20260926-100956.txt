@@ -1,0 +1,96 @@
+Commit:    0de2d3a
+PrimeLendRow — collateral reconciliation, database against chain
+Generated: 2026-09-26 02:10:02 UTC
+Vault:     CARIIQC4QZRE3BSXB2NCB4UNRWCTKIRQULLJWZ2NRL6FWZP4MMHWS2SI
+Treasury:  not configured — seizure destinations are not checked
+
+== Database → chain: every recorded movement, verified again
+
+Loan 958177F0  cancelled
+  – nothing recorded on chain
+
+Loan 0E5FFBC1  released
+  ✓ lock        a4f7351799  219.5791400 XLM into the vault
+  ✓ mark_repaid 19097e9eb5  recorded on chain
+  ✓ release     8d942190d8  219.5791400 XLM out of the vault
+
+Loan FDD5E23D  released
+  ✓ lock        aaa517c661  520.3816132 XLM into the vault
+  ✓ mark_repaid bb17e3f3d0  recorded on chain
+  ✓ release     faaf1e2526  520.3816132 XLM out of the vault
+
+Loan 3599246A  released
+  ✓ lock        5ba168d09f  518.1347151 XLM into the vault
+  ✓ mark_repaid ad79ea2433  recorded on chain
+  ✓ release     ea05bfb82d  518.1347151 XLM out of the vault
+
+Loan 1603D966  cancelled
+  – nothing recorded on chain
+
+Loan 48AAEC09  cancelled
+  – nothing recorded on chain
+
+Loan 8D0A9B5B  released
+  ✓ lock        bbd7d082da  244.6982056 XLM into the vault
+  ✓ mark_repaid 9125f74aa1  recorded on chain
+  ✓ release     3b6064fa7b  244.6982056 XLM out of the vault
+
+Loan 74CCE1F0  released
+  ✓ lock        b5a99f9e90  319.4103195 XLM into the vault
+  ✓ mark_repaid 7a31dcb8b8  recorded on chain
+  ✓ release     16ad061c03  319.4103195 XLM out of the vault
+
+Loan EA875D08  cancelled
+  – nothing recorded on chain
+
+Loan BAE6DF3C  released
+  ✓ lock        ec668728c8  367.0473084 XLM into the vault
+  ✓ mark_repaid 3def90ffc9  recorded on chain
+  ✓ release     2b13cec7fc  367.0473084 XLM out of the vault
+
+Loan 4C9A5A8B  released
+  ✓ lock        dbf25df8a3  902.2556391 XLM into the vault
+  ✓ mark_repaid c8b1dc9fd2  recorded on chain
+  ✓ release     2f53efd553  902.2556391 XLM out of the vault
+
+Loan E17F3676  released
+  ✓ lock        30c9103567  452.4886878 XLM into the vault
+  ✓ mark_repaid fd1cfc7c84  recorded on chain
+  ✓ release     b0f2eb7b0b  452.4886878 XLM out of the vault
+
+Loan C5027894  cancelled
+  – nothing recorded on chain
+
+Loan 0A0BE2DE  cancelled
+  – nothing recorded on chain
+
+Loan 02D828B3  cancelled
+  – nothing recorded on chain
+
+Loan 750985C1  cancelled
+  – nothing recorded on chain
+
+Loan BAC4F5E7  released
+  ✓ lock        8f0d4195d7  42.8877770 XLM into the vault
+  ✓ mark_repaid 776b5299ed  recorded on chain
+  ✓ release     98f9d9b63b  42.8877770 XLM out of the vault
+
+Loan 2324147E  cancelled
+  – nothing recorded on chain
+
+Loan 096D89CC  cancelled
+  – nothing recorded on chain
+
+Loan CB04C656  cancelled
+  – nothing recorded on chain
+
+Loan F4561581  locked
+  ✓ lock        f3ba697e3b  107.6812635 XLM into the vault
+
+== Chain → database: every movement the vault published
+Window: ledgers 4752067–4873007, 2026-09-19 02:10 UTC to 2026-09-26 02:10 UTC (the RPC keeps about a week)
+16 of 16 movement events match a recorded transaction
+
+== Result
+21 positions, 28 recorded transactions verified on chain, 16 vault events matched
+ZERO DRIFT — the database and the vault agree.

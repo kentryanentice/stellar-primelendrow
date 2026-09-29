@@ -1,5 +1,6 @@
 import type { AuthState } from './types'
 import { EyeIcon } from './icons'
+import GoogleButton from './GoogleButton'
 
 type LoginScreenProps = Pick<AuthState, 'login' | 'setLogin' | 'showLoginPw' | 'toggleLoginPw' | 'goForgot' | 'goRegister' | 'busy'>
 
@@ -25,6 +26,8 @@ export default function LoginScreen({ login, setLogin, showLoginPw, toggleLoginP
             </div>
 
             <button className='auth-btn' type='submit' disabled={busy}>{busy ? 'Please wait…' : 'Log In'}</button>
+
+            <GoogleButton intent='login' disabled={busy} />
 
             <p className='auth-switch'>Don't have an account? <button className='auth-link' type='button' onClick={goRegister} disabled={busy}>Create one</button></p>
         </div>

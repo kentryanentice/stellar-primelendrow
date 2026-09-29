@@ -88,6 +88,10 @@ const EXEMPT_PATHS: &[&str] = &[
     "/paypal/callback",
     "/stripe/return",
     "/stripe/refresh",
+    // Top-level browser navigations to and back from Google, like the PayPal
+    // and Stripe landings: there is no app code on either end to encrypt.
+    "/auth/google/start",
+    "/auth/google/callback",
 ];
 
 /// The one path a tunnelled call shows. Deliberately meaningless.

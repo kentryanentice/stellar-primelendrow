@@ -1,8 +1,25 @@
+import { useEffect, useRef } from 'react'
 import type { AuthState } from './types'
 
-type TermsModalProps = Pick<AuthState, 'termsEnd' | 'closeTerms' | 'onTermsScroll' | 'acceptTerms'>
+type TermsModalProps = Pick<AuthState, 'termsEnd' | 'closeTerms' | 'onTermsScroll' | 'checkTermsEnd' | 'acceptTerms'>
 
-export default function TermsModal({ termsEnd, closeTerms, onTermsScroll, acceptTerms }: TermsModalProps) {
+export default function TermsModal({ termsEnd, closeTerms, onTermsScroll, checkTermsEnd, acceptTerms }: TermsModalProps) {
+    const bodyRef = useRef<HTMLDivElement>(null)
+
+    // Checked when the box opens and whenever it or its text changes size,
+    // not only on scroll: terms that fit without scrolling never fire a scroll
+    // event, and would leave the button locked. A ResizeObserver reports once
+    // as soon as it starts observing, which is the check on open; watching the
+    // paragraphs too catches text reflowing (a late web font, a rotation).
+    useEffect(() => {
+        const el = bodyRef.current
+        if (!el) return
+        const observer = new ResizeObserver(() => checkTermsEnd(el))
+        observer.observe(el)
+        Array.from(el.children).forEach(child => observer.observe(child))
+        return () => observer.disconnect()
+    }, [checkTermsEnd])
+
     return (
         <div className='auth-modal'>
             <div className='auth-modal-card'>
@@ -13,7 +30,7 @@ export default function TermsModal({ termsEnd, closeTerms, onTermsScroll, accept
                     </div>
                     <button className='auth-modal-close' type='button' aria-label='Close' onClick={closeTerms}>✕</button>
                 </div>
-                <div className='auth-terms' onScroll={onTermsScroll}>
+                <div className='auth-terms' ref={bodyRef} onScroll={onTermsScroll}>
                     <p><strong>1. Acceptance.</strong> By creating a PrimeLendRow account you agree to use the platform lawfully and to keep your login credentials secure. You are responsible for activity that occurs under your account and for keeping your profile information accurate.</p>
                     <p><strong>2. Privacy.</strong> We process your personal data only to operate and improve the service. We never sell your information to third parties, and account data is handled according to our privacy practices. You may request account assistance through the support channels we provide.</p>
                     <p><strong>3. Communications.</strong> We may send transactional emails relating to your account, such as security alerts, verification codes, account updates, and password reset messages. These messages are required for account security and cannot be fully disabled while the account is active.</p>
