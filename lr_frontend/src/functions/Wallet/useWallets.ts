@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSession } from '../../providers/useSession'
 import { useToast } from '../../providers/useToast'
-import { CONNECT_CANCELLED, connectFreighter, signChallenge } from './wallet'
+import { CONNECT_CANCELLED, connectFreighter, proveWallet } from './wallet'
 import { apiFetch } from '../apiFetch'
 
 const API = import.meta.env.VITE_API_URL ?? ''
@@ -17,8 +17,6 @@ export type Wallet = {
     connected_at: number
     disconnected_at: number | null
 }
-
-type ChallengeResponse = { nonce: string; message: string; expires_at: number }
 
 /** GET /wallets — reads only; `refresh` and the first-load effect apply it. */
 async function fetchWallets(signal?: AbortSignal) {
@@ -92,17 +90,9 @@ export default function useWallets() {
             }
             const { address } = connectResult
 
-            const challengeRes = await apiFetch(`${API}/wallets/challenge`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: authHeaders(),
-            })
-            if (!challengeRes.ok) throw new Error(await challengeRes.text() || 'Unable to start wallet verification')
-            const { nonce, message } = await challengeRes.json() as ChallengeResponse
-
-            const signResult = await signChallenge(message, address)
-            if ('error' in signResult) {
-                toast.error(signResult.error)
+            const proof = await proveWallet(address, csrfToken)
+            if ('error' in proof) {
+                toast.error(proof.error)
                 return
             }
 
@@ -110,7 +100,7 @@ export default function useWallets() {
                 method: 'POST',
                 credentials: 'include',
                 headers: authHeaders(),
-                body: JSON.stringify({ nonce, address, signature: signResult.signature, label: label?.trim() || undefined }),
+                body: JSON.stringify({ nonce: proof.nonce, address, signature: proof.signature, label: label?.trim() || undefined }),
             })
             if (!connectRes.ok) throw new Error(await connectRes.text() || 'Unable to connect wallet')
 
@@ -121,7 +111,7 @@ export default function useWallets() {
         } finally {
             setConnecting(false)
         }
-    }, [authHeaders, refresh, toast])
+    }, [authHeaders, csrfToken, refresh, toast])
 
     const disconnectWallet = useCallback(async (walletId: string) => {
         setDisconnectingId(walletId)

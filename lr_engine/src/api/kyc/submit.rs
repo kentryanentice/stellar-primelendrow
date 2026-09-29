@@ -7,11 +7,9 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::shared::{
-    ID_TYPES, MAX_DOB_LEN, MAX_ID_NUMBER_LEN, MAX_NAME_LEN, audit, decode_image,
-    is_valid_stellar_address,
-};
+use super::shared::{ID_TYPES, MAX_DOB_LEN, MAX_ID_NUMBER_LEN, MAX_NAME_LEN, audit, decode_image};
 use crate::api::users::shared::{E, MessageResponse, require_user};
+use crate::api::wallets::{parse_address, redeem_challenge};
 use crate::infra::{crypto, storage::SupabaseStorage};
 
 #[derive(Deserialize)]
@@ -24,6 +22,15 @@ pub struct SubmitInput {
     dob: String,
     id_number: String,
     wallet_address: String,
+    /// The one-time challenge (POST /wallets/challenge) the wallet signed —
+    /// the same ownership proof connecting a wallet takes (052). Defaulted
+    /// only so a page from before this answers with a readable message
+    /// rather than a deserialization error.
+    #[serde(default)]
+    wallet_nonce: String,
+    /// Base64 Ed25519 signature (SEP-0053) over that challenge's message.
+    #[serde(default)]
+    wallet_signature: String,
     #[serde(default)]
     face_match_score: Option<i16>,
     #[serde(default)]
@@ -83,8 +90,13 @@ pub async fn submit(
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid ID number"));
     }
     let wallet_address = p.wallet_address.trim().to_string();
-    if !is_valid_stellar_address(&wallet_address) {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid wallet address"));
+    let wallet_key =
+        parse_address(&wallet_address).map_err(|m| (StatusCode::UNPROCESSABLE_ENTITY, m))?;
+    if p.wallet_nonce.is_empty() || p.wallet_signature.is_empty() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Your wallet needs to sign a verification message — refresh the page and submit again",
+        ));
     }
     if let Some(score) = p.face_match_score
         && !(0..=100).contains(&score)
@@ -145,6 +157,14 @@ pub async fn submit(
         ));
     }
 
+    // ---- wallet ownership (052) ----
+    // The last refusal before anything is stored: the challenge is used up
+    // either way, and a failed proof must not leave documents behind. It is
+    // the same proof a wallet connection takes, so the address approval
+    // later adds to the member's wallets is one they showed they control.
+    redeem_challenge(&pool, user_id, &p.wallet_nonce, &wallet_key, &p.wallet_signature).await?;
+    let wallet_proven_at = Utc::now().timestamp();
+
     // ---- encrypt PII ----
     let seal = |value: &str| {
         crypto::seal(value).map_err(|e| {
@@ -196,10 +216,10 @@ pub async fn submit(
             (id, user_id, status, id_type,
              first_name_enc, middle_name_enc, last_name_enc, dob_enc,
              id_number_enc, id_number_hash,
-             wallet_address, face_match_score, liveness_passed,
+             wallet_address, wallet_proven_at, face_match_score, liveness_passed,
              id_image_path, selfie_image_path,
              created_at, updated_at)
-         VALUES ($1, $2, 'verifying', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)",
+         VALUES ($1, $2, 'verifying', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)",
     )
     .bind(submission_id)
     .bind(user_id)
@@ -211,6 +231,7 @@ pub async fn submit(
     .bind(&id_number_enc)
     .bind(&id_number_hash)
     .bind(&wallet_address)
+    .bind(wallet_proven_at)
     .bind(p.face_match_score)
     .bind(p.liveness_passed)
     .bind(&id_image_path)

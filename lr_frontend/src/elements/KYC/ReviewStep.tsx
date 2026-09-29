@@ -31,6 +31,12 @@ export default function ReviewStep({ firstName, middleName, lastName, idNumber, 
                     </div>
                 ))}
             </div>
+            {walletAddress && (
+                <p className='kyc-review-note'>
+                    When you submit, your wallet asks you to sign a short message proving it’s yours.
+                    It doesn’t move any funds.
+                </p>
+            )}
         </div>
     )
 }

@@ -7,10 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::shared::{
-    MAX_LABEL_LEN, MAX_WALLETS_PER_USER, audit, challenge_message, parse_address,
-    verify_stellar_signature,
-};
+use super::shared::{MAX_LABEL_LEN, MAX_WALLETS_PER_USER, audit, parse_address, redeem_challenge};
 use crate::api::users::shared::{E, require_verified_user};
 
 /// The wallet row the upsert returns: id, address, label, source, status,
@@ -58,43 +55,10 @@ pub async fn connect(
         _ => None,
     };
 
-    // One-time use: the delete *is* the check, same pattern as
-    // api::verified's used_nonces insert-is-the-check. A concurrent replay
-    // of the same nonce loses this race and falls through to "not found".
+    // The one-time challenge is used up here whether or not the signature
+    // holds — see `redeem_challenge`.
+    redeem_challenge(&pool, user_id, &p.nonce, &pubkey_bytes, &p.signature).await?;
     let now = Utc::now().timestamp();
-    let expires_at: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM public.wallet_challenges
-          WHERE nonce = $1 AND user_id = $2
-          RETURNING expires_at",
-    )
-    .bind(&p.nonce)
-    .bind(user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("DB wallet challenge redeem: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Wallet verification failed",
-        )
-    })?;
-
-    let expires_at = expires_at.ok_or((
-        StatusCode::BAD_REQUEST,
-        "Verification challenge expired or invalid — try connecting again",
-    ))?;
-    if expires_at < now {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Verification challenge expired or invalid — try connecting again",
-        ));
-    }
-
-    // Re-derive the exact message from the stored nonce/expiry — the client
-    // never gets to assert what was signed.
-    let message = challenge_message(&p.nonce, expires_at);
-    verify_stellar_signature(&pubkey_bytes, &message, &p.signature)
-        .map_err(|m| (StatusCode::UNAUTHORIZED, m))?;
 
     let active_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM public.wallets WHERE user_id = $1 AND status = 'active'",
