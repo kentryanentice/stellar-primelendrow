@@ -18,8 +18,8 @@ use crate::infra::{crypto, storage::SupabaseStorage};
 type QueueRow = (Uuid, Uuid, String, Option<i16>, bool, i64, Option<String>, Option<String>);
 
 /// What a decision returns: user_id, id_image_path, selfie_image_path,
-/// wallet_address.
-type DecidedRow = (Uuid, Option<String>, Option<String>, Option<String>);
+/// wallet_address, wallet_proven_at.
+type DecidedRow = (Uuid, Option<String>, Option<String>, Option<String>, Option<i64>);
 
 /// How long an admin's signed image URL stays valid. Long enough to review,
 /// short enough that a leaked URL from a screen-share is soon worthless.
@@ -353,7 +353,7 @@ pub async fn review(
             SET status = $1, reviewed_by = $2, reviewed_at = $3,
                 rejection_reason = $4, updated_at = $3
           WHERE id = $5 AND status = 'verifying'
-          RETURNING user_id, id_image_path, selfie_image_path, wallet_address",
+          RETURNING user_id, id_image_path, selfie_image_path, wallet_address, wallet_proven_at",
     )
     .bind(status)
     .bind(admin_id)
@@ -367,7 +367,7 @@ pub async fn review(
         (StatusCode::INTERNAL_SERVER_ERROR, "Review failed")
     })?;
 
-    let (user_id, id_image_path, selfie_image_path, wallet_address) =
+    let (user_id, id_image_path, selfie_image_path, wallet_address, wallet_proven_at) =
         row.ok_or((StatusCode::NOT_FOUND, "No pending submission with that id"))?;
 
     if approve {
@@ -446,7 +446,17 @@ pub async fn review(
     // DO NOTHING (no target) absorbs a conflict against either of that
     // table's unique indexes: a resubmission reusing the same (user,
     // address), or the address already being someone else's active wallet.
+    //
+    // Only a wallet whose ownership was proven at submission (052) is seeded.
+    // An unproven address — anything submitted before that proof existed —
+    // could be anyone's, and seeding it would let one member hold another's
+    // address and block its real owner from connecting it. Those members
+    // connect their wallet from Settings, with the proof, instead.
+    if approve && wallet_address.is_some() && wallet_proven_at.is_none() {
+        tracing::info!(%user_id, "kyc wallet not seeded: submitted without an ownership proof");
+    }
     if approve
+        && wallet_proven_at.is_some()
         && let Some(wallet_address) = &wallet_address
         && let Err(e) = sqlx::query(
             "INSERT INTO public.wallets

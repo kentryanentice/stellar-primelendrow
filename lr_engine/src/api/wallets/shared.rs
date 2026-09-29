@@ -1,8 +1,12 @@
+use axum::http::StatusCode;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
-use sqlx::PgExecutor;
+use sqlx::{PgExecutor, PgPool};
 use uuid::Uuid;
+
+use crate::api::users::shared::E;
 
 pub const MAX_LABEL_LEN: usize = 50;
 /// A bookkeeping limit, not a security boundary — easy to raise if it turns
@@ -26,10 +30,9 @@ pub fn challenge_message(nonce: &str, expires_at: i64) -> String {
 }
 
 /// Decodes and validates a Stellar `G...` address — base32, version byte,
-/// and CRC16-XMODEM checksum, via the SDF-maintained `stellar-strkey` crate
-/// (stronger than kyc::shared::is_valid_stellar_address's shape-only check,
-/// which is fine for its own use but not what a signature-ownership proof
-/// should be checked against). Returns the raw 32-byte ed25519 public key.
+/// and CRC16-XMODEM checksum, via the SDF-maintained `stellar-strkey` crate,
+/// so a mistyped address is refused rather than merely looking right.
+/// Returns the raw 32-byte ed25519 public key.
 pub fn parse_address(address: &str) -> Result<[u8; 32], &'static str> {
     address
         .parse::<stellar_strkey::ed25519::PublicKey>()
@@ -66,6 +69,58 @@ pub fn verify_stellar_signature(
         .map_err(|_| "Wallet verification failed")
 }
 
+/// The whole ownership proof: uses up the one-time challenge `nonce` issued
+/// to `user_id` by api::wallets::challenge, and checks `signature_b64` is the
+/// key behind `pubkey_bytes` signing that challenge's message. Shared by
+/// connecting a wallet (api::wallets::connect) and submitting KYC, so both
+/// accept exactly the same proof.
+///
+/// One-time use: the delete *is* the check, same pattern as
+/// api::verified's used_nonces insert-is-the-check. A concurrent replay of
+/// the same nonce loses this race and falls through to "not found". The
+/// message is re-derived from the stored nonce/expiry — the client never
+/// gets to assert what was signed.
+pub async fn redeem_challenge(
+    pool: &PgPool,
+    user_id: Uuid,
+    nonce: &str,
+    pubkey_bytes: &[u8; 32],
+    signature_b64: &str,
+) -> Result<(), E> {
+    let now = Utc::now().timestamp();
+    let expires_at: Option<i64> = sqlx::query_scalar(
+        "DELETE FROM public.wallet_challenges
+          WHERE nonce = $1 AND user_id = $2
+          RETURNING expires_at",
+    )
+    .bind(nonce)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("DB wallet challenge redeem: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Wallet verification failed",
+        )
+    })?;
+
+    let expires_at = expires_at.ok_or((
+        StatusCode::BAD_REQUEST,
+        "Verification challenge expired or invalid — try connecting again",
+    ))?;
+    if expires_at < now {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Verification challenge expired or invalid — try connecting again",
+        ));
+    }
+
+    let message = challenge_message(nonce, expires_at);
+    verify_stellar_signature(pubkey_bytes, &message, signature_b64)
+        .map_err(|m| (StatusCode::UNAUTHORIZED, m))
+}
+
 /// Append a row to the audit trail. Failures are logged, never propagated —
 /// same rationale as kyc::shared::audit: an audit hiccup must not roll back
 /// or mask the action it describes.
@@ -88,5 +143,23 @@ pub async fn audit<'e, E: PgExecutor<'e>>(
     .await
     {
         tracing::error!(%wallet_id, action, "wallet audit insert failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_address_that_only_looks_right_is_refused() {
+        let good = String::from(stellar_strkey::ed25519::PublicKey([7; 32]).to_string().as_str());
+        assert_eq!(parse_address(&good), Ok([7; 32]));
+
+        // Same shape — 56 characters, a leading G, all base32 — with one
+        // character changed, which only the checksum can catch.
+        let mut bad = good.into_bytes();
+        bad[20] = if bad[20] == b'A' { b'B' } else { b'A' };
+        let bad = String::from_utf8(bad).unwrap();
+        assert!(parse_address(&bad).is_err());
     }
 }

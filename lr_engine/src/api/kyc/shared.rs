@@ -38,15 +38,6 @@ pub fn decode_image(input: &str) -> Result<(Vec<u8>, &'static str, &'static str)
     }
 }
 
-/// Stellar public key: 'G' + 55 base32 chars (A-Z, 2-7).
-pub fn is_valid_stellar_address(addr: &str) -> bool {
-    addr.len() == 56
-        && addr.starts_with('G')
-        && addr
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c))
-}
-
 /// Append a row to the audit trail. Failures are logged, never propagated —
 /// an audit hiccup must not roll back or mask the action it describes (the
 /// action itself already happened or is inside its own transaction).

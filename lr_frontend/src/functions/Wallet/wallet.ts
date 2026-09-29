@@ -5,7 +5,10 @@ import {
     signTransaction as freighterSignTransaction,
 } from '@stellar/freighter-api'
 import { WalletConnectModule, WalletConnectTargetChain } from '@creit.tech/stellar-wallets-kit/modules/wallet-connect'
+import { apiFetch } from '../apiFetch'
 import { loadPublicConfig } from '../publicConfig'
+
+const API = import.meta.env.VITE_API_URL ?? ''
 
 // The network the app runs on, the same switch stellarLock and stellarAdmin
 // read. WalletConnect has to be told explicitly: left to itself the kit asks
@@ -192,6 +195,37 @@ export async function signChallenge(message: string, address: string): Promise<S
     } catch (e) {
         return { error: e instanceof Error ? e.message : 'Unable to sign verification message' }
     }
+}
+
+export type ProofResult = { nonce: string; signature: string } | { error: string }
+
+/**
+ * Proves the connected wallet controls `address`: asks the engine for a
+ * one-time challenge (POST /wallets/challenge) and has the wallet sign it.
+ * Wherever the proof is needed — connecting a wallet from Settings, or
+ * submitting KYC — the engine uses the pair up exactly once, so a fresh one
+ * is made for every attempt rather than kept.
+ */
+export async function proveWallet(address: string, csrfToken: string | null): Promise<ProofResult> {
+    let challenge: { nonce: string; message: string }
+    try {
+        const res = await apiFetch(`${API}/wallets/challenge`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
+            },
+        })
+        if (!res.ok) return { error: await res.text() || 'Unable to start wallet verification' }
+        challenge = await res.json() as { nonce: string; message: string }
+    } catch {
+        return { error: 'Unable to start wallet verification' }
+    }
+
+    const signed = await signChallenge(challenge.message, address)
+    if ('error' in signed) return signed
+    return { nonce: challenge.nonce, signature: signed.signature }
 }
 
 export type SignTxResult = { signedTxXdr: string } | { error: string }

@@ -22,7 +22,7 @@ function KYC() {
     const navigate = useNavigate()
     const { user } = useSession()
     const kyc = useKYCFunctions()
-    const { step, canContinue, advance, back, finish, scanning, scanned, scanId, comparing, matched, compareFaces, submitting } = kyc
+    const { step, canContinue, advance, back, finish, scanning, scanned, scanId, comparing, matched, compareFaces, submitting, signingWallet } = kyc
 
     if (step === 6) {
         return (
@@ -76,7 +76,7 @@ function KYC() {
         primaryAction = compareFaces
         primaryDisabled = comparing || !kyc.selfieImageUrl
     } else if (step === 5) {
-        primaryLabel = submitting ? 'Submitting…' : 'Submit'
+        primaryLabel = signingWallet ? 'Confirm in your wallet…' : submitting ? 'Submitting…' : 'Submit'
         primaryAction = finish
         primaryDisabled = submitting
     }
