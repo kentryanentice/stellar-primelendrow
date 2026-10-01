@@ -2,7 +2,9 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
+    http::{StatusCode, header},
     middleware,
+    response::Response,
     routing::{get, post},
 };
 
@@ -25,7 +27,7 @@ const KYC_BODY_LIMIT: usize = 24 * 1024 * 1024;
 pub fn routes(mail_limiter: RateLimiter) -> Router {
     let register_limiter = mail_limiter.clone();
     let reset_limiter = mail_limiter;
-    Router::new()
+    let api = Router::new()
         .route(
             "/auth/register",
             post(users::register)
@@ -255,5 +257,62 @@ pub fn routes(mail_limiter: RateLimiter) -> Router {
             "/kyc/admin/review",
             post(kyc::admin_review).layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT)),
         )
-        .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
+        // A real path called with the wrong method answers exactly like a path
+        // that doesn't exist — an empty 404 — where axum's default 405, and
+        // its `Allow` header, would confirm the route is there and list the
+        // methods it takes. Registered last: it only reaches routes added above.
+        .method_not_allowed_fallback(not_found)
+        .layer(DefaultBodyLimit::max(30 * 1024 * 1024));
+
+    // ...and without the `Allow` header axum still attaches to that answer,
+    // which would list the route's methods all the same. It is added outside
+    // anything `Router::layer` wraps (that only reaches the handlers), so the
+    // header is stripped from around the whole router instead. Nothing this
+    // API sends on purpose carries one.
+    Router::new()
+        .fallback_service(api)
+        .layer(middleware::map_response(strip_allow))
+}
+
+/// The same bare 404 axum answers an unknown path with.
+async fn not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+async fn strip_allow(mut res: Response) -> Response {
+    res.headers_mut().remove(header::ALLOW);
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    /// Status, whether an `Allow` header came back, and the body.
+    async fn call(method: &str, path: &str) -> (StatusCode, bool, Vec<u8>) {
+        let limiter = RateLimiter::new(100, 100, Duration::from_secs(60), "test".into());
+        let res = routes(limiter)
+            .oneshot(Request::builder().method(method).uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let allow = res.headers().contains_key(axum::http::header::ALLOW);
+        let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap().to_vec();
+        (status, allow, body)
+    }
+
+    #[tokio::test]
+    async fn a_wrong_method_is_indistinguishable_from_a_missing_route() {
+        let missing = call("GET", "/no-such-route").await;
+        assert_eq!(missing, (StatusCode::NOT_FOUND, false, Vec::new()));
+        // Real routes, wrong methods: a POST-only route read, a GET-only
+        // route written to.
+        assert_eq!(call("GET", "/pool/deposit").await, missing);
+        assert_eq!(call("DELETE", "/auth/google/start").await, missing);
+    }
 }
