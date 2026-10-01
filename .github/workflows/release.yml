@@ -1,0 +1,37 @@
+name: Release contracts
+
+# Builds the collateral vault on GitHub's runners, publishes the wasm as a
+# GitHub release with a build attestation, and tells StellarExpert which
+# repository and commit that wasm hash came from — which is what makes the
+# explorer show "source code" on a contract deployed from it.
+#
+# The link is by wasm hash, so it only ever applies to a contract deployed
+# from THIS workflow's output (downloaded from the release). A wasm built on a
+# laptop differs — the workflow stamps `source_repo` into the contract's
+# metadata and pins its own toolchain — and will never match.
+#
+# Triggered by a tag of its own, so tagging an app release doesn't cut a
+# contract release: `git tag vault-v0.1.0 && git push origin vault-v0.1.0`.
+on:
+  push:
+    tags:
+      - 'vault-v*'
+
+# All three are required by the reusable workflow, and must be set here at the
+# top level: the release, and the signed attestation of what was built.
+permissions:
+  id-token: write
+  contents: write
+  attestations: write
+
+jobs:
+  collateral-vault:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: 'PrimeLendRow collateral vault'
+      home_domain: 'primelendrow.com'
+      relative_path: 'lr_contracts/collateral_vault'
+      package: 'collateral-vault'
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}
