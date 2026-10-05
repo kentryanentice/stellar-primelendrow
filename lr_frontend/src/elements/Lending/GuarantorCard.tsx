@@ -8,6 +8,9 @@ const STATUS_LABEL: Record<string, string> = {
     declined: 'Declined',
     released: 'Released back to you',
     seized: 'Seized to cover a default',
+    // The loan stopped waiting before you answered — cancelled by the
+    // borrower, declined by other guarantors, or already funded.
+    cancelled: 'Closed — no answer needed',
 }
 
 /**

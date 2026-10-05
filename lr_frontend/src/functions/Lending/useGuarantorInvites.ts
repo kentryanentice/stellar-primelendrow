@@ -76,6 +76,9 @@ export default function useGuarantorInvites(onChanged: () => void) {
             onChanged()
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Unable to respond to the invitation')
+            // A refusal usually means the invitation changed under the screen
+            // (the loan funded or closed meanwhile) — show it as it is now.
+            await refresh()
         } finally {
             setRespondingId(null)
         }

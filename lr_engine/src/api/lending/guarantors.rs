@@ -37,6 +37,11 @@ pub struct InvitesResponse {
 /// Everything I've been asked to guarantee — pending invites first, then the
 /// history (accepted/released/seized), so a guarantor can always see what
 /// they're on the hook for.
+///
+/// An invitation only reads as open while its loan is still waiting on
+/// guarantors. Every path that ends the wait closes the open ones itself;
+/// this keeps one that slipped through — or predates that — from offering an
+/// Accept the engine would refuse.
 pub async fn invites(
     Extension(pool): Extension<PgPool>,
     headers: HeaderMap,
@@ -46,12 +51,16 @@ pub async fn invites(
     type InviteRow = (Uuid, Uuid, String, String, i64, i32, i16, i64, String, i64);
     let rows: Vec<InviteRow> = sqlx::query_as(
         "SELECT g.id, g.loan_id, u.username, l.product, l.principal, l.rate_bps,
-                l.term_months, g.pledge_amount, g.status, g.created_at
+                l.term_months, g.pledge_amount, s.status, g.created_at
            FROM public.loan_guarantors g
            JOIN public.loans l ON l.id = g.loan_id
            JOIN public.users u ON u.id = l.borrower_id
+          CROSS JOIN LATERAL (
+              SELECT CASE WHEN g.status = 'invited' AND l.status <> 'pending'
+                          THEN 'cancelled' ELSE g.status END AS status
+          ) s
           WHERE g.guarantor_id = $1
-          ORDER BY (g.status = 'invited') DESC, g.created_at DESC",
+          ORDER BY (s.status = 'invited') DESC, g.created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&pool)
@@ -211,6 +220,18 @@ pub async fn respond(
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err(e, "release co-guarantors"))?;
+            // Co-guarantors who haven't answered yet have nothing left to
+            // answer — closed the same way the borrower's own cancel closes
+            // them, or their Accept button would outlive the application.
+            sqlx::query(
+                "UPDATE public.loan_guarantors SET status = 'cancelled', updated_at = $1
+                  WHERE loan_id = $2 AND status = 'invited'",
+            )
+            .bind(now)
+            .bind(loan_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| db_err(e, "close open invitations"))?;
             loan_status_out = "declined".to_string();
         }
 
