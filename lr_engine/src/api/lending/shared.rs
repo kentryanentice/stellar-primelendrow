@@ -259,6 +259,19 @@ pub async fn disburse(
     .await
     .map_err(|e| db_err(e, "activate loan"))?;
 
+    // A spare guarantor who never answered isn't needed now the loan has
+    // funded: their invitation closes rather than offering to freeze a
+    // pledge for a loan that no longer takes one.
+    sqlx::query(
+        "UPDATE public.loan_guarantors SET status = 'cancelled', updated_at = $1
+          WHERE loan_id = $2 AND status = 'invited'",
+    )
+    .bind(now)
+    .bind(loan_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "close spare invitations"))?;
+
     for row in domain::build_schedule(principal, rate_bps, term_months, now) {
         sqlx::query(
             "INSERT INTO public.loan_schedule
