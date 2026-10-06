@@ -22,7 +22,13 @@ const AMOUNT_SHARES = [
  * regardless. Purely a rendering of `form` (useBorrowForm, owned by the
  * Borrow page) — the sibling "Your eligibility" card reads the same state.
  */
-function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: BorrowFormState; openLoan: Loan | null }) {
+function BorrowCard({ data, form, openLoan, lockEnded }: {
+    data: PoolResponse
+    form: BorrowFormState
+    openLoan: Loan | null
+    /** The loan behind `pendingLock` is no longer waiting on its coins (see Borrow). */
+    lockEnded: boolean
+}) {
     const { params } = data
     const { wallets } = useWallets()
     const {
@@ -54,7 +60,7 @@ function BorrowCard({ data, form, openLoan }: { data: PoolResponse; form: Borrow
     const lockWallet = activeWallets.find(w => w.id === walletId) ?? activeWallets[0]
 
     // A fresh XLM application: the wizard's last step is the on-chain lock.
-    if (pendingLock) {
+    if (pendingLock && !lockEnded) {
         return (
             <section className='lending-card lending-card-borrow'>
                 <div className='lending-card-head'>

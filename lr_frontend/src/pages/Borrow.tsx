@@ -78,6 +78,14 @@ function Borrow() {
 
     const openLoan = loans.loans.find(l => l.status === 'pending' || l.status === 'active') ?? null
 
+    // The lock prompt is drawn from the apply response held in memory, which
+    // nothing else updates. Once the loan it's for shows up as no longer
+    // pending — cancelled from the history card, declined by its guarantors,
+    // already funded — the prompt is stale, so it goes as soon as the loan
+    // list says so, without a reload.
+    const lockEnded = form.pendingLock !== null
+        && loans.loans.some(l => l.id === form.pendingLock?.loan_id && l.status !== 'pending')
+
     // Lifetime stats: GET /loans (unlike the paginated /loans/history) has no
     // status filter and no LIMIT — it's the caller's complete history, so
     // these sums are correct across every loan they've ever had, not just
@@ -137,7 +145,7 @@ function Borrow() {
 
                 <div className='lending-borrow-main'>
                     <Suspense fallback={<BorrowCardSkeleton />}>
-                        <BorrowCard data={data} form={form} openLoan={openLoan} />
+                        <BorrowCard data={data} form={form} openLoan={openLoan} lockEnded={lockEnded} />
                     </Suspense>
                     <Suspense fallback={<LoanHistoryCardSkeleton />}>
                         <LoanHistoryCard data={data} history={history} onChanged={handleChanged} />
