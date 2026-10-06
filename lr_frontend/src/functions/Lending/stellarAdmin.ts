@@ -1,4 +1,5 @@
 import { signTransaction, requestAccess, isConnected as freighterIsConnected } from '@stellar/freighter-api'
+import { extensionNetworkError } from '../Wallet/wallet'
 
 /**
  * The four admin-gated vault movements, signed in the operator's own wallet.
@@ -137,6 +138,10 @@ export async function submitVaultMovement(opts: {
             return { error: access.error?.message ?? 'Freighter did not share an address' }
         }
         const signer = access.address
+        // Same rule as every member-facing signature (functions/Wallet/wallet):
+        // a movement signed on another network moves nothing this vault holds.
+        const networkError = await extensionNetworkError()
+        if (networkError) return { error: networkError }
 
         const sdk = await import('@stellar/stellar-sdk')
         const server = new sdk.rpc.Server(RPC_URL)
