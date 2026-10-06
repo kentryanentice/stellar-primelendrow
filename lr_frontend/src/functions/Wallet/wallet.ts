@@ -1,4 +1,5 @@
 import {
+    getNetworkDetails as freighterGetNetworkDetails,
     isConnected as freighterIsConnected,
     requestAccess as freighterRequestAccess,
     signMessage as freighterSignMessage,
@@ -18,6 +19,58 @@ const WC_CHAIN = IS_MAINNET ? WalletConnectTargetChain.PUBLIC : WalletConnectTar
 const NETWORK_PASSPHRASE = IS_MAINNET
     ? 'Public Global Stellar Network ; September 2015'
     : 'Test SDF Network ; September 2015'
+
+// ---- the wallet must be on the app's network ----
+//
+// A wallet left on another network still connects and still signs — the
+// address is the same key everywhere — but whatever it signs is for a ledger
+// the engine never reads: a lock that lands on Mainnet is real XLM moved
+// somewhere this app can't see. So every connect and every signature checks
+// the wallet's network first and refuses with a sentence that says what to
+// switch, rather than failing later in a way nobody can read.
+
+const APP_NETWORK = IS_MAINNET ? 'Mainnet' : 'Testnet'
+
+const NETWORK_NAMES: Record<string, string> = {
+    'Public Global Stellar Network ; September 2015': 'Mainnet',
+    'Test SDF Network ; September 2015': 'Testnet',
+    'Test SDF Future Network ; October 2022': 'Futurenet',
+}
+
+const wrongNetwork = (walletNetwork: string) =>
+    `Your wallet is on ${walletNetwork}, but PrimeLendRow runs on ${APP_NETWORK}. `
+    + `Switch your wallet to ${APP_NETWORK} and try again.`
+
+/**
+ * Null when the Freighter extension is on the app's network, otherwise what
+ * to tell the member. Fails closed: a network it can't read is refused too.
+ * Exported for the admin vault signer, which talks to the extension directly.
+ */
+export async function extensionNetworkError(): Promise<string | null> {
+    const { networkPassphrase, error } = await freighterGetNetworkDetails()
+    if (error || !networkPassphrase) {
+        return 'Couldn’t tell which network your wallet is on — unlock Freighter and try again'
+    }
+    if (networkPassphrase === NETWORK_PASSPHRASE) return null
+    return wrongNetwork(NETWORK_NAMES[networkPassphrase] ?? 'a different network')
+}
+
+/**
+ * The same check for a WalletConnect wallet, which can't be asked its network
+ * directly — but a session is approved per chain, and each account in it is
+ * named `stellar:<chain>:<address>`, so the session says which network the
+ * paired wallet signs for.
+ */
+function sessionNetworkError(wc: WalletConnectModule, address: string): string | null {
+    const chains = wc.signClient.session
+        .getAll()
+        .flatMap(session => session.namespaces.stellar?.accounts ?? [])
+        .filter(account => account.endsWith(`:${address}`))
+        .map(account => account.slice(0, account.lastIndexOf(':')))
+    if (chains.includes(WC_CHAIN)) return null
+    if (chains.length === 0) return 'Your wallet’s session has ended — connect it again'
+    return wrongNetwork(chains.includes(WalletConnectTargetChain.PUBLIC) ? 'Mainnet' : 'a different network')
+}
 
 // Browser extensions don't exist on phones, so a phone visiting this page has
 // no way to satisfy the old "Freighter extension installed" check — this is
@@ -124,6 +177,8 @@ export async function connectFreighter(): Promise<ConnectResult> {
     if (hasExtension) {
         const { address, error } = await freighterRequestAccess()
         if (error || !address) return { error: error?.message ?? 'Unable to connect wallet' }
+        const networkError = await extensionNetworkError()
+        if (networkError) return { error: networkError }
         return { address }
     }
 
@@ -141,6 +196,13 @@ export async function connectFreighter(): Promise<ConnectResult> {
         // eventual expiry must not surface as an unhandled rejection.
         pairing.catch(() => {})
         const { address } = await Promise.race([pairing, closed.promise])
+        const networkError = sessionNetworkError(wc, address)
+        if (networkError) {
+            // Not kept: a session for the wrong network would only fail
+            // again at the first signature.
+            await wc.disconnect().catch(() => {})
+            return { error: networkError }
+        }
         return { address }
     } catch (e) {
         return { error: e instanceof Error ? e.message : 'Unable to connect via WalletConnect' }
@@ -175,6 +237,8 @@ export type SignResult = { signature: string } | { error: string }
 export async function signChallenge(message: string, address: string): Promise<SignResult> {
     const { isConnected: hasExtension } = await freighterIsConnected()
     if (hasExtension) {
+        const networkError = await extensionNetworkError()
+        if (networkError) return { error: networkError }
         const { signedMessage, error } = await freighterSignMessage(message, { address })
         if (error || !signedMessage) return { error: error?.message ?? 'Unable to sign verification message' }
         // Older extension builds (protocol v3) return the raw signature as a
@@ -190,6 +254,8 @@ export async function signChallenge(message: string, address: string): Promise<S
     }
     try {
         await waitUntilReady(wc)
+        const networkError = sessionNetworkError(wc, address)
+        if (networkError) return { error: networkError }
         const { signedMessage } = await wc.signMessage(message, { address, networkPassphrase: NETWORK_PASSPHRASE })
         return { signature: signedMessage }
     } catch (e) {
@@ -242,8 +308,15 @@ export async function signTransactionXdr(
     address: string,
     networkPassphrase: string,
 ): Promise<SignTxResult> {
+    // A transaction built for another network is a caller's bug, never a
+    // member's choice — refused before any wallet is asked.
+    if (networkPassphrase !== NETWORK_PASSPHRASE) {
+        return { error: `That transaction was built for ${NETWORK_NAMES[networkPassphrase] ?? 'a different network'}, not ${APP_NETWORK}` }
+    }
     const { isConnected: hasExtension } = await freighterIsConnected()
     if (hasExtension) {
+        const networkError = await extensionNetworkError()
+        if (networkError) return { error: networkError }
         const signed = await freighterSignTransaction(xdr, { networkPassphrase, address })
         if (signed.error || !signed.signedTxXdr) return { error: signed.error?.message ?? 'Signing was cancelled' }
         return { signedTxXdr: signed.signedTxXdr }
@@ -255,6 +328,8 @@ export async function signTransactionXdr(
     }
     try {
         await waitUntilReady(wc)
+        const networkError = sessionNetworkError(wc, address)
+        if (networkError) return { error: networkError }
         const { signedTxXdr } = await wc.signTransaction(xdr, { networkPassphrase, address })
         if (!signedTxXdr) return { error: 'Signing was cancelled' }
         return { signedTxXdr }
