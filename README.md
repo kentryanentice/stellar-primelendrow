@@ -1,556 +1,90 @@
-# PrimeLendRow — Workflow
+# PrimeLendRow
 
-This document walks through the PrimeLendRow user journey end to end: registration,
-KYC, wallet connection, lending, borrowing, guarantorship, repayment, default handling,
-and on-chain anchoring. For how the system is built to support this journey, see
-[ARCHITECTURE.md](ARCHITECTURE.md).
+PrimeLendRow is a lending platform for Filipino savers and borrowers. Verified members deposit into a shared pool, borrow against their savings or XLM, and invite guarantors when they need more than their own assets cover.
 
----
+This README follows the Instawards Statement of Work (SOW) and the features already implemented. Validation uses **Stellar Testnet and sandbox payments**.
 
-## 1. Registration
-
-A user creates an account using an email address, username, and password. An OTP is sent through Resend Email and must be verified before account creation is completed.
-
-**Initial State**
-- Role: `Pending`
-- Credit Score: `50`
-- Wallet: `Not Connected`
-- KYC Status: `Not Submitted`
-
----
-
-## 2. Authentication
-
-The user logs in using their email or username and password.
-
-**Available Features**
-- View public lending pool statistics
-- Manage account settings
-- Submit KYC verification
-
-**Restricted Features**
-- Lending
-- Borrowing
-- Guarantor participation
-- Wallet-dependent operations
-
----
-
-## 3. KYC Verification
-
-The KYC wizard is five steps, in order — a wallet must be connected before the
-user can review and submit.
-
-### Step 1: Government ID Upload
-
-Supported IDs:
-
-- PhilSys ID
-- Driver's License
-- Passport
-- Postal ID
-
-### Step 2: ID Scan
-
-The system performs OCR on the uploaded ID and extracts:
-
-- Full Name
-- Date of Birth
-- ID Number
-- ID Type
-
-The user reviews and can correct any field before continuing.
-
-### Step 3: Liveness Verification & Face Matching
-
-The user performs a liveness challenge (blink detection on the live camera
-feed, with anti-spoof checks). The system automatically captures a facial
-image once the challenge passes, then compares it against the ID portrait.
-
-Extracted values:
-
-- Similarity Percentage
-- Match Result
-- Confidence Score
-
-### Step 4: Wallet Connection
-
-The user connects a Stellar-compatible wallet — this step is part of the KYC
-flow itself and is required before the user can continue to review and
-submit. This wallet becomes the account's **KYC-verified wallet** (see
-[Section 4](#4-wallet-management)).
-
-### Step 5: Review & Submission
-
-The user reviews the extracted information, the face-match result, and the
-connected wallet address, then submits the verification request.
-
-**Status Changes**
+## How it works
 
 ```text
-Not Submitted
-    ↓
-Submitted
-    ↓
-Under Review
+Register → Verify identity and connect a wallet → Deposit → Borrow → Repay → Close
 ```
 
-### Step 6: Administrative Review
+1. **Create an account.** Register with an email, username and password, verify the email OTP, then sign in.
+2. **Verify identity.** Upload a government ID, review the scanned details, complete the liveness and face check, and connect a Stellar wallet. An administrator reviews the submission before lending, borrowing or guaranteeing is enabled.
+3. **Deposit into the pool.** Verified members add funds and earn a share of loan interest. Available funds can be withdrawn; funds backing a loan or pledge remain locked until released.
+4. **Choose a loan.** Select an amount, term and backing from the products below. The engine checks eligibility, credit limits, liquidity and backing. Guarantor pledges must be accepted and any required XLM lock confirmed on Stellar before disbursement.
+5. **Repay.** Follow the diminishing-balance repayment schedule. Each payment reduces the outstanding principal, and its interest is split and recorded in whole centavos.
+6. **Close and build credit.** Full repayment closes the loan and releases deposit and guarantor backing; XLM returns through the vault's confirmed release process. The score increase waits until the scheduled term has ended, including when a loan is repaid early.
 
-An administrator reviews the submitted KYC information, uploaded identification document, OCR results, liveness verification, and face matching results.
-
-**Approval Flow**
+If a loan defaults, recovery follows this order:
 
 ```text
-Under Review
-    ↓
-Approved
-    ↓
-Role = User
+Borrower's deposit → Borrower's XLM → Guarantor pledges → Recovery fund → Lending reserve
 ```
 
-**Rejection Flow**
+Guarantor claims cover the remaining debt in proportion to each pledge, capped at the pledged amount. Default lowers the borrower's score; a guarantor's score falls when their pledge is actually claimed.
 
-```text
-Under Review
-    ↓
-Rejected
-    ↓
-Re-Verification Required
-```
+## Loan products
 
-Rejected users may correct their information and submit a new verification request.
+| Product | What backs it |
+| --- | --- |
+| Deposit-backed | The borrower's own savings, locked behind the loan. |
+| XLM collateral | XLM held by the Soroban collateral vault, with a 120% collateral ratio for the sprint and price checks at lock and seizure. |
+| Guarantor-backed | The borrower covers at least 50% using their deposit, XLM, or both. Up to two verified guarantors with no unsettled default pledge deposits for the remainder. |
 
----
+Self-guarantees and duplicate guarantor invitations are refused. Each borrower may have only one open loan, and an unsettled default blocks a new application. Loan rates and limits are fixed at issuance.
 
-## 4. Wallet Management
+## What is built against the SOW
 
-The wallet connected during KYC (Section 3, Step 4) is saved as the account's
-**KYC-verified wallet** and is already active once the account is approved —
-there is no separate first-connection step to complete afterward.
+Email verification, KYC, wallet connection and deposit-backed lending were the working baseline before the sprint. The four SOW deliverables extend that flow:
 
-From Settings, a user may connect **additional** Stellar-compatible wallets:
+| Deliverable | Implemented behavior | Implementation |
+| --- | --- | --- |
+| **1. XLM custody** | The vault holds XLM and requires a recorded repayment before release or a recorded default before seizure. Lock and seizure check prices against a SEP-40 feed. The engine verifies transactions, stores hashes and provides database-to-chain reconciliation. | [Vault and runbook](lr_contracts/collateral_vault/README.md), [confirmation](lr_engine/src/api/lending/admin/actions.rs), [reconciliation](lr_engine/src/api/lending/drift.rs) |
+| **2. Guarantor product and 50% rule** | Borrower coverage checks, up to two guarantors, invite/accept/decline, locked pledges, release on repayment and proportional claims on default. Eligibility checks run on the server. | [Loan application](lr_engine/src/api/lending/apply.rs), [guarantor lifecycle](lr_engine/src/api/lending/guarantors.rs), [recovery](lr_engine/src/api/lending/recovery.rs) |
+| **3. Exact interest split** | Each repayment records the split and recipient allocations using whole-centavo arithmetic, deterministic rounding and balance tests. Guarantor rewards depend on their own score tier. | [Allocation rules and tests](lr_engine/src/api/lending/domain.rs), [repayment](lr_engine/src/api/lending/repay.rs) |
+| **4. Term-end credit scoring** | Scores start at 50, with increases capped at 150. A fully repaid loan becomes eligible for an increase only after term end; individual installments, deposits and account activity do not earn increases. Default and guarantor claims carry penalties, with score changes linked to loan history. | [Score processing](lr_engine/src/api/lending/score.rs), [credit history](lr_engine/src/api/lending/credit_history.rs) |
 
-- Freighter
-- Lobstr
-- Albedo
-- Other Stellar-compatible wallets
+### Interest split at a glance
 
-### Step 1: Connect an Additional Wallet
+| Share of interest | Recipient |
+| --- | --- |
+| 10% | Platform |
+| 20% | Lending reserve |
+| 40% | Depositors, in proportion to their pool balances |
+| 30% | Risk band: guarantor rewards first, then the recovery fund |
 
-Each new wallet is verified with a signature challenge before it's linked —
-the wallet must prove it holds the private key behind the address, not just
-supply the address:
+A guarantor's tier sets a reward of 10–25% of interest, weighted by their share of the total pledge and paid entirely from the risk band. With no guarantor, the whole risk band goes to the recovery fund.
 
-```text
-Not Connected
-      ↓
-Challenge Issued
-      ↓
-Signature Verified
-      ↓
-Connected
-```
+For example, **₱20.00 of interest** with one entry-tier guarantor pays ₱2.00 to the platform, ₱4.00 to the reserve, ₱8.00 to depositors, ₱2.00 to the guarantor and ₱4.00 to the recovery fund. The parts always sum to ₱20.00.
 
-A user may optionally label a wallet (e.g. "Savings", "Mobile") when
-connecting it. Up to **5 active wallets** per user are allowed; the limit
-must be freed up (by disconnecting one) before another can be added.
+## How to review the work
 
-### Step 2: Disconnect a Wallet
+The **public Records page** (`/records`, with individual loans at `/records/:loanId`) is the SOW's proof page. It works without an account:
 
-Any wallet — the KYC-verified one included — can be disconnected:
+1. Choose a loan and inspect its product, backing, terms and status.
+2. Review its repayments, interest splits, score changes and any recovery steps.
+3. Follow collateral transaction links to Stellar Expert to inspect the Testnet movements.
 
-```text
-Connected
-    ↓
-Disconnected
-```
+The page identifies loans by reference and guarantors by position. Personal details and KYC documents remain private and off-chain. Lending decisions, repayments and guarantor pledges are enforced by the engine; the vault enforces XLM custody on-chain.
 
-Disconnected wallets are kept, not deleted, and remain visible as history.
+Saved evidence and walkthroughs:
 
-Stored wallet information:
+- [Collateral reconciliation report](lr_engine/evidence/reconciliation-20260926-100956.txt): 21 positions and 28 recorded transactions checked, with zero drift reported for the stated scope. The report records its event window and notes that treasury destination checks were not configured.
+- [Interest split test report](lr_engine/evidence/interest-split-20260919-104335.txt): 100,023 calculated splits checked, including the SOW worked example and ten simulated repayments across two guarantor tiers. Recorded repayments can be inspected on Records.
+- [Week 1 collateral walkthrough](PrimeLendRow_XLM_Collateral_Week1.docx) and [Week 3 interest split walkthrough](PrimeLendRow_Interest_Split_Week3.pdf).
 
-- Wallet Address
-- Label (optional)
-- Source (KYC-verified or user-added)
-- Status (Active or Disconnected)
-- Connected / Disconnected Timestamps
+## Code and scope
 
----
+| Directory | Purpose |
+| --- | --- |
+| [`lr_frontend/`](lr_frontend/) | React, TypeScript and Vite app, including public Records. |
+| [`lr_engine/`](lr_engine/) | Rust/Axum lending engine, PostgreSQL ledger and server-side rules. |
+| [`lr_contracts/collateral_vault/`](lr_contracts/collateral_vault/) | Soroban XLM custody contract, tests and build instructions. |
+| [`lr_contracts/`](lr_contracts/) | Vault and standalone registry contract code. |
+| [`api/`](api/) | MongoDB-based authentication and KYC backend. |
 
-## 5. Lending
+The sprint covers Testnet custody and engine-enforced lending. Registry integration, Maya settlement, mainnet and real-peso lending belong to a later phase. Collateral is valued at issuance and seizure; continuous revaluation and margin calls are outside this scope.
 
-### Step 1: Deposit Funds
-
-Users deposit funds into the lending pool.
-
-**Status Changes**
-
-```text
-No Deposit
-     ↓
-Deposited
-     ↓
-Available
-```
-
-Deposited funds may be:
-
-- Withdrawn
-- Used as borrowing collateral
-- Used as guarantor collateral
-
-### Step 2: Fund Reservation
-
-When funds are assigned to an active loan or guarantor agreement:
-
-```text
-Available
-    ↓
-Reserved
-    ↓
-Locked
-```
-
-Locked funds cannot be:
-
-- Withdrawn
-- Borrowed against
-- Used to guarantee another loan
-
-### Step 3: Withdrawal
-
-If funds are not reserved or locked:
-
-```text
-Available
-    ↓
-Withdrawal Request
-    ↓
-Withdrawn
-```
-
----
-
-## 6. Borrowing
-
-### Step 1: Loan Request
-
-The user submits:
-
-- Loan Amount
-- Loan Term
-- Collateral Source
-- Guarantor Selection (Optional)
-
-### Step 2: Eligibility Validation
-
-The system validates:
-
-- User Role
-- KYC Approval
-- Credit Score
-- Loan Limit
-- Available Liquidity
-- Collateral Coverage
-
-**Validation Result**
-
-```text
-Validation Failed
-        ↓
-Loan Rejected
-```
-
-or
-
-```text
-Validation Passed
-        ↓
-Loan Processing
-```
-
-### Step 3: Collateral Assignment
-
-Collateral may come from:
-
-- User Deposit
-- User XLM
-- Guarantor Deposit
-- Guarantor XLM
-
-**Collateral Status**
-
-```text
-Available
-    ↓
-Assigned
-    ↓
-Locked
-```
-
----
-
-## 7. Guarantor Assignment
-
-### Step 1: Guarantor Request
-
-The borrower selects up to two guarantors.
-
-The guarantor receives a loan support request.
-
-**Status Changes**
-
-```text
-Pending
-    ↓
-Accepted
-```
-
-or
-
-```text
-Pending
-    ↓
-Declined
-```
-
-### Step 2: Guarantor Lock
-
-Upon acceptance:
-
-```text
-Guarantor Collateral
-          ↓
-Locked
-```
-
-The collateral remains locked until:
-
-```text
-Loan Closed
-        ↓
-Collateral Released
-```
-
-or
-
-```text
-Loan Defaulted
-        ↓
-Collateral Liquidated
-```
-
----
-
-## 8. Loan Creation
-
-### Step 1: Loan Approval
-
-After all validations and collateral requirements are satisfied:
-
-```text
-Pending
-    ↓
-Approved
-```
-
-### Step 2: Fund Disbursement
-
-The approved loan amount is released.
-
-**Status Changes**
-
-```text
-Approved
-    ↓
-Active
-```
-
-Generated records include:
-
-- Loan ID
-- Borrower ID
-- Guarantor IDs
-- Loan Amount
-- Interest Rate
-- Loan Term
-- Repayment Schedule
-
----
-
-## 9. Repayment
-
-### Step 1: Monthly Installment Generation
-
-The system calculates monthly payments using a diminishing balance model.
-
-**Example**
-
-```text
-Loan Amount: ₱1,000
-Term: 3 Months
-Interest: 2% Monthly
-```
-
-Month 1
-
-```text
-Principal: ₱333.33
-Interest: ₱20.00
-```
-
-Month 2
-
-```text
-Principal: ₱333.33
-Interest: ₱13.33
-```
-
-Month 3
-
-```text
-Principal: ₱333.33
-Interest: ₱6.67
-```
-
-### Step 2: Payment Submission
-
-The borrower submits a payment.
-
-**Status Changes**
-
-```text
-Due
-  ↓
-Paid
-```
-
-The remaining principal balance is updated after every successful payment.
-
----
-
-## 10. Loan Completion
-
-### Step 1: Final Payment
-
-The final installment is received.
-
-**Status Changes**
-
-```text
-Active
-   ↓
-Paid
-   ↓
-Closed
-```
-
-### Step 2: Collateral Release
-
-Borrower collateral is unlocked.
-
-```text
-Locked
-   ↓
-Released
-```
-
-Guarantor collateral is unlocked.
-
-```text
-Locked
-   ↓
-Released
-```
-
-### Step 3: Credit Score Update
-
-Only completed loans are eligible for score increases.
-
-```text
-Loan Closed
-      ↓
-Score Evaluation
-      ↓
-Credit Updated
-```
-
----
-
-## 11. Default Processing
-
-If repayment obligations are not fulfilled:
-
-**Status Changes**
-
-```text
-Active
-   ↓
-Overdue
-   ↓
-Defaulted
-```
-
-Collateral recovery sequence:
-
-```text
-Borrower Deposit
-        ↓
-Borrower XLM
-        ↓
-Guarantor Deposit
-        ↓
-Guarantor XLM
-```
-
-After liquidation:
-
-```text
-Defaulted
-      ↓
-Closed
-```
-
-Credit penalties are applied.
-
----
-
-## 12. Stellar Blockchain Anchoring
-
-### Step 1: Financial Event Creation
-
-A blockchain event is generated for:
-
-- Deposit
-- Withdrawal
-- Loan Creation
-- Repayment
-- Loan Closure
-- Collateral Lock
-- Collateral Release
-- Default Processing
-
-### Step 2: Hash Generation
-
-```text
-Financial Event
-       ↓
-Canonical Payload
-       ↓
-SHA256 Hash
-```
-
-### Step 3: Blockchain Submission
-
-```text
-SHA256 Hash
-       ↓
-Stellar Transaction
-       ↓
-Confirmed
-```
-
-Only cryptographic proofs are anchored on-chain.
-
-No personal information, KYC documents, ID numbers, facial images, or sensitive user information are stored on the blockchain.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for system details and the [vault README](lr_contracts/collateral_vault/README.md) for contract tests, build instructions and the custody runbook. Source code is licensed under [MIT](LICENSE).

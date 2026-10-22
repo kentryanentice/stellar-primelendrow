@@ -1,10 +1,8 @@
 # PrimeLendRow — Architecture
 
-This document describes how PrimeLendRow is built to support the user journey in
-[README.md](README.md). The README is the *workflow* (what a user does, step by
-step); this is the *system* (the services, data, and rules that make that
-workflow happen). Read them as a pair — every section here maps back to a
-section there.
+This document describes the services, data and rules behind PrimeLendRow.
+Start with [README.md](README.md) for the user flow, loan products and
+implemented SOW deliverables, then use this document for system details.
 
 The guiding principle is simple: **the frontend is a window, not a calculator.**
 It never computes money or decides eligibility; it renders what the engine
@@ -155,9 +153,9 @@ The schema is built up across migrations `001`–`025`. Grouped by concern:
 
 ## 5. Subsystems
 
-Each subsystem below implements the matching README section.
+The subsystems below support the flow summarized in the README.
 
-### 5.1 Identity & authentication → README §1–2
+### 5.1 Identity & authentication → [User flow](README.md#how-it-works)
 
 Registration takes email, username, and password; the password is hashed with
 **Argon2**. An OTP is generated, sent through the `lr-mailer` Worker (Resend),
@@ -170,7 +168,7 @@ view public pool stats and manage settings but cannot lend, borrow, or vouch
 until KYC is approved — the gate is enforced server-side on every protected
 route, never by the UI.
 
-### 5.2 KYC & liveness → README §3
+### 5.2 KYC & liveness → [User flow](README.md#how-it-works)
 
 KYC capture runs **in the browser**, so raw biometric processing never touches
 the server as a dependency:
@@ -189,7 +187,7 @@ the match result, and the wallet address; the ID photo goes to private storage.
 An **admin** reviews the submission (`kyc/admin`) and approves or rejects.
 Approval flips the role to `User`; rejection returns the user to re-verification.
 
-### 5.3 Wallet management → README §4
+### 5.3 Wallet management → [User flow](README.md#how-it-works)
 
 The KYC-verified wallet is active on approval. From Settings a user may connect
 **additional** Stellar wallets (Freighter, Lobstr, Albedo, and others via
@@ -202,7 +200,7 @@ Ed25519 signature (`ed25519-dalek`) against the Stellar address
 can never be replayed. Disconnected wallets are retained as history, never
 deleted.
 
-### 5.4 The lending pool → README §5
+### 5.4 The lending pool → [User flow](README.md#how-it-works)
 
 Deposits enter the pool through **PayPal** (the fiat rail) and become
 `Available`. Available funds can be withdrawn, or `Reserved` → `Locked` when
@@ -225,7 +223,7 @@ id, or a Stellar transaction hash — so nothing on it has to be taken on trust.
 Only movements are listed: `mark_repaid` and `mark_defaulted` change state
 on-chain without moving coins, so they stay in the per-loan custody record.
 
-### 5.5 Borrowing & credit → README §6
+### 5.5 Borrowing & credit → [Loan products](README.md#loan-products)
 
 Three products, distinguished by what backs them:
 
@@ -242,7 +240,7 @@ re-validates everything server-side — role, KYC, score, limit, available
 liquidity, and collateral coverage — before a loan can be created. The frontend
 only displays these numbers; it never decides them.
 
-### 5.6 Guarantors → README §7
+### 5.6 Guarantors → [Loan products](README.md#loan-products)
 
 A borrower may invite up to **two** guarantors (`024_guarantor_cap_two`). Each
 receives a request they can accept or decline; on acceptance, the guarantor's
@@ -250,7 +248,7 @@ backing is `Locked` and stays locked until the loan closes (released) or
 defaults (liquidated). Guarantor invitations and their state live in the
 `guarantors` table.
 
-### 5.7 XLM collateral — the Soroban vault → README §6, §8, §11
+### 5.7 XLM collateral — the Soroban vault → [SOW deliverables](README.md#what-is-built-against-the-sow)
 
 XLM-collateral loans are secured by an on-chain lock in the `collateral_vault`
 Soroban contract, keyed by the loan's UUID (16 bytes). The security model is
@@ -320,7 +318,7 @@ bounce. Only the dollar leg is verifiable on-chain; the fiat leg is recorded
 but no Stellar feed can vouch for it, and inside the band the backend still
 picks the exact number.
 
-### 5.8 Loan creation & repayment → README §8–10
+### 5.8 Loan creation & repayment → [User flow](README.md#how-it-works)
 
 On approval, collateral (and any pledges) are frozen, the loan's parameters are
 pinned from the current policy version, the `loan_payments` schedule is
@@ -333,7 +331,7 @@ immediately, split into principal and interest. On the final payment the loan
 closes, collateral and pledges release (on-chain `release` for XLM), and only
 **closed** loans are eligible for a credit-score increase.
 
-### 5.9 Default handling → README §11 (migration 030)
+### 5.9 Default handling (migration 030) → [User flow](README.md#how-it-works)
 
 A default is **declared by an administrator**, not by a clock:
 `POST /lending/admin/loans/default` against a running loan. There is no
@@ -406,7 +404,7 @@ gone home while they were still in the vault — the books and the ledger
 disagreeing with nothing to reconcile them. The lock path always waited for
 Horizon; every movement does now.
 
-### 5.10 On-chain record registries & anchoring → README §12
+### 5.10 On-chain record registries & anchoring → [Code and scope](README.md#code-and-scope)
 
 Beyond the vault's custody role, three Soroban **record registries** mirror the
 engine's ledger tables on-chain, so the life of every deposit, loan, and payment
