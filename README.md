@@ -69,11 +69,10 @@ The **public Records page** (`/records`, with individual loans at `/records/:loa
 
 The page identifies loans by reference and guarantors by position. Personal details and KYC documents remain private and off-chain. Lending decisions, repayments and guarantor pledges are enforced by the engine; the vault enforces XLM custody on-chain.
 
-Saved evidence and walkthroughs:
+Saved evidence:
 
 - [Collateral reconciliation report](lr_engine/evidence/reconciliation-20260926-100956.txt): 21 positions and 28 recorded transactions checked, with zero drift reported for the stated scope. The report records its event window and notes that treasury destination checks were not configured.
 - [Interest split test report](lr_engine/evidence/interest-split-20260919-104335.txt): 100,023 calculated splits checked, including the SOW worked example and ten simulated repayments across two guarantor tiers. Recorded repayments can be inspected on Records.
-- [Week 1 collateral walkthrough](PrimeLendRow_XLM_Collateral_Week1.docx) and [Week 3 interest split walkthrough](PrimeLendRow_Interest_Split_Week3.pdf).
 
 ## Code and scope
 
@@ -83,7 +82,6 @@ Saved evidence and walkthroughs:
 | [`lr_engine/`](lr_engine/) | Rust/Axum lending engine, PostgreSQL ledger and server-side rules. |
 | [`lr_contracts/collateral_vault/`](lr_contracts/collateral_vault/) | Soroban XLM custody contract, tests and build instructions. |
 | [`lr_contracts/`](lr_contracts/) | Vault and standalone registry contract code. |
-| [`api/`](api/) | MongoDB-based authentication and KYC backend. |
 
 The sprint covers Testnet custody and engine-enforced lending. Registry integration, Maya settlement, mainnet and real-peso lending belong to a later phase. Collateral is valued at issuance and seizure; continuous revaluation and margin calls are outside this scope.
 
