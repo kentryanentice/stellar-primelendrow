@@ -111,3 +111,59 @@ fn writes_require_admin_auth() {
         )
         .is_err());
 }
+
+fn entry(env:&Env,reference:&str)->PaymentEntry {
+    PaymentEntry{rail_ref:String::from_str(env,reference),loan_id:id(env,1),user_id:id(env,9),
+        amount_received:353_33,interest_paid:20_00,principal_paid:333_33,excess:0,paid_at:1_700_000_000}
+}
+
+#[test]
+fn batch_records_each_payment_and_its_financial_fields() {
+    let env=Env::default();let reg=setup(&env);
+    let mut payments=soroban_sdk::Vec::new(&env);
+    payments.push_back(entry(&env,"BATCH-1"));payments.push_back(entry(&env,"BATCH-2"));
+    reg.record_payments(&payments);
+    for p in payments {
+        let saved=reg.get_payment(&p.rail_ref).unwrap();
+        assert_eq!(saved.loan_id,p.loan_id);assert_eq!(saved.user_id,p.user_id);
+        assert_eq!(saved.amount_received,p.amount_received);assert_eq!(saved.interest_paid,p.interest_paid);
+        assert_eq!(saved.principal_paid,p.principal_paid);assert_eq!(saved.excess,p.excess);assert_eq!(saved.paid_at,p.paid_at);
+    }
+}
+
+#[test]
+fn duplicate_in_a_batch_rolls_back_every_new_record() {
+    let env=Env::default();let reg=setup(&env);
+    let p=entry(&env,"DUPLICATE");
+    let payments=soroban_sdk::vec![&env,p.clone(),p.clone()];
+    assert_eq!(reg.try_record_payments(&payments),Err(Ok(Error::PaymentExists)));
+    assert!(reg.get_payment(&p.rail_ref).is_none());
+}
+
+#[test]
+fn an_invalid_later_entry_rolls_back_the_earlier_valid_one() {
+    let env=Env::default();let reg=setup(&env);
+    let p=entry(&env,"VALID");let mut invalid=entry(&env,"INVALID");invalid.principal_paid=-1;
+    assert_eq!(reg.try_record_payments(&soroban_sdk::vec![&env,p.clone(),invalid]),Err(Ok(Error::InvalidAmount)));
+    assert!(reg.get_payment(&p.rail_ref).is_none());
+}
+
+#[test]
+fn batch_auth_and_size_limits_are_enforced() {
+    let env=Env::default();let reg=setup(&env);
+    assert_eq!(reg.try_record_payments(&soroban_sdk::Vec::new(&env)),Err(Ok(Error::InvalidBatch)));
+    let mut oversized=soroban_sdk::Vec::new(&env);
+    for _ in 0..=MAX_BATCH_SIZE {oversized.push_back(entry(&env,"CAP"));}
+    assert_eq!(reg.try_record_payments(&oversized),Err(Ok(Error::InvalidBatch)));
+    env.set_auths(&[]);
+    assert!(reg.try_record_payments(&soroban_sdk::vec![&env,entry(&env,"AUTH")]).is_err());
+}
+
+#[test]
+fn batch_reads_preserve_order_and_missing_entries() {
+    let env=Env::default();let reg=setup(&env);let p=entry(&env,"PRESENT");
+    reg.record_payments(&soroban_sdk::vec![&env,p.clone()]);
+    let result=reg.get_payments(&soroban_sdk::vec![&env,String::from_str(&env,"ABSENT"),p.rail_ref]);
+    assert!(result.get(0).unwrap().is_none());
+    assert_eq!(result.get(1).unwrap().unwrap().principal_paid,333_33);
+}

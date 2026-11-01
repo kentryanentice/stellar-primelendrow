@@ -17,7 +17,7 @@ import StripeCard from '../elements/Settings/StripeCard'
 import { apiFetch } from '../functions/apiFetch'
 import { clearKycDraft } from '../functions/KYC/kycDraft'
 
-// The wallet-connect SDKs (Freighter/WalletConnect) this pulls in shouldn't
+// The wallet-connect SDKs (Varial/WalletConnect) this pulls in shouldn't
 // add weight to every Settings visit — same rationale as the KYC page's own
 // lazy-load in RoutesProvider.
 const WalletsCard = lazy(() => import('../elements/Settings/WalletsCard'))

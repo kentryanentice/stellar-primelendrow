@@ -25,6 +25,15 @@ Same trust model as the [collateral vault](../collateral_vault): only the
 | `initialize(admin)` | once | set the engine's account as the only writer |
 | `record_payment(rail_ref, loan_id, user_id, amount_received, interest_paid, principal_paid, excess, paid_at)` | admin | record one captured repayment |
 | `get_payment(rail_ref)` | open | read a payment by capture id |
+| `record_payments(payments)` | admin | atomically record 1–20 `PaymentEntry` values |
+| `get_payments(rail_refs)` | open | read up to 20 payments, preserving order and missing entries |
+| `get_admin()` | open | inspect the configured writer |
+
+Batch entries contain the same fields as `record_payment`. Each keeps its own
+capture-reference key and emits its own `PaymentRecorded` event. Duplicate or
+invalid entries reject the entire batch. A GCYR signature on a batch transaction
+authenticates every record in that transaction. The terminal backfill uses ten
+entries per transaction and verifies every stored field and signed envelope.
 
 ## Test
 

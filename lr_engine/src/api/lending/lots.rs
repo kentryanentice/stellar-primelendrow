@@ -345,54 +345,152 @@ pub async fn release_funding_pro_rata(
 
     let lent: Vec<i64> = members.iter().map(|(_, lots)| lots.iter().map(|l| l.amount).sum()).collect();
     let slices = domain::apportion_capped(amount, &lent);
+    let mut moves = Vec::new();
     for ((_, lots), slice) in members.iter().zip(slices) {
-        release_fifo(tx, lots, slice).await?;
+        moves.extend(plan_release(lots, slice));
+    }
+    if moves.is_empty() {
+        return Ok(());
+    }
+    let changed: i64 = sqlx::query_scalar(
+        "WITH plan AS (
+            SELECT * FROM jsonb_to_recordset($1) AS p(id uuid,released bigint,whole boolean)
+         ), changed AS (
+            UPDATE public.deposits d SET
+                amount=CASE WHEN p.whole THEN d.amount ELSE d.amount-p.released END,
+                badge=CASE WHEN p.whole THEN 'available' ELSE d.badge END,
+                backing_loan=CASE WHEN p.whole THEN NULL ELSE d.backing_loan END,
+                updated_at=$2
+            FROM plan p WHERE d.id=p.id
+            RETURNING d.id,d.user_id,d.origin,p.released,p.whole
+         ), children AS (
+            INSERT INTO public.deposits (user_id,amount,badge,parent_lot,origin)
+            SELECT user_id,released,'available',id,origin FROM changed WHERE NOT whole
+            RETURNING id
+         ) SELECT count(*)::bigint FROM changed",
+    )
+    .bind(serde_json::json!(moves))
+    .bind(Utc::now().timestamp())
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| db_err(e, "release funding lots"))?;
+    if changed != moves.len() as i64 {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Funding lots changed while releasing",
+        ));
     }
     Ok(())
 }
 
-/// Unlocks `amount` out of one member's locked lent lots, oldest first,
-/// splitting the last. `amount` never exceeds the lots' sum
-/// (`apportion_capped` guarantees it).
-async fn release_fifo(tx: &mut Transaction<'_, Postgres>, lots: &[Lot], mut amount: i64) -> Result<(), E> {
-    let now = Utc::now().timestamp();
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct ReleaseMove {
+    id: Uuid,
+    released: i64,
+    whole: bool,
+}
+
+/// Same FIFO choices as individual updates, planned before the bulk write.
+fn plan_release(lots: &[Lot], mut amount: i64) -> Vec<ReleaseMove> {
+    let mut moves = Vec::new();
     for lot in lots {
         if amount == 0 {
             break;
         }
-        if lot.amount <= amount {
-            sqlx::query(
-                "UPDATE public.deposits
-                    SET badge = 'available', backing_loan = NULL, updated_at = $1
-                  WHERE id = $2",
-            )
-            .bind(now)
-            .bind(lot.id)
-            .execute(&mut **tx)
-            .await
-            .map_err(|e| db_err(e, "release lent lot"))?;
-            amount -= lot.amount;
-        } else {
-            sqlx::query("UPDATE public.deposits SET amount = amount - $1, updated_at = $2 WHERE id = $3")
-                .bind(amount)
-                .bind(now)
-                .bind(lot.id)
-                .execute(&mut **tx)
-                .await
-                .map_err(|e| db_err(e, "shrink lent lot"))?;
-            sqlx::query(
-                "INSERT INTO public.deposits (user_id, amount, badge, parent_lot, origin)
-                 SELECT $1, $2, 'available', $3, origin FROM public.deposits WHERE id = $3",
-            )
-            .bind(lot.user_id)
-            .bind(amount)
-            .bind(lot.id)
-            .execute(&mut **tx)
-            .await
-            .map_err(|e| db_err(e, "split lent lot"))?;
-            amount = 0;
-        }
+        let released = amount.min(lot.amount);
+        moves.push(ReleaseMove {
+            id: lot.id,
+            released,
+            whole: released == lot.amount,
+        });
+        amount -= released;
     }
     debug_assert_eq!(amount, 0);
-    Ok(())
+    moves
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "uses the configured sandbox database; rolls all fixtures back"]
+    async fn bulk_release_preserves_balances_origins_and_parentage() {
+        dotenvy::dotenv().ok();
+        assert_eq!(std::env::var("PAYPAL_ENV").as_deref(), Ok("sandbox"));
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&std::env::var("DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let user:Uuid=sqlx::query_scalar("SELECT id FROM public.users WHERE email LIKE 'sim%@example.invalid' AND role='User' ORDER BY email LIMIT 1")
+            .fetch_one(&mut *tx).await.unwrap();
+        let loan:Uuid=sqlx::query_scalar("INSERT INTO public.loans (borrower_id,product,principal,rate_bps,term_months,policy_version,status) SELECT $1,'deposit_backed',300,200,3,id,'closed' FROM public.policy_versions WHERE active RETURNING id")
+            .bind(user).fetch_one(&mut *tx).await.unwrap();
+        let first:Uuid=sqlx::query_scalar("INSERT INTO public.deposits(user_id,amount,badge,backing_loan,origin,created_at) VALUES ($1,100,'lent',$2,'deposit',1) RETURNING id")
+            .bind(user).bind(loan).fetch_one(&mut *tx).await.unwrap();
+        let second:Uuid=sqlx::query_scalar("INSERT INTO public.deposits(user_id,amount,badge,backing_loan,origin,created_at) VALUES ($1,200,'lent',$2,'interest',2) RETURNING id")
+            .bind(user).bind(loan).fetch_one(&mut *tx).await.unwrap();
+        release_funding_pro_rata(&mut tx, loan, 150).await.unwrap();
+        let rows:Vec<(Uuid,i64,String,Option<Uuid>,Option<Uuid>,String)>=sqlx::query_as("SELECT id,amount,badge,backing_loan,parent_lot,origin FROM public.deposits WHERE id=ANY($1) OR parent_lot=$2")
+            .bind(vec![first,second]).bind(second).fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(rows.iter().map(|r| r.1).sum::<i64>(), 300);
+        assert!(rows.iter().any(|r| r.0 == first
+            && r.1 == 100
+            && r.2 == "available"
+            && r.3.is_none()
+            && r.5 == "deposit"));
+        assert!(rows.iter().any(|r| r.0 == second
+            && r.1 == 150
+            && r.2 == "lent"
+            && r.3 == Some(loan)
+            && r.5 == "interest"));
+        assert!(rows.iter().any(|r| r.4 == Some(second)
+            && r.1 == 50
+            && r.2 == "available"
+            && r.3.is_none()
+            && r.5 == "interest"));
+        tx.rollback().await.unwrap();
+        pool.close().await;
+    }
+    #[test]
+    fn release_preserves_fifo_and_splits_only_the_tail() {
+        let owner = Uuid::from_u128(1);
+        let lots = vec![
+            Lot {
+                id: Uuid::from_u128(2),
+                user_id: owner,
+                amount: 100,
+            },
+            Lot {
+                id: Uuid::from_u128(3),
+                user_id: owner,
+                amount: 200,
+            },
+            Lot {
+                id: Uuid::from_u128(4),
+                user_id: owner,
+                amount: 300,
+            },
+        ];
+        assert_eq!(plan_release(&lots, 0), vec![]);
+        assert_eq!(
+            plan_release(&lots, 250),
+            vec![
+                ReleaseMove {
+                    id: lots[0].id,
+                    released: 100,
+                    whole: true
+                },
+                ReleaseMove {
+                    id: lots[1].id,
+                    released: 150,
+                    whole: false
+                }
+            ]
+        );
+        let full = plan_release(&lots, 600);
+        assert_eq!(full.iter().map(|m| m.released).sum::<i64>(), 600);
+        assert!(full.iter().all(|m| m.whole));
+    }
 }

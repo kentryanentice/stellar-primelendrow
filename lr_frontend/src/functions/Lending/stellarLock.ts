@@ -3,7 +3,7 @@ import type { PinnedQuote } from './types'
 import { apiFetch } from '../apiFetch'
 
 /**
- * Builds, signs (Freighter), and submits the vault contract's `lock` call —
+ * Builds, signs (Varial), and submits the vault contract's `lock` call —
  * the ONLY contract entry a user ever invokes. Recording an outcome,
  * releasing and seizing are admin-gated inside the contract itself, so
  * nothing this file could be tampered into doing can move funds out of the
@@ -141,7 +141,7 @@ export async function lockCollateralOnChain(opts: {
         // usually lands here, before the borrower is asked to sign anything.
         const prepared = await server.prepareTransaction(built)
 
-        // The extension on desktop, the Freighter app through WalletConnect on
+        // The extension on desktop, the Varial app through WalletConnect on
         // a phone — whichever the borrower connected with (wallet.ts).
         const signed = await signTransactionXdr(prepared.toXDR(), opts.walletAddress, NETWORK_PASSPHRASE)
         if ('error' in signed) {

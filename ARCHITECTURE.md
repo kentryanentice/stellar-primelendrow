@@ -18,7 +18,7 @@ so the records never disagree with each other.
                         ┌──────────────────────────────────────┐
    Browser              │  lr_frontend  (React 19 + Vite)       │
    (the window)         │  · KYC OCR + liveness run client-side │
-                        │  · Stellar wallet signing (Freighter) │
+                        │  · Stellar wallet signing (Varial)    │
                         └───────────────┬──────────────────────┘
                                         │ HTTPS / JSON (cookie session)
                                         ▼
@@ -190,7 +190,7 @@ Approval flips the role to `User`; rejection returns the user to re-verification
 ### 5.3 Wallet management → [User flow](README.md#how-it-works)
 
 The KYC-verified wallet is active on approval. From Settings a user may connect
-**additional** Stellar wallets (Freighter, Lobstr, Albedo, and others via
+**additional** Stellar wallets (Varial, Lobstr, Albedo, and others via
 `@creit.tech/stellar-wallets-kit`), up to **5 active** at once.
 
 Each connection is proven by a **challenge–response**, not a bare address: the

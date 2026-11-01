@@ -105,7 +105,7 @@ function BorrowCard({ data, form, openLoan, lockEnded }: {
                     disabled={locking || !lockWallet}
                     onClick={() => lockWallet && lockAndConfirm(lockWallet.address)}
                 >
-                    {locking ? 'Locking on-chain…' : 'Lock with Freighter'}
+                    {locking ? 'Locking on-chain…' : 'Lock with Varial'}
                 </button>
                 <button
                     type='button'
