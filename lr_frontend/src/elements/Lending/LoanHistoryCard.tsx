@@ -213,7 +213,7 @@ function LoanHistoryCard({ data, history, onChanged }: {
                                                     disabled={lockingId === loan.id || !data.params.collateral_contract}
                                                     onClick={() => resumeLock(loan)}
                                                 >
-                                                    {lockingId === loan.id ? 'Locking on-chain…' : `Lock ${xlm(loan.collateral?.required_stroops ?? 0)} with Freighter`}
+                                                    {lockingId === loan.id ? 'Locking on-chain…' : `Lock ${xlm(loan.collateral?.required_stroops ?? 0)} with Varial`}
                                                 </button>
                                             )}
 

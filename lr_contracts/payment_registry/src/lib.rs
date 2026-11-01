@@ -21,7 +21,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
-    String,
+    String, Vec,
 };
 
 #[contracterror]
@@ -32,6 +32,7 @@ pub enum Error {
     NotInitialized = 2,
     InvalidAmount = 3,   // amount_received not > 0, or a split part < 0
     PaymentExists = 4,   // this rail_ref was already recorded (dedup)
+    InvalidBatch = 5,
 }
 
 #[contracttype]
@@ -54,6 +55,22 @@ pub struct Payment {
     pub excess: i128,
     pub paid_at: u64,
 }
+
+/// A complete input record for an atomic, admin-signed batch.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentEntry {
+    pub rail_ref: String,
+    pub loan_id: BytesN<16>,
+    pub user_id: BytesN<16>,
+    pub amount_received: i128,
+    pub interest_paid: i128,
+    pub principal_paid: i128,
+    pub excess: i128,
+    pub paid_at: u64,
+}
+
+pub const MAX_BATCH_SIZE: u32 = 20;
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,6 +114,49 @@ impl PaymentRegistry {
         paid_at: u64,
     ) -> Result<(), Error> {
         Self::admin(&env)?.require_auth();
+        Self::write_payment(&env, rail_ref, loan_id, user_id, amount_received,
+            interest_paid, principal_paid, excess, paid_at)
+    }
+
+    /// Every entry has the same validation, storage key, and event as a
+    /// single record. A rejected entry rolls the entire invocation back.
+    pub fn record_payments(env: Env, payments: Vec<PaymentEntry>) -> Result<(), Error> {
+        Self::admin(&env)?.require_auth();
+        if payments.is_empty() || payments.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidBatch);
+        }
+        for p in payments {
+            Self::write_payment(&env,p.rail_ref,p.loan_id,p.user_id,p.amount_received,
+                p.interest_paid,p.principal_paid,p.excess,p.paid_at)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        Self::admin(&env)
+    }
+
+    /// Read a payment by its capture id — the engine's reconciliation view.
+    pub fn get_payment(env: Env, rail_ref: String) -> Option<Payment> {
+        env.storage().persistent().get(&DataKey::Payment(rail_ref))
+    }
+
+    pub fn get_payments(env: Env, rail_refs: Vec<String>) -> Result<Vec<Option<Payment>>, Error> {
+        if rail_refs.len()>MAX_BATCH_SIZE {return Err(Error::InvalidBatch);}
+        let mut result=Vec::new(&env);
+        for reference in rail_refs {
+            result.push_back(env.storage().persistent().get(&DataKey::Payment(reference)));
+        }
+        Ok(result)
+    }
+}
+
+impl PaymentRegistry {
+    #[allow(clippy::too_many_arguments)]
+    fn write_payment(
+        env: &Env, rail_ref: String, loan_id: BytesN<16>, user_id: BytesN<16>,
+        amount_received:i128,interest_paid:i128,principal_paid:i128,excess:i128,paid_at:u64,
+    ) -> Result<(),Error> {
         if amount_received <= 0
             || interest_paid < 0
             || principal_paid < 0
@@ -130,13 +190,8 @@ impl PaymentRegistry {
             rail_ref,
             amount_received,
         }
-        .publish(&env);
+            .publish(env);
         Ok(())
-    }
-
-    /// Read a payment by its capture id — the engine's reconciliation view.
-    pub fn get_payment(env: Env, rail_ref: String) -> Option<Payment> {
-        env.storage().persistent().get(&DataKey::Payment(rail_ref))
     }
 
     fn admin(env: &Env) -> Result<Address, Error> {

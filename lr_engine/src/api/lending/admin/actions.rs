@@ -10,7 +10,7 @@
 //! sat queued forever and a seizure had no path at all. This module is that
 //! executor's engine half, shaped like the lock rather than like a worker:
 //!
-//!   prepare -> the admin signs in Freighter and submits -> confirm
+//!   prepare -> the admin signs in Varial and submits -> confirm
 //!
 //! which is the same three beats `apply -> lock -> /collateral/confirm` takes
 //! for a borrower, for the same reason. The key that can move coins out of the

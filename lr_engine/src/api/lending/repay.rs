@@ -358,6 +358,13 @@ pub(crate) async fn apply_captured(
         let booked = domain::book_interest(interest_total, &rules.params.interest_split, &weights, &stakes);
         let parts = booked.parts;
 
+        if booked.to_depositors.iter().any(|a|*a<0)
+            || booked.to_guarantors.iter().any(|a|*a<0)
+            || booked.to_depositors.iter().sum::<i64>()!=parts.depositors
+            || booked.to_guarantors.iter().sum::<i64>()!=parts.guarantor {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR,"Interest allocation did not balance"));
+        }
+
         for ((member, balance), amount) in balances.iter().zip(&booked.to_depositors) {
             if *amount > 0 {
                 member_credits.push(MemberCredit {
@@ -460,31 +467,32 @@ pub(crate) async fn apply_captured(
     // each slice is recorded with where it came from.
     let mut lots_to_credit: Vec<(Uuid, i64)> = Vec::new();
     for credit in &member_credits {
-        match lots_to_credit.iter_mut().find(|(m, _)| *m == credit.user_id) {
+        match lots_to_credit
+            .iter_mut()
+            .find(|(m, _)| *m == credit.user_id)
+        {
             Some((_, total)) => *total += credit.amount,
             None => lots_to_credit.push((credit.user_id, credit.amount)),
         }
-        sqlx::query(
-            "INSERT INTO public.member_interest (event_id, loan_id, user_id, role, weight, tier_share, amount)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(event_id)
-        .bind(loan_id)
-        .bind(credit.user_id)
-        .bind(credit.role)
-        .bind(credit.weight)
-        .bind(credit.tier_share)
-        .bind(credit.amount)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| db_err(e, "record member interest"))?;
     }
-    for (member, amount) in lots_to_credit {
-        sqlx::query("INSERT INTO public.deposits (user_id, amount, badge, origin) VALUES ($1, $2, 'available', 'interest')")
-            .bind(member)
-            .bind(amount)
+    if !member_credits.is_empty() {
+        let credits: Vec<serde_json::Value> = member_credits.iter().map(|c| serde_json::json!({
+            "user_id":c.user_id,"role":c.role,"weight":c.weight,"tier_share":c.tier_share,"amount":c.amount
+        })).collect();
+        sqlx::query("INSERT INTO public.member_interest (event_id,loan_id,user_id,role,weight,tier_share,amount)
+            SELECT $1,$2,user_id,role,weight,tier_share,amount FROM jsonb_to_recordset($3)
+            AS c(user_id uuid,role text,weight bigint,tier_share smallint,amount bigint)")
+            .bind(event_id).bind(loan_id).bind(serde_json::json!(credits))
             .execute(&mut *tx)
             .await
+            .map_err(|e| db_err(e, "record member interest"))?;
+    }
+    if !lots_to_credit.is_empty() {
+        let members: Vec<Uuid> = lots_to_credit.iter().map(|(id, _)| *id).collect();
+        let amounts: Vec<i64> = lots_to_credit.iter().map(|(_, amount)| *amount).collect();
+        sqlx::query("INSERT INTO public.deposits (user_id,amount,badge,origin)
+            SELECT user_id,amount,'available','interest' FROM UNNEST($1::uuid[],$2::bigint[]) AS c(user_id,amount)")
+            .bind(&members).bind(&amounts).execute(&mut *tx).await
             .map_err(|e| db_err(e, "credit member interest"))?;
     }
 

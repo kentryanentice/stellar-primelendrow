@@ -74,15 +74,18 @@ pub async fn commit_event(
         }
     };
 
-    for p in postings {
-        // amount = 0 is refused by the table CHECK; skip writing empty rows
-        // for events that carry no money (badge moves, consents).
+    if !postings.is_empty() {
+        // Keep the entire posting set in one statement. The balance and
+        // nonzero-amount checks still apply to exactly the same rows.
+        let accounts: Vec<&str> = postings.iter().map(|p| p.account).collect();
+        let amounts: Vec<i64> = postings.iter().map(|p| p.amount).collect();
         sqlx::query(
-            "INSERT INTO public.ledger_postings (event_id, account, amount) VALUES ($1, $2, $3)",
+            "INSERT INTO public.ledger_postings (event_id, account, amount)
+             SELECT $1, account, amount FROM UNNEST($2::text[], $3::bigint[]) AS p(account, amount)",
         )
         .bind(event_id)
-        .bind(p.account)
-        .bind(p.amount)
+        .bind(&accounts)
+        .bind(&amounts)
         .execute(&mut **tx)
         .await
         .map_err(LedgerError::Db)?;

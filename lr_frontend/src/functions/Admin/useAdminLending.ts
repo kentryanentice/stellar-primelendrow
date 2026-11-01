@@ -130,7 +130,7 @@ export type LoanFilter = 'open' | 'defaulted' | 'settling' | 'all'
  * the server — so this hook's job for each queued movement is three calls:
  *
  *   prepare (engine pins the price and destination)
- *     -> submitVaultMovement (Freighter signs, the network settles)
+ *     -> submitVaultMovement (Varial signs, the network settles)
  *       -> confirm (engine verifies the hash on Horizon and moves the books)
  *
  * The engine decides every number in step one; nothing an operator can type
