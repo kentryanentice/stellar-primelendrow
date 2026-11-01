@@ -49,6 +49,9 @@ pub fn round_half_even(numer: i128, denom: i128) -> i64 {
 /// Ties on "largest" go to the earliest of the tied weights, so the answer is
 /// deterministic for a given input order — two runs over the same loan produce
 /// the same split.
+/// When a negative residual would exceed that recipient's entire share, use
+/// largest remainders instead, with input order breaking equal remainders.
+/// This keeps small payments shared across many recipients nonnegative.
 ///
 /// Returns one share per weight, in the same order. A zero or negative `total`
 /// yields all zeros, and weights summing to zero do too: there is nothing to
@@ -76,9 +79,26 @@ pub fn apportion(total: i64, weights: &[i64]) -> Vec<i64> {
                 largest = i;
             }
         }
-        shares[largest] += residual;
+        if shares[largest] + residual >= 0 {
+            shares[largest] += residual;
+        } else {
+            // With many participants and a small total, rounding everyone
+            // upward can leave more to remove than the largest share holds.
+            // Use largest remainders for that case; no recipient may owe a
+            // negative share of a positive interest payment.
+            let mut remainders: Vec<(i128, usize)> = Vec::with_capacity(weights.len());
+            for (i, weight) in weights.iter().enumerate() {
+                let numerator=total as i128 * (*weight).max(0) as i128;
+                shares[i]=(numerator/sum) as i64;
+                remainders.push((numerator%sum,i));
+            }
+            remainders.sort_by(|a,b|b.0.cmp(&a.0).then_with(||a.1.cmp(&b.1)));
+            let left=total-shares.iter().sum::<i64>();
+            for (_,i) in remainders.into_iter().take(left as usize) {shares[i]+=1;}
+        }
     }
-
+    debug_assert_eq!(shares.iter().sum::<i64>(),total);
+    debug_assert!(shares.iter().all(|share|*share>=0));
     shares
 }
 
@@ -763,6 +783,21 @@ pub fn book_interest(
 mod tests {
     use super::*;
     use crate::api::lending::policy::{InterestSplit, PolicyParams, TermRange};
+
+    #[test]
+    fn small_payments_across_many_depositors_never_create_negative_shares() {
+        let shares=apportion(51,&vec![1;101]);
+        assert_eq!(shares.iter().sum::<i64>(),51);
+        assert!(shares.iter().all(|share|(0..=1).contains(share)));
+        assert_eq!(&shares[..51],&vec![1;51]);
+        for participants in 1..=150 {
+            for total in 1..=200 {
+                let shares=apportion(total,&vec![1;participants]);
+                assert_eq!(shares.iter().sum::<i64>(),total);
+                assert!(shares.iter().all(|share|*share>=0));
+            }
+        }
+    }
 
     /// The SOW's published split and tier table, verbatim.
     fn sow_split() -> InterestSplit {

@@ -8,8 +8,8 @@ export default function WalletStep({ walletAddress, walletConnecting, connectWal
     return (
         <div className='kyc-wallet-list'>
             <div className='kyc-wallet-row'>
-                <div className='kyc-wallet-icon'>F</div>
-                <p className='kyc-wallet-name'>Freighter</p>
+                <div className='kyc-wallet-icon'>V</div>
+                <p className='kyc-wallet-name'>Varial</p>
                 {walletAddress ? (
                     <span className='kyc-wallet-connected'><CheckCircle />Connected</span>
                 ) : walletConnecting ? (

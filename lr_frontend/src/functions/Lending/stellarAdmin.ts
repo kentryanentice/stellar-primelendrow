@@ -1,4 +1,4 @@
-import { signTransaction, requestAccess, isConnected as freighterIsConnected } from '@stellar/freighter-api'
+import { signTransaction, requestAccess, isConnected as varialIsConnected } from '@stellar/varial-sdk'
 import { extensionNetworkError } from '../Wallet/wallet'
 
 /**
@@ -82,7 +82,7 @@ const shortAddr = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`
  * Worth a round trip before asking anyone to sign. `require_auth` failing is
  * not one of the contract's numbered errors — it's a host trap, so it arrives
  * as an opaque "failed account authentication" with no hint that the fix is
- * "switch accounts in Freighter". Since the admin is fixed at initialize and
+ * "switch accounts in Varial". Since the admin is fixed at initialize and
  * there is no rotation, comparing it against the active account turns the most
  * likely operator mistake into a sentence that says what to do.
  *
@@ -124,9 +124,9 @@ export async function submitVaultMovement(opts: {
     treasury?: string | null
     quote?: SeizureQuote | null
 }): Promise<MovementResult> {
-    const { isConnected } = await freighterIsConnected()
+    const { isConnected } = await varialIsConnected()
     if (!isConnected) {
-        return { error: 'Signing a vault movement needs the Freighter browser extension' }
+        return { error: 'Signing a vault movement needs the Varial browser extension' }
     }
     if (opts.action === 'seize' && (!opts.treasury || !opts.quote)) {
         return { error: 'That seizure hasn’t been prepared — prepare it first so the engine can pin the price' }
@@ -135,7 +135,7 @@ export async function submitVaultMovement(opts: {
     try {
         const access = await requestAccess()
         if (access.error || !access.address) {
-            return { error: access.error?.message ?? 'Freighter did not share an address' }
+            return { error: access.error?.message ?? 'Varial did not share an address' }
         }
         const signer = access.address
         // Same rule as every member-facing signature (functions/Wallet/wallet):
@@ -154,8 +154,8 @@ export async function submitVaultMovement(opts: {
         if (admin && admin !== signer) {
             return {
                 error: `This vault only accepts movements from its admin ${shortAddr(admin)}, `
-                    + `and Freighter is currently on ${shortAddr(signer)}. `
-                    + `Switch accounts in Freighter and try again.`,
+                    + `and Varial is currently on ${shortAddr(signer)}. `
+                    + `Switch accounts in Varial and try again.`,
             }
         }
 

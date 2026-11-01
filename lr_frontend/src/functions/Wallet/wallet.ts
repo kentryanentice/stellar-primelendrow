@@ -1,10 +1,10 @@
 import {
-    getNetworkDetails as freighterGetNetworkDetails,
-    isConnected as freighterIsConnected,
-    requestAccess as freighterRequestAccess,
-    signMessage as freighterSignMessage,
-    signTransaction as freighterSignTransaction,
-} from '@stellar/freighter-api'
+    getNetworkDetails as varialGetNetworkDetails,
+    isConnected as varialIsConnected,
+    requestAccess as varialRequestAccess,
+    signMessage as varialSignMessage,
+    signTransaction as varialSignTransaction,
+} from '@stellar/varial-sdk'
 import { WalletConnectModule, WalletConnectTargetChain } from '@creit.tech/stellar-wallets-kit/modules/wallet-connect'
 import { apiFetch } from '../apiFetch'
 import { loadPublicConfig } from '../publicConfig'
@@ -13,7 +13,7 @@ const API = import.meta.env.VITE_API_URL ?? ''
 
 // The network the app runs on, the same switch stellarLock and stellarAdmin
 // read. WalletConnect has to be told explicitly: left to itself the kit asks
-// the wallet for mainnet, so Freighter Mobile set to testnet refused to pair.
+// the wallet for mainnet, so Varial Mobile set to testnet refused to pair.
 const IS_MAINNET = import.meta.env.VITE_STELLAR_NETWORK === 'public'
 const WC_CHAIN = IS_MAINNET ? WalletConnectTargetChain.PUBLIC : WalletConnectTargetChain.TESTNET
 const NETWORK_PASSPHRASE = IS_MAINNET
@@ -42,14 +42,14 @@ const wrongNetwork = (walletNetwork: string) =>
     + `Switch your wallet to ${APP_NETWORK} and try again.`
 
 /**
- * Null when the Freighter extension is on the app's network, otherwise what
+ * Null when the Varial extension is on the app's network, otherwise what
  * to tell the member. Fails closed: a network it can't read is refused too.
  * Exported for the admin vault signer, which talks to the extension directly.
  */
 export async function extensionNetworkError(): Promise<string | null> {
-    const { networkPassphrase, error } = await freighterGetNetworkDetails()
+    const { networkPassphrase, error } = await varialGetNetworkDetails()
     if (error || !networkPassphrase) {
-        return 'Couldn’t tell which network your wallet is on — unlock Freighter and try again'
+        return 'Couldn’t tell which network your wallet is on — unlock Varial and try again'
     }
     if (networkPassphrase === NETWORK_PASSPHRASE) return null
     return wrongNetwork(NETWORK_NAMES[networkPassphrase] ?? 'a different network')
@@ -73,16 +73,16 @@ function sessionNetworkError(wc: WalletConnectModule, address: string): string |
 }
 
 // Browser extensions don't exist on phones, so a phone visiting this page has
-// no way to satisfy the old "Freighter extension installed" check — this is
+// no way to satisfy the old "Varial extension installed" check — this is
 // what actually made mobile look unsupported. WalletConnect is the bridge:
-// it pairs with Freighter Mobile (or any other WalletConnect-compatible
+// it pairs with Varial Mobile (or any other WalletConnect-compatible
 // Stellar wallet) via a QR code on desktop or a deep link on the phone
 // itself, so the same "Connect" button works either way.
 //
 // Get a free project id at https://cloud.reown.com (Reown Cloud, formerly
 // WalletConnect Cloud) and set WALLETCONNECT_PROJECT_ID in lr_engine's .env;
 // the app reads it from the engine's GET /config (functions/publicConfig).
-// Until it's set, connectFreighter() falls back to extension-only, exactly
+// Until it's set, connectVarial() falls back to extension-only, exactly
 // like before. Lock the project to your domains in Reown Cloud — the id is
 // public by nature, and the domain allowlist is what stops other sites using it.
 
@@ -167,15 +167,15 @@ function cancelledWhenWindowCloses(wc: WalletConnectModule) {
 }
 
 /**
- * Connects to Freighter, preferring the browser extension when it's
- * installed and falling back to WalletConnect — which is how Freighter
+ * Connects to Varial, preferring the browser extension when it's
+ * installed and falling back to WalletConnect — which is how Varial
  * Mobile (and other WalletConnect-compatible Stellar wallets) get reached —
  * when it isn't.
  */
-export async function connectFreighter(): Promise<ConnectResult> {
-    const { isConnected: hasExtension } = await freighterIsConnected()
+export async function connectVarial(): Promise<ConnectResult> {
+    const { isConnected: hasExtension } = await varialIsConnected()
     if (hasExtension) {
-        const { address, error } = await freighterRequestAccess()
+        const { address, error } = await varialRequestAccess()
         if (error || !address) return { error: error?.message ?? 'Unable to connect wallet' }
         const networkError = await extensionNetworkError()
         if (networkError) return { error: networkError }
@@ -185,7 +185,7 @@ export async function connectFreighter(): Promise<ConnectResult> {
     const wc = await getWalletConnectModule()
     if (!wc) {
         return {
-            error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.',
+            error: 'Varial extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.',
         }
     }
     const closed = cancelledWhenWindowCloses(wc)
@@ -212,7 +212,7 @@ export async function connectFreighter(): Promise<ConnectResult> {
 }
 
 /** No-op when the active connection was the browser extension — nothing to tear down there. */
-export async function disconnectFreighter(): Promise<void> {
+export async function disconnectVarial(): Promise<void> {
     if (!wcModule) return
     try {
         await wcModule.disconnect()
@@ -227,19 +227,19 @@ export type SignResult = { signature: string } | { error: string }
  * Signs an arbitrary message (SEP-0053) with the given address, proving
  * control of its private key — used to prove ownership of a wallet before
  * the backend connects it to an account (see functions/Wallet/useWallets.ts).
- * Mirrors connectFreighter's extension-then-WalletConnect precedence rather
+ * Mirrors connectVarial's extension-then-WalletConnect precedence rather
  * than tracking which path the address came from.
  *
- * Deliberately does not call disconnectFreighter(): tearing down the live
+ * Deliberately does not call disconnectVarial(): tearing down the live
  * wallet session is a separate concern from marking a database row
  * "disconnected".
  */
 export async function signChallenge(message: string, address: string): Promise<SignResult> {
-    const { isConnected: hasExtension } = await freighterIsConnected()
+    const { isConnected: hasExtension } = await varialIsConnected()
     if (hasExtension) {
         const networkError = await extensionNetworkError()
         if (networkError) return { error: networkError }
-        const { signedMessage, error } = await freighterSignMessage(message, { address })
+        const { signedMessage, error } = await varialSignMessage(message, { address })
         if (error || !signedMessage) return { error: error?.message ?? 'Unable to sign verification message' }
         // Older extension builds (protocol v3) return the raw signature as a
         // Buffer instead of an already-base64 string (v4) — normalize to the
@@ -250,7 +250,7 @@ export async function signChallenge(message: string, address: string): Promise<S
 
     const wc = await getWalletConnectModule()
     if (!wc) {
-        return { error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
+        return { error: 'Varial extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
     }
     try {
         await waitUntilReady(wc)
@@ -299,8 +299,8 @@ export type SignTxResult = { signedTxXdr: string } | { error: string }
 /**
  * Signs a prepared transaction (base64 XDR) with the given address — the
  * browser extension when it's installed, otherwise WalletConnect, which is how
- * the Freighter Mobile app is asked to sign on a phone. Same precedence as
- * connectFreighter and signChallenge, so whichever way a member connected
+ * the Varial Mobile app is asked to sign on a phone. Same precedence as
+ * connectVarial and signChallenge, so whichever way a member connected
  * their wallet is the way it signs.
  */
 export async function signTransactionXdr(
@@ -313,18 +313,18 @@ export async function signTransactionXdr(
     if (networkPassphrase !== NETWORK_PASSPHRASE) {
         return { error: `That transaction was built for ${NETWORK_NAMES[networkPassphrase] ?? 'a different network'}, not ${APP_NETWORK}` }
     }
-    const { isConnected: hasExtension } = await freighterIsConnected()
+    const { isConnected: hasExtension } = await varialIsConnected()
     if (hasExtension) {
         const networkError = await extensionNetworkError()
         if (networkError) return { error: networkError }
-        const signed = await freighterSignTransaction(xdr, { networkPassphrase, address })
+        const signed = await varialSignTransaction(xdr, { networkPassphrase, address })
         if (signed.error || !signed.signedTxXdr) return { error: signed.error?.message ?? 'Signing was cancelled' }
         return { signedTxXdr: signed.signedTxXdr }
     }
 
     const wc = await getWalletConnectModule()
     if (!wc) {
-        return { error: 'Freighter extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
+        return { error: 'Varial extension not detected. Install the browser extension, or ask an admin to enable WalletConnect for mobile.' }
     }
     try {
         await waitUntilReady(wc)
