@@ -412,6 +412,7 @@ fn plan_release(lots: &[Lot], mut amount: i64) -> Vec<ReleaseMove> {
 #[cfg(test)]
 mod release_tests {
     use super::*;
+    type DepositRow = (Uuid, i64, String, Option<Uuid>, Option<Uuid>, String);
     #[tokio::test]
     #[ignore = "uses the configured sandbox database; rolls all fixtures back"]
     async fn bulk_release_preserves_balances_origins_and_parentage() {
@@ -432,7 +433,7 @@ mod release_tests {
         let second:Uuid=sqlx::query_scalar("INSERT INTO public.deposits(user_id,amount,badge,backing_loan,origin,created_at) VALUES ($1,200,'lent',$2,'interest',2) RETURNING id")
             .bind(user).bind(loan).fetch_one(&mut *tx).await.unwrap();
         release_funding_pro_rata(&mut tx, loan, 150).await.unwrap();
-        let rows:Vec<(Uuid,i64,String,Option<Uuid>,Option<Uuid>,String)>=sqlx::query_as("SELECT id,amount,badge,backing_loan,parent_lot,origin FROM public.deposits WHERE id=ANY($1) OR parent_lot=$2")
+        let rows:Vec<DepositRow>=sqlx::query_as("SELECT id,amount,badge,backing_loan,parent_lot,origin FROM public.deposits WHERE id=ANY($1) OR parent_lot=$2")
             .bind(vec![first,second]).bind(second).fetch_all(&mut *tx).await.unwrap();
         assert_eq!(rows.iter().map(|r| r.1).sum::<i64>(), 300);
         assert!(rows.iter().any(|r| r.0 == first
