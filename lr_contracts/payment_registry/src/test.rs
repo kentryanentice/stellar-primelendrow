@@ -143,7 +143,7 @@ fn duplicate_in_a_batch_rolls_back_every_new_record() {
 #[test]
 fn an_invalid_later_entry_rolls_back_the_earlier_valid_one() {
     let env=Env::default();let reg=setup(&env);
-    let p=entry(&env,"VALID");let mut invalid=entry(&env,"INVALID");invalid.principal_paid=-1;
+    let p=entry(&env,"VALID");let mut invalid=entry(&env,"INVALID");invalid.principal_paid = -1;
     assert_eq!(reg.try_record_payments(&soroban_sdk::vec![&env,p.clone(),invalid]),Err(Ok(Error::InvalidAmount)));
     assert!(reg.get_payment(&p.rail_ref).is_none());
 }
