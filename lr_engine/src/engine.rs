@@ -269,7 +269,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http());
 
     let addr = format!("0.0.0.0:{port}");
-    println!("Server running on http://{`}");
+    println!("Server running on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(
