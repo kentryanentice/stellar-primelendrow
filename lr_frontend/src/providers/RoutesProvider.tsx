@@ -7,7 +7,6 @@ import SEOProvider from './SEOProvider'
 import { SessionProvider } from './SessionProvider'
 import AccessProvider from './AccessProvider'
 import { ToastProvider } from './ToastProvider'
-import Theme from '../elements/Theme'
 import AppShell from '../elements/AppShell'
 import Landing from '../pages/Landing'
 import Auth from '../pages/Auth'
@@ -48,7 +47,7 @@ function RoutesProvider() {
                     <SessionProvider>
                         <AccessProvider>
                             <Routes>
-                                <Route path='/' element={<> <Theme /> <SEOProvider {...seoConfigTypes} /> <Landing /> </>} />
+                                <Route path='/' element={<> <SEOProvider {...seoConfigTypes} /> <Landing /> </>} />
                                 <Route path='/auth' element={<> <SEOProvider {...seoConfigTypes} /> <Auth /> </>} />
                                 <Route path='/records' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><Records /></Suspense> </>} />
                                 <Route path='/records/:loanId' element={<> <SEOProvider {...seoConfigTypes} /> <Suspense fallback={<div className='loader' />}><Records /></Suspense> </>} />
