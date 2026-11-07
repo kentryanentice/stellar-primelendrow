@@ -28,8 +28,9 @@ html:has(.landing) {
         pointer-events: none;
         border-bottom: 1px solid var(--landing-glass-border);
         background: var(--landing-glass-bg);
-        backdrop-filter: var(--landing-glass-chrome-filter);
+        // Keep the standard declaration last so production minification retains it.
         -webkit-backdrop-filter: var(--landing-glass-chrome-filter);
+        backdrop-filter: var(--landing-glass-chrome-filter);
         opacity: 0;
         transition: opacity 320ms var(--plr-ease);
     }
