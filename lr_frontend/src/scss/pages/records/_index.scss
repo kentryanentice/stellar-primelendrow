@@ -41,8 +41,8 @@
     .lending-card {
         background: color-mix(in srgb, var(--auth-panel-bg) 70%, transparent);
         border-color: rgba(255, 255, 255, .1);
-        backdrop-filter: blur(14px);
         -webkit-backdrop-filter: blur(14px);
+        backdrop-filter: blur(14px);
     }
 
     /* The book's totals (Applications → Interest collected) sit straight on
@@ -51,8 +51,8 @@
     > .lending-page > .lending-pool-tiles .lending-funds-tile {
         background: color-mix(in srgb, var(--auth-panel-bg) 60%, transparent);
         border-color: rgba(255, 255, 255, .1);
-        backdrop-filter: blur(14px);
         -webkit-backdrop-filter: blur(14px);
+        backdrop-filter: blur(14px);
 
         &.is-good {
             background: color-mix(in srgb, #6fd99a 10%, color-mix(in srgb, var(--auth-panel-bg) 60%, transparent));
