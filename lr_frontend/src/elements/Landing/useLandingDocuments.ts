@@ -43,7 +43,8 @@ export function useLandingDocuments() {
 
     useEffect(() => () => window.clearTimeout(closeTimer.current), [])
 
-    const show = (nextTab: Tab, anchor?: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    // Called from the click handlers below, never during render: it writes refs.
+    const show = (event: MouseEvent<HTMLAnchorElement>, nextTab: Tab, anchor?: string) => {
         event.preventDefault()
         window.clearTimeout(closeTimer.current)
         if (!open) returnFocus.current = event.currentTarget
@@ -110,8 +111,10 @@ export function useLandingDocuments() {
         dlgSel: { docs: tab === 'docs', terms: tab === 'terms', privacy: tab === 'privacy' },
         dlgTi: { docs: tab === 'docs' ? 0 : -1, terms: tab === 'terms' ? 0 : -1, privacy: tab === 'privacy' ? 0 : -1 },
         dlgTabCls: { docs: tab === 'docs' ? 'is-active' : '', terms: tab === 'terms' ? 'is-active' : '', privacy: tab === 'privacy' ? 'is-active' : '' },
-        openDocs: show('docs'), openDocsInterest: show('docs', 'dlg-doc-interest'),
-        openTerms: show('terms'), openPrivacy: show('privacy'),
+        openDocs: (event: MouseEvent<HTMLAnchorElement>) => show(event, 'docs'),
+        openDocsInterest: (event: MouseEvent<HTMLAnchorElement>) => show(event, 'docs', 'dlg-doc-interest'),
+        openTerms: (event: MouseEvent<HTMLAnchorElement>) => show(event, 'terms'),
+        openPrivacy: (event: MouseEvent<HTMLAnchorElement>) => show(event, 'privacy'),
         onTabDocs: () => select('docs'), onTabTerms: () => select('terms'), onTabPrivacy: () => select('privacy'),
         closeDlg: close,
         onDlgOverlay: (event: MouseEvent<HTMLDivElement>) => { if (event.target === event.currentTarget) close() },
