@@ -1,6 +1,7 @@
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+use rand::RngExt;
 use serde::Serialize;
 use sha2::Sha256;
 use sqlx::PgPool;
@@ -265,10 +266,99 @@ pub fn is_valid_email(email: &str) -> bool {
     parts.len() == 2 && !parts[0].is_empty() && parts[1].contains('.') && parts[1].len() > 2
 }
 
+/// Digits in an emailed one-time code. A code allows five guesses, so six
+/// digits left a guesser 5 chances in a million per code; nine makes that 5 in
+/// a billion. The mailer worker and the auth screen check the same length.
+pub const CODE_LEN: usize = 9;
+
+/// A new one-time code: CODE_LEN random digits, leading zeros kept.
+pub fn new_code() -> String {
+    let n = rand::rng().random_range(0..10u32.pow(CODE_LEN as u32));
+    format!("{n:0width$}", width = CODE_LEN)
+}
+
+/// Whether `code` has the shape of one this engine issues.
+pub fn is_code(code: &str) -> bool {
+    code.len() == CODE_LEN && code.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// How many codes may be asked for on behalf of one address, per purpose
+/// (signing up and resetting a password are counted apart).
+///
+/// The five guesses a code allows only mean something if codes themselves are
+/// scarce. They weren't: a new one could be asked for as soon as the last was
+/// used up, from as many addresses as it took to stay under the per-IP limits,
+/// so the guesses on an account had no ceiling. This is that ceiling, and it is
+/// counted against the email rather than the network: at most
+/// CODE_REQUESTS_PER_DAY codes a day, whoever asks and from wherever.
+const CODE_REQUESTS_PER_HOUR: i64 = 5;
+const CODE_REQUESTS_PER_DAY: i64 = 8;
+
+/// Counts one request for a code against `email`'s budget, or refuses it once
+/// the budget is spent.
+///
+/// Called before anything looks at whether the address has an account, and
+/// every request counts — for a registered address, an unregistered one, and
+/// one still inside the resend cooldown alike. That is what lets the refusal
+/// be said out loud: it depends only on how often the address was asked for,
+/// so it tells a prober nothing about who is registered.
+pub async fn count_code_request(
+    pool: &PgPool,
+    email: &str,
+    purpose: &'static str,
+    now: i64,
+) -> Result<(), E> {
+    let failed = |e: sqlx::Error| {
+        tracing::error!("DB code request budget: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Unable to process request")
+    };
+    let mut tx = pool.begin().await.map_err(failed)?;
+
+    // One address is counted one request at a time, so two arriving together
+    // can't both take the last place. Held until this transaction ends.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("{purpose}:{email}"))
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    let (in_hour, in_day): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE created_at > $3), COUNT(*)
+           FROM public.auth_code_requests
+          WHERE email = $1 AND purpose = $2 AND created_at > $4",
+    )
+    .bind(email)
+    .bind(purpose)
+    .bind(now - 3600)
+    .bind(now - 86_400)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(failed)?;
+    if in_hour >= CODE_REQUESTS_PER_HOUR || in_day >= CODE_REQUESTS_PER_DAY {
+        tracing::warn!(purpose, "code request budget spent for an address");
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many codes were requested for this email. Please try again later.",
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO public.auth_code_requests (email, purpose, created_at) VALUES ($1, $2, $3)",
+    )
+    .bind(email)
+    .bind(purpose)
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+    tx.commit().await.map_err(failed)
+}
+
 /// Server-side pepper used to HMAC one-time codes before storing them.
 /// Read once from `OTP_HASH_SECRET`. An empty key still hashes (so we never
-/// store plaintext), but a real secret is what makes the 6-digit code space
-/// infeasible to brute-force if the database is ever exposed.
+/// store plaintext), but a real secret is what makes the code space — nine
+/// digits, small enough to run through — infeasible to brute-force if the
+/// database is ever exposed.
 fn code_secret() -> &'static [u8] {
     static SECRET: OnceLock<Vec<u8>> = OnceLock::new();
     SECRET.get_or_init(|| {
@@ -309,5 +399,30 @@ pub fn normalize_mail_theme(theme: Option<&str>) -> &'static str {
     match theme {
         Some("green") => "green",
         _ => "blue",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_code_is_one_this_engine_accepts() {
+        for _ in 0..1000 {
+            let code = new_code();
+            assert!(is_code(&code), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_code_of_any_other_shape_is_refused() {
+        assert!(is_code("000000000"));
+        // The length codes had before, and one digit too many.
+        assert!(!is_code("123456"));
+        assert!(!is_code("1234567890"));
+        assert!(!is_code("12345678a"));
+        assert!(!is_code(" 12345678"));
+        // Nine digits, but not ASCII ones.
+        assert!(!is_code("１２３４５６７８９"));
     }
 }

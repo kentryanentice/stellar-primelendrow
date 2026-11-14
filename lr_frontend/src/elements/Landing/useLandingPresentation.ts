@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { useAccent } from '../../providers/AccentProvider'
+import { useLandingDocuments } from './useLandingDocuments'
 import { useSurfaceTilt } from './useSurfaceTilt'
 
 type Motion = {
@@ -8,6 +8,7 @@ type Motion = {
     active: string
     seen: Record<string, boolean>
     step: number
+    direction: number
     lit: number
     zoomed: boolean
 }
@@ -17,11 +18,10 @@ const SECTIONS = ['verification', 'lend', 'borrow', 'pay', 'interest', 'faq']
 export function useLandingPresentation(mobile: boolean) {
     const root = useRef<HTMLDivElement>(null)
     const navigation = useRef({ locked: false, timer: 0 })
-    const { accent, toggleAccent } = useAccent()
-    const [legal, setLegal] = useState<'terms' | 'privacy' | null>(null)
+    const documents = useLandingDocuments()
     const [faqOpen, setFaqOpen] = useState(1)
     const [motion, setMotion] = useState<Motion>({
-        scrolled: false, footerShown: false, active: '', seen: {}, step: 0, lit: 0, zoomed: false,
+        scrolled: false, footerShown: false, active: '', seen: {}, step: 0, direction: 1, lit: 0, zoomed: false,
     })
 
     useSurfaceTilt(root, -4, '.plr-card-wrap')
@@ -94,7 +94,9 @@ export function useLandingPresentation(mobile: boolean) {
             centers.forEach((center, index) => { if (center <= readingLine + lead) step = index })
             target.rp = Math.min(1, Math.max(0, (readingLine - centers[0]) / span))
             target.z = zoom
-            update({ step })
+            setMotion(previous => previous.step === step ? previous : {
+                ...previous, step, direction: step > previous.step ? 1 : -1,
+            })
             animateScene()
         }
 
@@ -113,6 +115,8 @@ export function useLandingPresentation(mobile: boolean) {
                 area.style.setProperty('--cl', `${left}px`)
                 area.style.setProperty('--cr', `${Math.max(0, stage.offsetWidth - left - card.offsetWidth)}px`)
                 area.style.setProperty('--cb', `${Math.max(0, stage.offsetHeight - top - card.offsetHeight)}px`)
+                area.style.setProperty('--cw', `${card.offsetWidth}px`)
+                area.style.setProperty('--ch', `${card.offsetHeight}px`)
             }
             if (wrap) {
                 centers = Array.from(wrap.querySelectorAll<HTMLElement>('.plr-vnode')).map(node =>
@@ -195,17 +199,16 @@ export function useLandingPresentation(mobile: boolean) {
     const inView = (id: string) => motion.seen[prefix + id] ? 'is-in' : ''
     const active = (id: string) => motion.active === prefix + id
     const onFaq = (index: number) => () => setFaqOpen(previous => previous === index ? 0 : index)
-    const onLegal = (kind: 'terms' | 'privacy') => (event: MouseEvent<HTMLAnchorElement>) => {
-        event.preventDefault()
-        setLegal(kind)
-    }
     const v = {
+        ...documents,
         accent: 'var(--landing-accent)',
         headerState: motion.scrolled ? 'is-scrolled' : '',
         hintState: motion.scrolled ? 'is-hidden' : '',
         footerState: motion.footerShown ? 'is-shown' : '',
         productsState: inView('products'), verifState: inView('verification'),
-        vZoomCls: motion.zoomed ? 'is-zoomed' : '', vSceneCls: `v-s${motion.step}`, vStepTxt: `0${motion.step + 1}`,
+        vZoomCls: motion.zoomed ? 'is-zoomed' : '',
+        vSceneCls: `v-s${motion.step}${motion.direction < 0 ? ' v-back' : ''}`,
+        vDirCls: motion.direction < 0 ? 'v-back' : '', vStepTxt: `0${motion.step + 1}`,
         vb: Object.fromEntries([0, 1, 2, 3, 4].map(i => [`b${i}`, i === motion.step ? 'is-active' : i < motion.step ? 'is-done' : ''])),
         vn: Object.fromEntries([0, 1, 2, 3, 4].map(i => [`n${i}`, `${i <= motion.lit ? 'is-lit' : ''}${i === motion.step ? ' is-active' : ''}`])),
         vcur: Object.fromEntries([0, 1, 2, 3, 4].map(i => [`b${i}`, i === motion.step ? 'step' as const : undefined])),
@@ -226,10 +229,8 @@ export function useLandingPresentation(mobile: boolean) {
             window.clearTimeout(navigation.current.timer)
             navigation.current.timer = window.setTimeout(() => { navigation.current.locked = false }, 900)
         },
-        onTerms: onLegal('terms'), onPrivacy: onLegal('privacy'),
-        greenAccent: accent === 'green', toggleAccent,
     }
-    return { root, v, legal, closeLegal: () => setLegal(null) }
+    return { root, v }
 }
 
 export type LandingValues = ReturnType<typeof useLandingPresentation>['v']

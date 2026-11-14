@@ -106,26 +106,31 @@ pub async fn login(
 
     if !password_ok {
         login_guard::record_failure(client_ip, &p.email, now);
-        let new_count = row.failed_login_attempts + 1;
-        if new_count >= MAX_FAILED_ATTEMPTS {
-            let _ = sqlx::query!(
-                "UPDATE public.users
-                   SET failed_login_attempts = 0, lockout_until = $2
-                 WHERE id = $1",
-                row.id,
-                now + LOCKOUT_SECONDS
-            )
-            .execute(&pool)
-            .await;
-            tracing::warn!(email = %p.email, "account locked after repeated failed logins");
-        } else {
-            let _ = sqlx::query!(
-                "UPDATE public.users SET failed_login_attempts = $2 WHERE id = $1",
-                row.id,
-                new_count
-            )
-            .execute(&pool)
-            .await;
+        // Counted by the database, in one statement. Reading the count above
+        // and writing it back from here let attempts that arrived together all
+        // write the same number, so a burst of guesses counted as one and the
+        // lock came far later than MAX_FAILED_ATTEMPTS says. Both CASEs read
+        // the row as it was before this statement.
+        let locked: Result<Option<bool>, sqlx::Error> = sqlx::query_scalar(
+            "UPDATE public.users
+                SET lockout_until = CASE WHEN failed_login_attempts + 1 >= $2
+                                         THEN $3 ELSE lockout_until END,
+                    failed_login_attempts = CASE WHEN failed_login_attempts + 1 >= $2
+                                                 THEN 0 ELSE failed_login_attempts + 1 END
+              WHERE id = $1
+          RETURNING lockout_until = $3",
+        )
+        .bind(row.id)
+        .bind(MAX_FAILED_ATTEMPTS)
+        .bind(now + LOCKOUT_SECONDS)
+        .fetch_optional(&pool)
+        .await;
+        match locked {
+            Ok(Some(true)) => {
+                tracing::warn!(email = %p.email, "account locked after repeated failed logins");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!("DB failed login count: {e}"),
         }
         return Err((StatusCode::UNAUTHORIZED, "Invalid email or password"));
     }

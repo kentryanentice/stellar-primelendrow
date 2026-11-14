@@ -4,13 +4,12 @@ use argon2::{
 };
 use axum::{Extension, Json, http::StatusCode};
 use chrono::Utc;
-use rand::RngExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
 use super::shared::{
-    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email,
-    normalize_mail_theme, verify_code,
+    E, MessageResponse, count_code_request, hash_code, hash_permit, is_code, is_strong_password,
+    is_valid_email, new_code, normalize_mail_theme, verify_code,
 };
 use crate::api::mailer;
 use crate::api::verified::Verified;
@@ -36,6 +35,10 @@ struct ConfirmInput {
 /// Always returns 200 with the same message regardless of whether the email
 /// is registered, to avoid leaking which addresses have accounts. The OTP is
 /// only generated and emailed when the account actually exists.
+///
+/// The one other answer is 429, once the address has been asked for too many
+/// codes (`count_code_request`). That is counted for every address, registered
+/// or not, so it gives nothing away either.
 pub async fn request(
     Extension(pool): Extension<PgPool>,
     Verified(msg, _): Verified,
@@ -50,6 +53,7 @@ pub async fn request(
     let theme = normalize_mail_theme(p.theme.as_deref());
 
     let now = Utc::now().timestamp();
+    count_code_request(&pool, &p.email, "password_reset", now).await?;
 
     let user = sqlx::query!("SELECT id FROM public.users WHERE email = $1", p.email)
         .fetch_optional(&pool)
@@ -105,7 +109,7 @@ pub async fn request(
         .ok();
     }
 
-    let code = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
+    let code = new_code();
     let expires_at = now + 600;
 
     sqlx::query!(
@@ -157,7 +161,7 @@ pub async fn confirm(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid payload JSON"))?;
     p.email = p.email.trim().to_ascii_lowercase();
 
-    if p.code.len() != 6 || !p.code.chars().all(|c| c.is_ascii_digit()) {
+    if !is_code(&p.code) {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid code format"));
     }
     if !is_strong_password(&p.password) {

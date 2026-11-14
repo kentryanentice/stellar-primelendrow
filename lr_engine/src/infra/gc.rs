@@ -60,5 +60,11 @@ async fn sweep(pool: &PgPool, now: i64) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    // The code budget only ever looks back a day (users::count_code_request).
+    sqlx::query("DELETE FROM public.auth_code_requests WHERE created_at <= $1")
+        .bind(now - 86_400)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }

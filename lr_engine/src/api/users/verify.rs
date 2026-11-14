@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::shared::{
-    E, SESSION_MAX_AGE, UserResponse, clear_legacy_domain_csrf_cookie, csrf_cookie,
+    E, SESSION_MAX_AGE, UserResponse, clear_legacy_domain_csrf_cookie, csrf_cookie, is_code,
     new_csrf_token, session_cookie, verify_code,
 };
 use crate::api::verified::Verified;
@@ -27,7 +27,7 @@ pub async fn verify(
         serde_json::from_slice(&msg).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid payload"))?;
     p.email = p.email.trim().to_ascii_lowercase();
 
-    if p.code.len() != 6 || !p.code.chars().all(|c| c.is_ascii_digit()) {
+    if !is_code(&p.code) {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, "Invalid code format"));
     }
 

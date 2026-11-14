@@ -6,7 +6,7 @@ export default function ForgotScreen({ reset, setReset, validResetEmail, busy, g
     return (
         <div className='auth-view'>
             <h1 className='auth-title'>Forgot your password?</h1>
-            <p className='auth-sub'>Enter your email and we'll send you a 6-digit reset code.</p>
+            <p className='auth-sub'>Enter your email and we'll send you a 9-digit reset code.</p>
 
             <label className='auth-label'>Email</label>
             <div className='auth-row-gap'>
