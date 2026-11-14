@@ -4,13 +4,12 @@ use argon2::{
 };
 use axum::{Extension, Json, http::StatusCode};
 use chrono::Utc;
-use rand::RngExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
 use super::shared::{
-    E, MessageResponse, hash_code, hash_permit, is_strong_password, is_valid_email,
-    normalize_mail_theme,
+    E, MessageResponse, count_code_request, hash_code, hash_permit, is_strong_password,
+    is_valid_email, new_code, normalize_mail_theme,
 };
 use crate::api::mailer;
 use crate::api::verified::Verified;
@@ -55,6 +54,9 @@ pub async fn register(
     let theme = normalize_mail_theme(p.theme.as_deref());
 
     let now = Utc::now().timestamp();
+    // Before the password is hashed and before anything looks at whether the
+    // address is registered: see `count_code_request` for why it sits here.
+    count_code_request(&pool, &p.email, "register", now).await?;
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::new(
         Algorithm::Argon2id,
@@ -67,7 +69,7 @@ pub async fn register(
         .unwrap()
         .to_string();
     drop(permit);
-    let code = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
+    let code = new_code();
     let expires_at = now + 600;
 
     let mut tx = pool.begin().await.map_err(|e| {

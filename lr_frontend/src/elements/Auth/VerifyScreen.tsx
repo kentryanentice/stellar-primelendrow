@@ -10,7 +10,7 @@ export default function VerifyScreen({ reg, otp, otpRefs, onOtpChange, onOtpKey,
         <div className='auth-view is-verify'>
             <div className='auth-mail'><MailIcon /></div>
             <h1 className='auth-title'>Check your email</h1>
-            <p className='auth-sub'>We sent a 6-digit code to<br /><b>{reg.email || 'you@company.com'}</b></p>
+            <p className='auth-sub'>We sent a 9-digit code to<br /><b>{reg.email || 'you@company.com'}</b></p>
 
             <div className='auth-otp'>
                 {otp.map((value, i) => (

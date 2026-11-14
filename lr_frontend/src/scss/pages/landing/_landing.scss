@@ -1,16 +1,14 @@
 html:has(.landing) {
     background: #3b455c;
     scroll-behavior: smooth;
+    scrollbar-gutter: stable;
+    scrollbar-width: none;
 }
 
-// Keep the reference's explicit box sizing independent of the app-wide reset.
+// The reference uses content-box except where its layouts explicitly opt in.
+// Scope the reset so the application's other pages keep their own sizing.
 .landing {
     --landing-accent: #a3b8f1;
-    --acc: var(--landing-accent);
-    --landing-glass-bg: rgba(16, 36, 52, .5);
-    --landing-glass-border: rgba(110, 180, 215, .16);
-    --landing-glass-card-filter: blur(8px) saturate(120%);
-    --landing-glass-chrome-filter: blur(18px) saturate(140%);
     font-weight: 400;
 
     &, *, *::before, *::after {
@@ -21,95 +19,18 @@ html:has(.landing) {
 
     .plr-vscene { --acc: var(--landing-accent); }
 
-    .plr-header-bg {
-        position: absolute;
-        inset: 0;
-        box-sizing: border-box;
-        pointer-events: none;
-        border-bottom: 1px solid var(--landing-glass-border);
-        background: var(--landing-glass-bg);
-        // Keep the standard declaration last so production minification retains it.
-        -webkit-backdrop-filter: var(--landing-glass-chrome-filter);
-        backdrop-filter: var(--landing-glass-chrome-filter);
-        opacity: 0;
-        transition: opacity 320ms var(--plr-ease);
+    *::-webkit-scrollbar { display: block; width: 6px; height: 6px; }
+    *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+    *::-webkit-scrollbar-thumb {
+        border: 0;
+        border-radius: 999px;
+        background: rgba(163, 184, 241, .38);
     }
+    *::-webkit-scrollbar-thumb:hover { background: rgba(163, 184, 241, .7); }
+    *::-webkit-scrollbar-thumb:active { background: #a3b8f1; }
 
-    .plr-header.is-scrolled .plr-header-bg { opacity: 1; }
-}
-
-[data-accent='green'] .landing {
-    --landing-accent: #91f5ab;
-
-    .plr-btn {
-        background: var(--auth-primary-grad) !important;
-        color: #0a1b36 !important;
-    }
-}
-
-.landing-legal {
-    position: fixed;
-    inset: 0;
-    width: min(680px, calc(100vw - 40px));
-    max-height: min(780px, calc(100svh - 48px));
-    margin: auto;
-    padding: 0;
-    overflow: hidden;
-    border: 1px solid rgba(190, 207, 245, .2);
-    border-radius: 18px;
-    background: #1b2b42;
-    box-shadow: 0 32px 80px rgba(5, 9, 24, .5);
-    color: #eef9fe;
-    font-family: var(--auth-font-body);
-    font-weight: 400;
-
-    &::backdrop { background: rgba(5, 9, 24, .7); backdrop-filter: blur(8px); }
-
-    &__header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-        padding: 20px 24px;
-        border-bottom: 1px solid rgba(190, 207, 245, .14);
-
-        h2 { margin: 0; font-size: 23px; font-weight: 500; }
-        button {
-            display: grid;
-            place-items: center;
-            width: 36px;
-            height: 36px;
-            border: 1px solid rgba(190, 207, 245, .2);
-            border-radius: 10px;
-            background: rgba(163, 184, 241, .06);
-            color: #eef9fe;
-            font-size: 24px;
-            cursor: pointer;
-        }
-        button:focus-visible { outline: 2px solid #c8d5fa; outline-offset: 3px; }
-    }
-
-    &__body {
-        max-height: calc(min(780px, 100svh - 48px) - 80px);
-        padding: 24px;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        user-select: text;
-
-        section + section { margin-top: 24px; }
-        h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
-        p { margin: 8px 0 0; color: #c5cfdb; font-size: 14px; line-height: 1.7; }
-        * { user-select: text; }
-    }
-}
-
-// The mobile reference is 390px wide; keep its header usable on smaller phones.
-@media (max-width: 374px) {
-    .landing--mobile {
-        .plr-header > div:last-child { padding-inline: 12px !important; gap: 6px !important; }
-        .plr-header > div:last-child > a { gap: 5px !important; }
-        .plr-header .plr-btn { padding-inline: 12px !important; font-size: 13px !important; }
-        .plr-header nav { gap: 6px !important; }
+    @supports not selector(::-webkit-scrollbar) {
+        * { scrollbar-width: thin; scrollbar-color: rgba(163, 184, 241, .45) transparent; }
     }
 }
 

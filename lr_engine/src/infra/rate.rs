@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -158,7 +158,30 @@ fn trusted_proxy_hops() -> usize {
     })
 }
 
+/// The address a client is limited as: the rate limits, the concurrency limit
+/// and the login guard all key on what this returns.
 pub fn extract_ip(
+    headers: &HeaderMap,
+    connect_info: Option<&ConnectInfo<SocketAddr>>,
+) -> Option<IpAddr> {
+    client_ip(headers, connect_info).map(bucket)
+}
+
+/// An IPv6 customer is handed a whole /64 — 2^64 addresses — so limiting each
+/// address on its own limits nothing: the next request simply comes from the
+/// next address. The /64 is the client. IPv4 stays one address, including
+/// when it arrives written as IPv6.
+fn bucket(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+        }
+        v4 => v4,
+    }
+}
+
+fn client_ip(
     headers: &HeaderMap,
     connect_info: Option<&ConnectInfo<SocketAddr>>,
 ) -> Option<IpAddr> {
@@ -222,5 +245,39 @@ pub async fn enforce_rate_limit(
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::TOO_MANY_REQUESTS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limited_as(peer: &str) -> IpAddr {
+        let peer: SocketAddr = peer.parse().unwrap();
+        extract_ip(&HeaderMap::new(), Some(&ConnectInfo(peer))).unwrap()
+    }
+
+    #[test]
+    fn ipv6_addresses_in_one_64_are_one_client() {
+        let first = limited_as("[2001:db8:12:34:aaaa:bbbb:cccc:1]:443");
+        let second = limited_as("[2001:db8:12:34:ffff:0:0:2]:443");
+        assert_eq!(first, second);
+        assert_eq!(first, "2001:db8:12:34::".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn a_different_64_is_a_different_client() {
+        assert_ne!(
+            limited_as("[2001:db8:12:34::1]:443"),
+            limited_as("[2001:db8:12:35::1]:443"),
+        );
+    }
+
+    #[test]
+    fn ipv4_stays_one_address_however_it_is_written() {
+        let plain = limited_as("203.0.113.7:443");
+        assert_eq!(plain, "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(limited_as("[::ffff:203.0.113.7]:443"), plain);
+        assert_ne!(limited_as("203.0.113.8:443"), plain);
     }
 }

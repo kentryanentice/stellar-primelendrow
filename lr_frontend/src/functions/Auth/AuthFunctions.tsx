@@ -8,7 +8,9 @@ export type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset'
 export type Match = '' | 'ok' | 'bad'
 
 const RESEND_WAIT = 60
-const emptyOtp = () => ['', '', '', '', '', '']
+/** Digits in an emailed code — the engine's CODE_LEN (api::users::shared). */
+const OTP_LENGTH = 9
+const emptyOtp = () => Array<string>(OTP_LENGTH).fill('')
 const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback)
 
 /** Why a Google sign-in came back to this page. The engine only ever sends one
@@ -64,7 +66,7 @@ export default function useAuthFunctions() {
     const match: Match = !reg.confirm ? '' : reg.password === reg.confirm ? 'ok' : 'bad'
     const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reg.email)
     const canRegister = terms && !!reg.name.trim() && validEmail && pwChecks[0] && pwChecks[1] && pwChecks[2] && reg.password === reg.confirm
-    const canVerify = code.length === 6
+    const canVerify = code.length === OTP_LENGTH
 
     // ---- reset (forgot password) derived state ----
     const resetChecks = pwChecksOf(reset.password)
@@ -72,7 +74,7 @@ export default function useAuthFunctions() {
     const resetStrengthLabel = STRENGTH_LABELS[resetScore - 1] ?? ''
     const resetMatch: Match = !reset.confirm ? '' : reset.password === reset.confirm ? 'ok' : 'bad'
     const validResetEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reset.email)
-    const canReset = code.length === 6 && resetChecks[0] && resetChecks[1] && resetChecks[2] && reset.password === reset.confirm
+    const canReset = code.length === OTP_LENGTH && resetChecks[0] && resetChecks[1] && resetChecks[2] && reset.password === reset.confirm
 
     // ---- google sign-in result ----
     // Shown once, then taken out of the address bar so a refresh or a shared
@@ -122,19 +124,19 @@ export default function useAuthFunctions() {
     const onOtpChange = (i: number, value: string) => {
         const digit = value.replace(/\D/g, '').slice(-1)
         setOtp(prev => { const next = prev.slice(); next[i] = digit; return next })
-        if (digit && i < 5) otpRefs.current[i + 1]?.focus()
+        if (digit && i < OTP_LENGTH - 1) otpRefs.current[i + 1]?.focus()
     }
     const onOtpKey = (i: number, e: KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Backspace' && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus()
     }
     const onOtpPaste = (e: ClipboardEvent<HTMLInputElement>) => {
-        const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
+        const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)
         if (!text) return
         e.preventDefault()
         const next = emptyOtp()
         text.split('').forEach((c, j) => { next[j] = c })
         setOtp(next)
-        otpRefs.current[Math.min(text.length, 5)]?.focus()
+        otpRefs.current[Math.min(text.length, OTP_LENGTH - 1)]?.focus()
     }
 
     // ---- async actions (each owns its busy + try/catch) ----

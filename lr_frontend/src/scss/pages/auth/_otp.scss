@@ -16,16 +16,21 @@
 .auth-otp {
     display: flex;
     justify-content: center;
-    gap: 10px;
+    gap: 6px;
     margin-bottom: 8px;
 }
 
 .auth-otp-box {
-    width: 52px;
-    height: 60px;
+    // Nine boxes share the row: each takes an equal slice of it, and no more
+    // than the size a box had when there were six.
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 52px;
+    height: 56px;
+    padding: 0;
     text-align: center;
     font-family: var(--auth-font-display);
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 600;
     color: var(--auth-ink);
     background: var(--auth-field-bg);
